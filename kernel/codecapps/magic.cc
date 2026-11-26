@@ -4,6 +4,7 @@
 #include "kernel/codecapps/audio/mp3.h"
 #include "kernel/codecapps/codec.h"
 #include "kernel/codecapps/image/bmp.h"
+#include "kernel/codecapps/image/jpeg.h"
 #include "kernel/codecapps/image/pnm.h"
 #include "kernel/codecapps/image/qoi.h"
 #include "kernel/codecapps/image/tga.h"
@@ -173,8 +174,8 @@ namespace hype::codec {
              codec_stub_encode},
             {"gif", CodecKind::Image, CodecId::Gif, 0, probe_gif, codec_stub_decode,
              codec_stub_encode},
-            {"jpeg", CodecKind::Image, CodecId::Jpeg, 0, probe_jpeg, codec_stub_decode,
-             codec_stub_encode},
+            {"jpeg", CodecKind::Image, CodecId::Jpeg, codec_flag_decode, probe_jpeg,
+             image::jpeg_decode, codec_stub_encode},
             {"ico", CodecKind::Image, CodecId::Ico, 0, probe_ico, codec_stub_decode,
              codec_stub_encode},
             {"tiff", CodecKind::Image, CodecId::Tiff, 0, probe_tiff, codec_stub_decode,

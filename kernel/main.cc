@@ -13,6 +13,7 @@
 #include "kernel/boot_info.hpp"
 #include "kernel/codecapps/audio/selftest.h"
 #include "kernel/codecapps/image/image.h"
+#include "kernel/codecapps/image/jpeg.h"
 #include "kernel/codecapps/registry.h"
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
@@ -284,6 +285,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     const bool image_selftest_ok = hype::codec::image::image_simple_selftest();
     serial::write("image simple selftest=");
     serial::write_line(image_selftest_ok ? "ok" : "fail");
+    serial::write("jpeg decode=");
+    serial::write_line(hype::codec::image::jpeg_selftest() ? "ok" : "fail");
     hype::codec::codec_report();
     hype::codec::audio_codec_selftest();
     serial::write("memory free=");
