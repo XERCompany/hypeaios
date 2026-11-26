@@ -385,36 +385,3 @@ namespace hype::audio {
     }
 
 }  // namespace hype::audio
-
-namespace hype::audio::hda {
-
-    bool izau_bind(hcpp::size_t card_index, IzauController &controller) noexcept {
-        const AudioCard *card = audio::chip(card_index);
-        if (card == nullptr || card->chip != AudioChip::IntelHda || card->bar0 == 0) {
-            return false;
-        }
-        controller = {};
-        controller.mmio = card->bar0 & ~0xFu;
-        controller.card_index = static_cast<hcpp::u8>(card_index);
-        return true;
-    }
-
-    bool izau_reset(IzauController &controller) noexcept {
-        if (controller.mmio == 0) {
-            return false;
-        }
-        controller.reset_done = false;
-        return false;
-    }
-
-    bool izau_codec_verb(IzauController &controller, hcpp::u8 codec, hcpp::u8 node, hcpp::u32 verb,
-                         hcpp::u8 payload, hcpp::u32 &response) noexcept {
-        (void)codec;
-        (void)node;
-        (void)verb;
-        (void)payload;
-        response = 0;
-        return controller.reset_done;
-    }
-
-}  // namespace hype::audio::hda
