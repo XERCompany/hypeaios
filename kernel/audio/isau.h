@@ -14,20 +14,8 @@ namespace hype::audio {
         hcpp::u8 dma16;
     };
 
-    inline constexpr IsaAudioDevice isau_known_devices[] = {
-        {"Sound Blaster 16", AudioChip::SoundBlaster16, 0x220, 5, 1, 5},
-        {"AdLib OPL2", AudioChip::AdLib, 0x388, 0, 0, 0},
-        {"Windows Sound System", AudioChip::Unknown, 0x530, 9, 0, 0},
-    };
-
-    inline const IsaAudioDevice *isau_devices() noexcept { return isau_known_devices; }
-
-    inline hcpp::size_t isau_device_count() noexcept {
-        return sizeof(isau_known_devices) / sizeof(isau_known_devices[0]);
-    }
-
-    inline AudioCard isau_card(const IsaAudioDevice &device) noexcept {
-        return {AudioBus::Isa, device.chip, 0, 0, 0, 0, 0, 0, 0, device.name, 0};
-    }
+    const IsaAudioDevice *isau_devices() noexcept;
+    hcpp::size_t isau_device_count() noexcept;
+    AudioCard isau_card(const IsaAudioDevice &device) noexcept;
 
 }  // namespace hype::audio

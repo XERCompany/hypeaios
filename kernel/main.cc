@@ -64,6 +64,11 @@ namespace {
         serial::write("\r\n");
     }
 
+    void report(const char *name, bool ok) noexcept {
+        serial::write(name);
+        serial::write_line(ok ? "ok" : "fail");
+    }
+
     void write_hex16(hcpp::u16 value) noexcept {
         for (int shift = 12; shift >= 0; shift -= 4) {
             const hcpp::u8 digit = static_cast<hcpp::u8>((value >> shift) & 0xF);
@@ -274,27 +279,21 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         serial::write("\r\n");
     }
     const bool audio_format_ok = hype::audio::audio_format_selftest();
-    serial::write("audio format selftest=");
-    serial::write_line(audio_format_ok ? "ok" : "fail");
+    report("audio format selftest=", audio_format_ok);
     hype::codec::codec_register_builtins();
     serial::write("codecs=");
     serial::write_dec32(static_cast<hcpp::u32>(hype::codec::codec_count()));
     serial::write("\r\n");
     hype::codec::codec_report();
     const bool codec_probe_ok = hype::codec::codec_probe_selftest();
-    serial::write("codec probe=");
-    serial::write_line(codec_probe_ok ? "ok" : "fail");
-    serial::write("codec arena=");
-    serial::write_line(hype::codec::codec_arena_selftest() ? "ok" : "fail");
+    report("codec probe=", codec_probe_ok);
+    report("codec arena=", hype::codec::codec_arena_selftest());
     const bool image_selftest_ok = hype::codec::image::image_simple_selftest();
-    serial::write("image simple selftest=");
-    serial::write_line(image_selftest_ok ? "ok" : "fail");
+    report("image simple selftest=", image_selftest_ok);
     const bool jpeg_selftest_ok = hype::codec::image::jpeg_selftest();
-    serial::write("jpeg decode=");
-    serial::write_line(jpeg_selftest_ok ? "ok" : "fail");
+    report("jpeg decode=", jpeg_selftest_ok);
     const bool png_selftest_ok = hype::codec::image::png_selftest();
-    serial::write("png selftest=");
-    serial::write_line(png_selftest_ok ? "ok" : "fail");
+    report("png selftest=", png_selftest_ok);
     hype::codec::audio_codec_selftest();
     serial::write("memory free=");
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_free_bytes / (1024 * 1024)));
@@ -347,8 +346,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         serial::write("db selftest=");
         serial::write_line(hype::db::db_selftest() ? "ok" : "failed");
         const bool hello_ok = hype::hello::hello_selftest();
-        serial::write("hello selftest=");
-        serial::write_line(hello_ok ? "ok" : "failed");
+        report("hello selftest=", hello_ok);
     } else {
         serial::write("sqlite=fail ");
         serial::write_line(db_error);
@@ -471,11 +469,11 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     }
     const bool codec_integrated =
         hype::codec::codec_count() ==
-            static_cast<hcpp::size_t>(hype::codec::CodecId::Count) - 1 &&
+            static_cast<hcpp::size_t>(hype::codec::CodecId::Count) - 1 -
+                hype::codec::codec_reserved_ids &&
         codec_probe_ok && image_selftest_ok && jpeg_selftest_ok && png_selftest_ok &&
         hype::ui::demo_codec_image_painted();
-    serial::write("codec integrated=");
-    serial::write_line(codec_integrated ? "ok" : "fail");
+    report("codec integrated=", codec_integrated);
     serial::write_line("HypeAICode++ runtime active");
     const hcpp::u64 pit_start = hype::interrupts::pit_ticks();
     hype::interrupts::pit_wait_ticks(10);

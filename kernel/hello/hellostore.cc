@@ -1,5 +1,6 @@
 #include "kernel/hello/hellostore.h"
 
+#include "hcpp/memory.hpp"
 #include "hcpp/rng.hpp"
 #include "kernel/db/hypedb.hpp"
 #include "sqlite3.h"
@@ -7,9 +8,6 @@
 namespace hype::hello::store {
     namespace {
 
-        // The device secret lives in a dedicated config row so the credentials
-        // table stays purely per-(user,method). With the in-memory hypevfs it
-        // regenerates each boot; on a persistent VFS it survives.
         constexpr const char* config_schema_sql =
             "CREATE TABLE IF NOT EXISTS hello_config("
             "key TEXT PRIMARY KEY,"
@@ -20,7 +18,7 @@ namespace hype::hello::store {
             const void* blob = sqlite3_column_blob(stmt, column);
             const int bytes = sqlite3_column_bytes(stmt, column);
             if (blob == nullptr || bytes != static_cast<int>(expected)) return false;
-            __builtin_memcpy(out, blob, expected);
+            hcpp::copy(out, blob, expected);
             return true;
         }
 

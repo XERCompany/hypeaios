@@ -5,6 +5,7 @@
 #include "kernel/codecapps/audio/mp3.h"
 #include "kernel/codecapps/audio/ogg.h"
 #include "kernel/codecapps/audio/vorbis.h"
+#include "kernel/codecapps/audio/wav.h"
 #include "kernel/codecapps/codec.h"
 #include "kernel/codecapps/image/bmp.h"
 #include "kernel/codecapps/image/exif.h"
@@ -105,8 +106,20 @@ namespace hype::codec {
 
         bool probe_alac(const hcpp::u8 *b, hcpp::size_t n) noexcept {
             if (!str_eq_at(b, n, 4, "ftyp")) return false;
-            const hcpp::size_t scan = n < 96 ? n : 96;
-            for (hcpp::size_t i = 8; i + 4 <= scan; ++i)
+            if (brand_in(b, n, "alac", "M4A ", nullptr, nullptr)) return true;
+            if (brand_in(b, n, "isom", "iso2", "mp41", "mp42") ||
+                str_eq_at(b, n, 8, "mp4 "))
+                return false;
+            hcpp::size_t scan = n;
+            if (n >= 4) {
+                const hcpp::u32 box = (static_cast<hcpp::u32>(b[0]) << 24) |
+                                      (static_cast<hcpp::u32>(b[1]) << 16) |
+                                      (static_cast<hcpp::u32>(b[2]) << 8) |
+                                      static_cast<hcpp::u32>(b[3]);
+                if (box >= 16 && box < scan) scan = box;
+            }
+            if (scan > 96) scan = 96;
+            for (hcpp::size_t i = 16; i + 4 <= scan; ++i)
                 if (b[i] == 'a' && b[i + 1] == 'l' && b[i + 2] == 'a' && b[i + 3] == 'c')
                     return true;
             return false;
@@ -116,8 +129,6 @@ namespace hype::codec {
             return bytes_eq(b, n, 0, "Exif\x00\x00", 6);
         }
 
-        bool probe_rawyuv(const hcpp::u8 *, hcpp::size_t) noexcept { return false; }
-
         hcpp::u16 wav_format_tag(const hcpp::u8 *b, hcpp::size_t n) noexcept {
             if (!str_eq_at(b, n, 12, "fmt ") || n < 22) return 0;
             return static_cast<hcpp::u16>(b[20] | (static_cast<hcpp::u16>(b[21]) << 8));
@@ -126,7 +137,7 @@ namespace hype::codec {
         bool probe_adpcm(const hcpp::u8 *b, hcpp::size_t n) noexcept {
             if (!str_eq_at(b, n, 0, "RIFF") || !str_eq_at(b, n, 8, "WAVE")) return false;
             const hcpp::u16 tag = wav_format_tag(b, n);
-            return tag == 0x02 || tag == 0x11 || tag == 0x06 || tag == 0x07;
+            return tag == 0x11 || tag == 0x06 || tag == 0x07;
         }
 
         bool probe_wav(const hcpp::u8 *b, hcpp::size_t n) noexcept {
@@ -203,12 +214,10 @@ namespace hype::codec {
              audio_alac_decode, codec_stub_encode},
             {"exif", CodecKind::Image, CodecId::Exif, codec_flag_decode, probe_exif,
              image::exif_decode, codec_stub_encode},
-            {"yuv", CodecKind::Image, CodecId::RawYuv, 0, probe_rawyuv, codec_stub_decode,
-             codec_stub_encode},
             {"adpcm", CodecKind::Audio, CodecId::Adpcm, codec_flag_decode, probe_adpcm,
              audio_adpcm_decode, codec_stub_encode},
-            {"wav", CodecKind::Audio, CodecId::Wav, 0, probe_wav, codec_stub_decode,
-             codec_stub_encode},
+            {"wav", CodecKind::Audio, CodecId::Wav, codec_flag_decode, probe_wav,
+             audio_wav_decode, codec_stub_encode},
             {"vorbis", CodecKind::Audio, CodecId::Vorbis, codec_flag_decode, probe_vorbis,
              audio_vorbis_decode, codec_stub_encode},
             {"opus", CodecKind::Audio, CodecId::Opus, 0, probe_opus, codec_stub_decode,
@@ -256,7 +265,7 @@ namespace hype::codec {
             {CodecId::Exif, {'E', 'x', 'i', 'f', 0x00, 0x00}, 6},
             {CodecId::Adpcm,
              {'R', 'I', 'F', 'F', 0x24, 0x00, 0x00, 0x00, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ',
-              0x10, 0x00, 0x00, 0x00, 0x02, 0x00},
+              0x10, 0x00, 0x00, 0x00, 0x11, 0x00},
              22},
             {CodecId::Wav,
              {'R', 'I', 'F', 'F', 0x24, 0x00, 0x00, 0x00, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ',

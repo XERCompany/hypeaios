@@ -1,6 +1,7 @@
 #include "kernel/hello/hello.h"
 
 #include "hcpp/ecdsa.hpp"
+#include "hcpp/memory.hpp"
 #include "hcpp/rng.hpp"
 #include "hcpp/sha256.hpp"
 #include "kernel/hello/hellostore.h"
@@ -22,11 +23,6 @@ namespace hype::hello {
             return diff == 0;
         }
 
-        // Password: verifier = PBKDF2(secret, salt).
-        // PinCode:  verifier = PBKDF2(pin, salt ‖ device_secret) — device-bound,
-        //           so the short secret cannot be brute-forced off-device.
-        // Key credentials skip this: auth verifies an ECDSA P-256 signature
-        // against the stored public key instead of comparing a verifier.
         bool derive_verifier(HelloMethod method, const void* secret,
                              hcpp::size_t secret_size, const hcpp::u8 salt[16],
                              hcpp::u8 out[32]) noexcept {
@@ -39,8 +35,8 @@ namespace hype::hello {
                     hcpp::u8 device[16];
                     if (!store::device_secret(device)) return false;
                     hcpp::u8 combined[32];
-                    __builtin_memcpy(combined, salt, 16);
-                    __builtin_memcpy(combined + 16, device, 16);
+                    hcpp::copy(combined, salt, 16);
+                    hcpp::copy(combined + 16, device, 16);
                     hcpp::pbkdf2_sha256(secret, secret_size, combined,
                                         sizeof(combined), pbkdf2_iterations, out);
                     return true;
@@ -52,9 +48,6 @@ namespace hype::hello {
             return false;
         }
 
-        // Hello Key challenge: sha256(uid ‖ counter ‖ device_secret).
-        // The counter comes from the persistent hello_config 'key_ctr' row and
-        // is consumed per auth, so a recorded signature cannot be replayed.
         bool derive_challenge(hcpp::u32 uid, hcpp::u32 counter,
                               hcpp::u8 out[32]) noexcept {
             hcpp::u8 device[16];
@@ -64,7 +57,7 @@ namespace hype::hello {
                 block[i] = static_cast<hcpp::u8>(uid >> (i * 8));
                 block[4 + i] = static_cast<hcpp::u8>(counter >> (i * 8));
             }
-            __builtin_memcpy(block + 8, device, sizeof(device));
+            hcpp::copy(block + 8, device, sizeof(device));
             hcpp::sha256(block, sizeof(block), out);
             return true;
         }
@@ -97,7 +90,7 @@ namespace hype::hello {
     bool hello_enroll(hcpp::u32 uid, HelloMethod method, const void* secret,
                       hcpp::size_t secret_size) noexcept {
         if (uid == 0 || secret == nullptr || secret_size == 0) return false;
-        if (method == HelloMethod::Face) return false;  // no camera provider
+        if (method == HelloMethod::Face) return false;
 
         HelloCredential credential{};
         credential.uid = uid;
@@ -106,13 +99,11 @@ namespace hype::hello {
         if (method == HelloMethod::Key) {
             if (secret_size != key_public_size) return false;
             hcpp::sha256(secret, secret_size, credential.verifier);
-            __builtin_memcpy(credential.wrapped_key, secret, key_public_size);
+            hcpp::copy(credential.wrapped_key, secret, key_public_size);
         } else {
             if (!derive_verifier(method, secret, secret_size, credential.salt,
                                  credential.verifier))
                 return false;
-            // Wrapped session-key blob: random placeholder until a real
-            // authentication-key wrap (Hello Key protector) is implemented.
             hcpp::rng_fill(credential.wrapped_key, sizeof(credential.wrapped_key));
         }
         credential.fail_count = 0;
@@ -230,7 +221,6 @@ namespace hype::hello {
         ok &= pin_ok == HelloResult::Ok;
         write_auth_marker(HelloMethod::PinCode, pin_ok == HelloResult::Ok);
 
-        // Fail-count path: wrong pins until lockout at the threshold.
         const char wrong_pin[] = "9999";
         HelloResult pin_result = HelloResult::Ok;
         for (hcpp::u32 attempt = 0; attempt < 5; ++attempt) {
@@ -286,7 +276,6 @@ namespace hype::hello {
         ok &= key_bad == HelloResult::BadSecret;
         write_auth_marker(HelloMethod::Key, key_bad == HelloResult::Ok);
 
-        // Match Face: honest failure — no camera provider on QEMU.
         const HelloResult face = hello_auth(uid, HelloMethod::Face, "t", 1);
         ok &= face == HelloResult::NoCamera;
         serial::write_line(face == HelloResult::NoCamera

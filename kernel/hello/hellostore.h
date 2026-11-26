@@ -3,7 +3,6 @@
 #include "hcpp/types.hpp"
 #include "kernel/hello/hello.h"
 
-// All sqlite calls for the hello subsystem live in hellostore.cc.
 namespace hype::hello::store {
 
     bool ensure_schema() noexcept;
@@ -19,7 +18,6 @@ namespace hype::hello::store {
                          hcpp::u32 flags) noexcept;
     hcpp::u32 methods_mask(hcpp::u32 uid) noexcept;
 
-    // Returns the persistent 16-byte device secret, generating+storing it on first use.
     bool device_secret(hcpp::u8 out[16]) noexcept;
 
     bool key_counter_peek(hcpp::u32& out) noexcept;

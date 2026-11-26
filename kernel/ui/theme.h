@@ -25,16 +25,12 @@ namespace hype::ui {
 
         const hcpp::fonts::FontFace* font;
 
-        const hcpp::fonts::FontFace* resolved_font() const noexcept {
-            return font != nullptr ? font : hcpp::fonts::default_font();
-        }
+        const hcpp::fonts::FontFace* resolved_font() const noexcept;
 
         static const Theme& dark() noexcept;
     };
 
-    inline const hcpp::fonts::FontFace* resolve_font(
-        const hcpp::fonts::FontFace* font) noexcept {
-        return font != nullptr ? font : Theme::dark().resolved_font();
-    }
+    const hcpp::fonts::FontFace* resolve_font(
+        const hcpp::fonts::FontFace* font) noexcept;
 
 }  // namespace hype::ui
