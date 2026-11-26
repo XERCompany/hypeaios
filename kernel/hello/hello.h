@@ -25,7 +25,7 @@ namespace hype::hello {
         HelloMethod method;
         hcpp::u8 salt[16];
         hcpp::u8 verifier[32];
-        hcpp::u8 wrapped_key[48];
+        hcpp::u8 wrapped_key[64];
         hcpp::u32 fail_count;
         hcpp::u32 flags;
     };
