@@ -1,6 +1,10 @@
 #include "kernel/ui/demo.h"
 
+#include "kernel/codecapps/arena.h"
+#include "kernel/codecapps/registry.h"
+#include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/demo_image_blob.h"
 #include "kernel/ui/flex.h"
 #include "kernel/ui/overlays/toast.h"
 #include "kernel/ui/selftest.h"
@@ -14,6 +18,8 @@ namespace hype::ui {
 
     namespace {
 
+        bool codec_image_painted = false;
+
         hcpp::u32 count_widgets(const Widget& widget) noexcept {
             hcpp::u32 count = 1;
             for (hcpp::size_t i = 0; i < widget.child_count(); ++i) {
@@ -23,6 +29,56 @@ namespace hype::ui {
                 }
             }
             return count;
+        }
+
+        void paint_codec_image(Canvas& canvas, const Rect& window_rect) noexcept {
+            namespace codec = hype::codec;
+            codec_image_painted = false;
+            serial::write("ui codec image=");
+            static hcpp::u8 arena_mem[32768];
+            codec::Arena arena{arena_mem, sizeof(arena_mem), 0};
+            codec::FrameBuf frame{};
+            const codec::CodecId id =
+                codec::codec_probe(demo_image_blob, demo_image_blob_size);
+            const bool decoded =
+                id != codec::CodecId::Unknown &&
+                codec::codec_decode(id, demo_image_blob, demo_image_blob_size, &frame,
+                                    arena) == codec::CodecStatus::Ok &&
+                frame.data != nullptr && frame.format == video::PixelFormat::RGB32;
+            if (!decoded) {
+                serial::write_line("failed");
+                return;
+            }
+            hcpp::i32 origin_x =
+                window_rect.right() - static_cast<hcpp::i32>(frame.width) - 20;
+            hcpp::i32 origin_y = window_rect.y + 48;
+            if (origin_x < window_rect.x + 12) {
+                origin_x = window_rect.x + 12;
+            }
+            if (origin_y < window_rect.y + 30) {
+                origin_y = window_rect.y + 30;
+            }
+            for (hcpp::u32 y = 0; y < frame.height; ++y) {
+                const hcpp::u8* row =
+                    frame.data + static_cast<hcpp::size_t>(y) * frame.pitch;
+                for (hcpp::u32 x = 0; x < frame.width; ++x) {
+                    const hcpp::u8* px = row + static_cast<hcpp::size_t>(x) * 4;
+                    if (px[3] == 0) {
+                        continue;
+                    }
+                    canvas.draw_pixel(
+                        origin_x + static_cast<hcpp::i32>(x),
+                        origin_y + static_cast<hcpp::i32>(y),
+                        canvas.color((static_cast<hcpp::u32>(px[0]) << 16) |
+                                     (static_cast<hcpp::u32>(px[1]) << 8) | px[2]));
+                }
+            }
+            codec_image_painted = true;
+            serial::write("painted ");
+            serial::write_dec32(frame.width);
+            serial::write_char('x');
+            serial::write_dec32(frame.height);
+            serial::write("\r\n");
         }
 
     }  // namespace
@@ -95,6 +151,7 @@ namespace hype::ui {
 
         tree.layout_root(window_rect);
         tree.paint_tree(canvas);
+        paint_codec_image(canvas, window_rect);
 
         if (toasts.count() == 0) {
             toasts.show("desktop painted \xE2\x80\x94 widgets online",
@@ -104,5 +161,7 @@ namespace hype::ui {
 
         return count_widgets(window);
     }
+
+    bool demo_codec_image_painted() noexcept { return codec_image_painted; }
 
 }  // namespace hype::ui

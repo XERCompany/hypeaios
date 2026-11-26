@@ -280,16 +280,18 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("codecs=");
     serial::write_dec32(static_cast<hcpp::u32>(hype::codec::codec_count()));
     serial::write("\r\n");
+    hype::codec::codec_report();
+    const bool codec_probe_ok = hype::codec::codec_probe_selftest();
     serial::write("codec probe=");
-    serial::write_line(hype::codec::codec_probe_selftest() ? "ok" : "fail");
+    serial::write_line(codec_probe_ok ? "ok" : "fail");
     serial::write("codec arena=");
     serial::write_line(hype::codec::codec_arena_selftest() ? "ok" : "fail");
     const bool image_selftest_ok = hype::codec::image::image_simple_selftest();
     serial::write("image simple selftest=");
     serial::write_line(image_selftest_ok ? "ok" : "fail");
+    const bool jpeg_selftest_ok = hype::codec::image::jpeg_selftest();
     serial::write("jpeg decode=");
-    serial::write_line(hype::codec::image::jpeg_selftest() ? "ok" : "fail");
-    hype::codec::codec_report();
+    serial::write_line(jpeg_selftest_ok ? "ok" : "fail");
     const bool png_selftest_ok = hype::codec::image::png_selftest();
     serial::write("png selftest=");
     serial::write_line(png_selftest_ok ? "ok" : "fail");
@@ -467,6 +469,13 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     } else {
         serial::write_line("ui demo=blocked");
     }
+    const bool codec_integrated =
+        hype::codec::codec_count() ==
+            static_cast<hcpp::size_t>(hype::codec::CodecId::Count) - 1 &&
+        codec_probe_ok && image_selftest_ok && jpeg_selftest_ok && png_selftest_ok &&
+        hype::ui::demo_codec_image_painted();
+    serial::write("codec integrated=");
+    serial::write_line(codec_integrated ? "ok" : "fail");
     serial::write_line("HypeAICode++ runtime active");
     const hcpp::u64 pit_start = hype::interrupts::pit_ticks();
     hype::interrupts::pit_wait_ticks(10);
