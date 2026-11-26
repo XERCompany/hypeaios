@@ -12,7 +12,7 @@ CC_OBJECTS := $(patsubst %.cc,$(BUILD)/%.o,$(CC_SOURCES))
 ASM_SOURCES := $(shell find kernel -name '*.asm' ! -path 'kernel/entry.asm' 2>/dev/null | sort)
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD)/%.o,$(ASM_SOURCES))
 KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(ASM_OBJECTS)
-KERNEL_HEADERS := $(shell find hcpp kernel -name '*.hpp' 2>/dev/null)
+KERNEL_HEADERS := $(shell find hcpp kernel -name '*.hpp' -o -name '*.h' 2>/dev/null)
 
 PYTHON ?= python3
 FONT_ASSETS := $(BUILD)/fonts/hypeai-8x16_hpf.cc
