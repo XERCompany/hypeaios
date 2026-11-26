@@ -77,6 +77,13 @@ namespace hype::codec {
             serial::write((table[i].flags & codec_flag_encode) != 0 ? "yes" : "stub");
             serial::write("\r\n");
         }
+        for (hcpp::size_t i = 0; i < table_count; ++i) {
+            if ((table[i].flags & codec_flag_decode) == 0) {
+                serial::write("codec deferred=");
+                serial::write(table[i].name);
+                serial::write("\r\n");
+            }
+        }
     }
 
 }  // namespace hype::codec
