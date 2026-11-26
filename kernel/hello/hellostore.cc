@@ -24,6 +24,20 @@ namespace hype::hello::store {
             return true;
         }
 
+        void store_u32(hcpp::u32 value, hcpp::u8 out[4]) noexcept {
+            for (hcpp::u8 i = 0; i < 4; ++i) {
+                out[i] = static_cast<hcpp::u8>(value >> (i * 8));
+            }
+        }
+
+        hcpp::u32 load_u32(const hcpp::u8 in[4]) noexcept {
+            hcpp::u32 value = 0;
+            for (hcpp::u8 i = 0; i < 4; ++i) {
+                value |= static_cast<hcpp::u32>(in[i]) << (i * 8);
+            }
+            return value;
+        }
+
     }  // namespace
 
     bool ensure_schema() noexcept {
@@ -218,6 +232,60 @@ namespace hype::hello::store {
         const int step = sqlite3_step(stmt);
         sqlite3_finalize(stmt);
         return step == SQLITE_DONE;
+    }
+
+    bool key_counter_peek(hcpp::u32& out) noexcept {
+        if (!ensure_schema()) return false;
+        out = 0;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db::db_handle(),
+                               "SELECT value FROM hello_config "
+                               "WHERE key='key_ctr';",
+                               -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            hcpp::u8 raw[4];
+            if (copy_blob(stmt, 0, raw, sizeof(raw))) out = load_u32(raw);
+        }
+        sqlite3_finalize(stmt);
+        return true;
+    }
+
+    bool key_counter_next(hcpp::u32& out) noexcept {
+        if (!ensure_schema()) return false;
+        hcpp::u32 value = 0;
+        bool found = false;
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db::db_handle(),
+                               "SELECT value FROM hello_config "
+                               "WHERE key='key_ctr';",
+                               -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            hcpp::u8 raw[4];
+            if (copy_blob(stmt, 0, raw, sizeof(raw))) {
+                value = load_u32(raw);
+                found = true;
+            }
+        }
+        sqlite3_finalize(stmt);
+
+        hcpp::u8 raw[4];
+        store_u32(value + 1, raw);
+        stmt = nullptr;
+        if (sqlite3_prepare_v2(
+                db::db_handle(),
+                found ? "UPDATE hello_config SET value=?1 WHERE key='key_ctr';"
+                      : "INSERT INTO hello_config(key,value) "
+                        "VALUES('key_ctr',?1);",
+                -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
+        sqlite3_bind_blob(stmt, 1, raw, sizeof(raw), SQLITE_TRANSIENT);
+        const int step = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (step != SQLITE_DONE) return false;
+        out = value;
+        return true;
     }
 
 }  // namespace hype::hello::store
