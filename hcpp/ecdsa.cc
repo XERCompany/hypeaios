@@ -174,6 +174,14 @@ namespace hcpp {
             }
         }
 
+        void to_bytes(const u64 in[4], u8 out[32]) noexcept {
+            for (u8 i = 0; i < 4; ++i) {
+                for (u8 j = 0; j < 8; ++j) {
+                    out[(3 - i) * 8 + j] = static_cast<u8>(in[i] >> ((7 - j) * 8));
+                }
+            }
+        }
+
         void point_double(const Point& p, Point& r) noexcept {
             u64 delta[4], gamma[4], beta[4], alpha[4], t[4];
             mul_mod(p.z, p.z, prime_p, delta);
@@ -358,6 +366,66 @@ namespace hcpp {
         return compare(x, r) == 0;
     }
 
+    bool ecdsa_p256_pubkey(const u8 privkey[32], u8 out[64]) noexcept {
+        u64 d[4];
+        from_bytes(privkey, d);
+        if (is_zero(d) || compare(d, order_n) >= 0) {
+            return false;
+        }
+        Point point;
+        scalar_mul(d, base_x, base_y, point);
+        if (is_zero(point.z)) {
+            return false;
+        }
+        u64 zi[4], zi2[4], zi3[4], x[4], y[4];
+        inv_mod(point.z, prime_p, zi);
+        mul_mod(zi, zi, prime_p, zi2);
+        mul_mod(zi2, zi, prime_p, zi3);
+        mul_mod(point.x, zi2, prime_p, x);
+        mul_mod(point.y, zi3, prime_p, y);
+        to_bytes(x, out);
+        to_bytes(y, out + 32);
+        return true;
+    }
+
+    bool ecdsa_p256_sign(const u8 privkey[32], const u8 nonce[32], const u8 hash[32],
+                         u8 sig_r[32], u8 sig_s[32]) noexcept {
+        u64 d[4], k[4], z[4];
+        from_bytes(privkey, d);
+        from_bytes(nonce, k);
+        from_bytes(hash, z);
+        if (is_zero(d) || compare(d, order_n) >= 0 || is_zero(k) ||
+            compare(k, order_n) >= 0) {
+            return false;
+        }
+        Point point;
+        scalar_mul(k, base_x, base_y, point);
+        if (is_zero(point.z)) {
+            return false;
+        }
+        u64 z2[4], r[4];
+        mul_mod(point.z, point.z, prime_p, z2);
+        inv_mod(z2, prime_p, z2);
+        mul_mod(point.x, z2, prime_p, r);
+        if (compare(r, order_n) >= 0) {
+            sub_raw(r, r, order_n);
+        }
+        if (is_zero(r)) {
+            return false;
+        }
+        u64 w[4], rd[4], s[4];
+        inv_mod(k, order_n, w);
+        mul_mod(r, d, order_n, rd);
+        add_mod(z, rd, order_n, s);
+        mul_mod(w, s, order_n, s);
+        if (is_zero(s)) {
+            return false;
+        }
+        to_bytes(r, sig_r);
+        to_bytes(s, sig_s);
+        return true;
+    }
+
     bool ecdsa_selftest() noexcept {
         u8 pubkey[64];
         for (u8 i = 0; i < 32; ++i) {
@@ -404,6 +472,27 @@ namespace hcpp {
             return false;
         }
         if (ecdsa_p256_verify(pubkey, selftest_hash, selftest_r, zero)) {
+            return false;
+        }
+        constexpr u8 sign_priv[32] = {
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+            0xDD, 0xEE, 0xFF, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+            0x0F, 0xED, 0xCB, 0xA9, 0x87, 0x65, 0x43, 0x21,
+        };
+        constexpr u8 sign_nonce[32] = {
+            0x51, 0x62, 0x73, 0x84, 0x95, 0xA6, 0xB7, 0xC8, 0xD9, 0xEA, 0xFB, 0x0C,
+            0x1D, 0x2E, 0x3F, 0x40, 0x52, 0x63, 0x74, 0x85, 0x96, 0xA7, 0xB8, 0xC9,
+            0xDA, 0xEB, 0xFC, 0x0D, 0x1E, 0x2F, 0x30, 0x41,
+        };
+        u8 generated_pub[64];
+        u8 sign_r[32], sign_s[32];
+        if (!ecdsa_p256_pubkey(sign_priv, generated_pub)) {
+            return false;
+        }
+        if (!ecdsa_p256_sign(sign_priv, sign_nonce, selftest_hash, sign_r, sign_s)) {
+            return false;
+        }
+        if (!ecdsa_p256_verify(generated_pub, selftest_hash, sign_r, sign_s)) {
             return false;
         }
         return true;

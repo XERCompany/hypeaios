@@ -22,4 +22,7 @@ namespace hype::hello::store {
     // Returns the persistent 16-byte device secret, generating+storing it on first use.
     bool device_secret(hcpp::u8 out[16]) noexcept;
 
+    bool key_counter_peek(hcpp::u32& out) noexcept;
+    bool key_counter_next(hcpp::u32& out) noexcept;
+
 }  // namespace hype::hello::store
