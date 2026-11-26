@@ -7,6 +7,7 @@
 #include "hcpp/types.hpp"
 #include "kernel/boot_info.hpp"
 #include "kernel/chips/chipset.h"
+#include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
@@ -226,6 +227,16 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.acpi_tables));
     serial::write(" interrupts=");
     serial::write_line(runtime_info.interrupts_ready ? "ready" : "failed");
+    serial::write("vmm=");
+    serial::write(runtime_info.vmm_selftest ? "ready" : "failed");
+    serial::write(" madt=");
+    serial::write(runtime_info.madt_present ? "yes" : "no");
+    serial::write(" cpus=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.apic_cpus));
+    serial::write(" ioapics=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.ioapics));
+    serial::write(" apic=");
+    serial::write_line(runtime_info.apic_supported ? "enabled" : "unavailable");
     serial::write("font default=");
     serial::write(hcpp::fonts::default_font_name());
     serial::write(" registered=");
@@ -313,5 +324,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("pit ticks after 100ms=");
     serial::write_dec32(static_cast<hcpp::u32>(hype::interrupts::pit_ticks() - pit_start));
     serial::write(" interrupts active=yes\r\n");
+    hype::interrupts::pit_wait_ticks(40);
+    serial::write("keyboard events=");
+    serial::write_dec32(static_cast<hcpp::u32>(hype::input::scancode_event_count()));
+    serial::write(" decoder=ready\r\n");
     halt_forever();
 }

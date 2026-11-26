@@ -1,6 +1,7 @@
 #include "kernel/interrupts/idt.h"
 
 #include "kernel/functionemitkeys.h"
+#include "kernel/input/scancode.h"
 #include "kernel/irq.h"
 #include "kernel/serial.hpp"
 
@@ -30,9 +31,10 @@ namespace hype::interrupts {
         } __attribute__((packed));
         void timer_handler(void*, hcpp::u32) noexcept { ticks = ticks + 1; }
         void keyboard_handler(void*, hcpp::u32) noexcept {
-            const hcpp::u8 scan = inb(0x60);
-            input::emit_key_event(scan & 0x7F,
-                                  (scan & 0x80) == 0 ? input::KeyState::Pressed : input::KeyState::Released, ticks);
+            const input::DecodedKey key = input::scancode_decode(inb(0x60));
+            if (key.valid)
+                input::emit_key_event(key.key_code, key.pressed ? input::KeyState::Pressed : input::KeyState::Released,
+                                      ticks);
         }
     }  // namespace
     extern "C" void interrupt_handle(hcpp::u64 vector, hcpp::u64 error) noexcept {
@@ -87,7 +89,10 @@ namespace hype::interrupts {
         outb(0x40, static_cast<hcpp::u8>(divisor >> 8));
         kernel::irq_register(0, timer_handler, nullptr);
     }
-    void keyboard_initialize() noexcept { kernel::irq_register(1, keyboard_handler, nullptr); }
+    void keyboard_initialize() noexcept {
+        input::scancode_initialize();
+        kernel::irq_register(1, keyboard_handler, nullptr);
+    }
     hcpp::u64 pit_ticks() noexcept { return ticks; }
     void pit_wait_ticks(hcpp::u64 count) noexcept {
         const hcpp::u64 start = ticks;

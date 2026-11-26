@@ -1,9 +1,12 @@
 #include "kernel/runtime/runtime.h"
 
 #include "kernel/acpi/acpi.h"
+#include "kernel/acpi/apic.h"
+#include "kernel/acpi/madt.h"
 #include "kernel/core_services.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/memory/pmm.h"
+#include "kernel/memory/vmm.h"
 #include "kernel/pci/pci.h"
 
 namespace hype::runtime {
@@ -35,10 +38,23 @@ namespace hype::runtime {
             current.memory_usable_regions = stats.usable_regions;
             return current.memory_initialized && current.memory_selftest;
         }
+        bool vmm_enter(void*) noexcept {
+            memory::vmm_initialize();
+            current.vmm_initialized = memory::vmm_initialized();
+            current.vmm_selftest = memory::vmm_selftest();
+            return current.vmm_initialized && current.vmm_selftest;
+        }
         bool acpi_enter(void*) noexcept {
             acpi::initialize();
             current.acpi_present = acpi::info().present;
             current.acpi_tables = acpi::info().table_count;
+            acpi::madt_initialize();
+            acpi::apic_initialize();
+            current.madt_present = acpi::madt_info().present;
+            current.apic_cpus = acpi::madt_info().enabled_cpu_count;
+            current.ioapics = acpi::madt_info().ioapic_count;
+            current.apic_supported = acpi::apic_info().cpuid_supported && acpi::apic_info().msr_enabled;
+            current.apic_base = acpi::apic_info().apic_base;
             return true;
         }
         bool interrupt_enter(void*) noexcept {
@@ -50,12 +66,13 @@ namespace hype::runtime {
             interrupts::pic_unmask(1);
             interrupts::interrupts_enable();
             current.interrupts_ready = interrupts::interrupts_initialized();
-            return current.interrupts_ready;
+            return current.interrupts_ready && current.vmm_selftest;
         }
 
         RuntimeStage core_stage{"core.services", 10, core_enter, nullptr, StageState::Pending};
         RuntimeStage pci_stage{"pci.scan", 20, pci_enter, nullptr, StageState::Pending};
         RuntimeStage memory_stage{"memory.pmm", 30, memory_enter, nullptr, StageState::Pending};
+        RuntimeStage vmm_stage{"memory.vmm", 35, vmm_enter, nullptr, StageState::Pending};
         RuntimeStage acpi_stage{"acpi.discover", 40, acpi_enter, nullptr, StageState::Pending};
         RuntimeStage interrupt_stage{"interrupts.foundation", 50, interrupt_enter, nullptr, StageState::Pending};
     }  // namespace
@@ -68,6 +85,7 @@ namespace hype::runtime {
         register_stage(core_stage);
         register_stage(pci_stage);
         register_stage(memory_stage);
+        register_stage(vmm_stage);
         register_stage(acpi_stage);
         register_stage(interrupt_stage);
     }
@@ -108,7 +126,7 @@ namespace hype::runtime {
         current.core_started = core::services_running();
         current.core_selftest = core::services_self_test();
         is_booted = stages_ok && current.core_started && current.core_selftest && current.memory_initialized &&
-                    current.interrupts_ready;
+                    current.interrupts_ready && current.vmm_selftest;
         return current;
     }
 

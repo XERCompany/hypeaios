@@ -26,8 +26,15 @@ namespace hype::runtime {
         hcpp::size_t memory_e820_entries;
         hcpp::size_t memory_usable_regions;
         bool memory_selftest;
+        bool vmm_initialized;
+        bool vmm_selftest;
         bool acpi_present;
         hcpp::size_t acpi_tables;
+        bool madt_present;
+        hcpp::size_t apic_cpus;
+        hcpp::size_t ioapics;
+        bool apic_supported;
+        hcpp::uintptr_t apic_base;
         bool interrupts_ready;
         hcpp::size_t stages_completed;
         hcpp::size_t stages_failed;

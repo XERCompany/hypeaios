@@ -17,8 +17,8 @@ M1 proved the custom boot chain reaches x86_64 long mode. The current prototype 
 ## Next implementation order
 
 1. Replace fixed kernel placement with a relocatable format.
-2. Parse MADT and move from legacy PIC to APIC/x2APIC.
-3. Add kernel virtual memory and physical-page ownership metadata.
+2. Move interrupt routing from legacy PIC to APIC/x2APIC using the parsed MADT.
+3. Add physical-page ownership metadata and propagate user page permissions through all page-table levels.
 4. Implement context switching and ring 3 userspace.
 5. Add HPET timekeeping and a keyboard scancode decoder.
 6. Implement PCI storage drivers and the first boot filesystem.
@@ -50,9 +50,11 @@ Linux/Windows-inspired primitives now include atomic/interlocked operations, spi
 
 The BIOS bootloader now captures the E820 memory map before leaving real mode. `kernel/memory/pmm` uses usable E820 regions to manage the first 128 MiB of physical memory through a bitmap allocator, reserves the first MiB for boot/kernel/BIOS data, supports contiguous page allocation and exposes allocation statistics. The runtime performs an allocate/free self-test during boot.
 
-`kernel/acpi` searches the RSDP in the EBDA and BIOS ROM area, validates checksums, parses either RSDT or XSDT entries, and records MADT/FADT table locations for later APIC and power-management drivers.
+`kernel/acpi` searches the RSDP in the EBDA and BIOS ROM area, validates checksums, parses either RSDT or XSDT entries, and records MADT/FADT table locations. `madt` enumerates local APICs, enabled CPUs, I/O APICs and interrupt overrides; `apic` reads CPUID and the IA32_APIC_BASE MSR. The current boot still uses the legacy PIC; APIC interrupt routing is the next step.
 
-`kernel/interrupts` installs a full 256-entry x86_64 IDT with assembly interrupt stubs, remaps the legacy PIC, initializes the PIT at 100 Hz, bridges keyboard IRQ1 scancodes into the input-event subsystem and enables IRQ0/IRQ1. QEMU validation confirms timer interrupts advance while the kernel is in long mode.
+`kernel/memory/vmm` reads the active CR3, walks four-level x86_64 page tables, understands 1 GiB/2 MiB huge pages and can map/unmap high virtual pages with PMM-backed page tables. The runtime self-test maps a high virtual page, verifies read/write/translation, unmaps it and returns the physical frames.
+
+`kernel/interrupts` installs a full 256-entry x86_64 IDT with assembly interrupt stubs, remaps the legacy PIC, initializes the PIT at 100 Hz, bridges keyboard IRQ1 scancodes into the input-event subsystem and enables IRQ0/IRQ1. `kernel/input/scancode` decodes PS/2 set-1 press/release scancodes, tracks shift/caps-lock state and produces ASCII-compatible key data. QEMU validation injects a key through the monitor and confirms both press and release events while the kernel is in long mode.
 
 ## Language direction
 
