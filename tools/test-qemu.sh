@@ -30,10 +30,33 @@ for _ in range(100):
 else:
     raise SystemExit('qemu monitor socket did not appear')
 
+def reconnect():
+    global sock
+    try:
+        sock.close()
+    except Exception:
+        pass
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect('build/qemu-monitor.sock')
+
+def send(command):
+    global sock
+    for _ in range(5):
+        try:
+            sock.sendall(command)
+            return True
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            time.sleep(0.1)
+            try:
+                reconnect()
+            except OSError:
+                pass
+    return False
+
 time.sleep(0.25)
-sock.sendall(b'sendkey a 20\n')
+send(b'sendkey a 20\n')
 time.sleep(0.45)
-sock.sendall(b'quit\n')
+send(b'quit\n')
 sock.close()
 PY
 
