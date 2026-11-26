@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y nasm qemu-system-x86 xorriso make g++ python3
       - name: Build raw OS image
