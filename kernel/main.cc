@@ -265,6 +265,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         write_hex16(card->device_id);
         serial::write("\r\n");
     }
+    const bool audio_format_ok = hype::audio::audio_format_selftest();
+    serial::write("audio format selftest=");
+    serial::write_line(audio_format_ok ? "ok" : "fail");
     serial::write("memory free=");
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_free_bytes / (1024 * 1024)));
     serial::write("MB e820=");

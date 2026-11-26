@@ -11,6 +11,8 @@ namespace hype::audio {
         hcpp::u32 frames_encoded;
     };
 
+    inline bool alac_encoder_supported() noexcept { return false; }
+
     bool alac_encoder_initialize(AlacEncoderState &state, const AlacConfig &config) noexcept;
     void alac_encoder_reset(AlacEncoderState &state) noexcept;
     hcpp::u32 alac_encoder_encode(AlacEncoderState &state, const hcpp::i16 *frames, hcpp::u32 frame_count,

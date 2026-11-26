@@ -8,7 +8,9 @@ namespace hype::audio {
     struct WavInfo {
         AudioFormat format;
         hcpp::u16 audio_format_tag;
+        hcpp::u16 bits_per_sample;
         const void *sample_data;
+        hcpp::u32 data_offset;
         hcpp::u32 sample_bytes;
     };
 
