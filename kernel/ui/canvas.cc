@@ -99,4 +99,18 @@ namespace hype::ui {
         draw_text(x, baseline_y, text, color, *font);
     }
 
+    Size text_extent(hcpp::StringView text, const hcpp::fonts::FontFace& font) noexcept {
+        Size extent{0, font.height};
+        if (font.glyph_for == nullptr) {
+            return extent;
+        }
+        hcpp::size_t cursor = 0;
+        while (cursor < text.size()) {
+            const hcpp::u32 codepoint = hcpp::utf8::next_codepoint(text, cursor);
+            const hcpp::fonts::FontGlyph glyph = font.glyph_for(codepoint);
+            extent.width += glyph.advance != 0 ? glyph.advance : font.advance;
+        }
+        return extent;
+    }
+
 }  // namespace hype::ui
