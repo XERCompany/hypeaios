@@ -3,6 +3,7 @@
 #include "kernel/arch/x86/cpu.h"
 #include "kernel/arch/x86/io.h"
 #include "kernel/functionemitkeys.h"
+#include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/irq.h"
 #include "kernel/serial.hpp"
@@ -85,6 +86,7 @@ namespace hype::interrupts {
     }
     void keyboard_initialize() noexcept {
         input::scancode_initialize();
+        input::keyring_initialize();
         kernel::irq_register(1, keyboard_handler, nullptr);
     }
     hcpp::u64 pit_ticks() noexcept { return ticks; }

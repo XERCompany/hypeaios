@@ -9,6 +9,7 @@ namespace hype::input {
         bool extended_prefix;
         bool caps_lock;
         hcpp::u64 event_count;
+        char last_ascii;
         const char lowercase_table[128] = {
             0,    27,  '1', '2',  '3', '4', '5', '6', '7',  '8', '9', '0', '-', '=', '\b', '\t', 'q', 'w', 'e', 'r',
             't',  'y', 'u', 'i',  'o', 'p', '[', ']', '\n', 0,   'a', 's', 'd', 'f', 'g',  'h',  'j', 'k', 'l', ';',
@@ -45,11 +46,13 @@ namespace hype::input {
         ++event_count;
 
         char ascii = 0;
+        last_ascii = 0;
         if (pressed && code < 128) {
             const bool letter = lowercase_table[code] >= 'a' && lowercase_table[code] <= 'z';
             const bool shifted = scancode_shift_active() != (letter && caps_lock);
             ascii = shifted ? uppercase_table[code] : lowercase_table[code];
         }
+        if (ascii != 0) last_ascii = ascii;
         return {code, ascii, pressed, extended, true};
     }
 
@@ -59,6 +62,7 @@ namespace hype::input {
     }
     bool scancode_caps_lock_active() noexcept { return caps_lock; }
     hcpp::u64 scancode_event_count() noexcept { return event_count; }
+    char scancode_last_ascii() noexcept { return last_ascii; }
     const char* scancode_key_name(hcpp::u16 key_code) noexcept {
         switch (key_code) {
             case 1:

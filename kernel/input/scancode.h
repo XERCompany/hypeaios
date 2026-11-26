@@ -19,6 +19,7 @@ namespace hype::input {
     bool scancode_shift_active() noexcept;
     bool scancode_caps_lock_active() noexcept;
     hcpp::u64 scancode_event_count() noexcept;
+    char scancode_last_ascii() noexcept;
     const char* scancode_key_name(hcpp::u16 key_code) noexcept;
 
 }  // namespace hype::input

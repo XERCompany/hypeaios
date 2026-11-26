@@ -7,6 +7,7 @@
 #include "hcpp/types.hpp"
 #include "kernel/boot_info.hpp"
 #include "kernel/chips/chipset.h"
+#include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/runtime/runtime.h"
@@ -331,6 +332,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     hype::interrupts::pit_wait_ticks(40);
     serial::write("keyboard events=");
     serial::write_dec32(static_cast<hcpp::u32>(hype::input::scancode_event_count()));
-    serial::write(" decoder=ready\r\n");
+    serial::write(" decoder=ready input=");
+    if (hype::input::keyring_count() != 0) serial::write_char(hype::input::keyring_peek(0));
+    serial::write("\r\n");
     halt_forever();
 }
