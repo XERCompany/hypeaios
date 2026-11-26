@@ -60,7 +60,9 @@ $(BUILD)/hypeai-os.img: $(BUILD)/stage1.bin $(BUILD)/stage2.bin $(BUILD)/kernel.
 	python3 tools/mkimage.py
 
 run: all
-	qemu-system-x86_64 -drive format=raw,file=$(BUILD)/hypeai-os.img -serial stdio -display none -no-reboot
+	qemu-system-x86_64 -drive format=raw,file=$(BUILD)/hypeai-os.img \
+		-device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
+		-serial stdio -display none -no-reboot
 
 $(BUILD)/hypeai-os.iso: $(BUILD)/hypeai-os.img tools/mkiso.py $(BUILD)/version_generated.h
 	python3 tools/mkiso.py

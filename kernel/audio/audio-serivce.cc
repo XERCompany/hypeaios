@@ -17,6 +17,30 @@ namespace hype::audio {
             }
         }
 
+        void write_hex8(hcpp::u8 value) noexcept {
+            for (int shift = 4; shift >= 0; shift -= 4) {
+                const hcpp::u8 digit = static_cast<hcpp::u8>((value >> shift) & 0xF);
+                serial::write_char(digit < 10 ? static_cast<char>('0' + digit)
+                                              : static_cast<char>('a' + digit - 10));
+            }
+        }
+
+        void verify_playback(hda::IzauController &controller,
+                             const hda::IzauPlayback &playback) noexcept {
+            hcpp::u32 lpib = 0;
+            for (hcpp::u32 round = 0; round < 256 && lpib == 0; ++round) {
+                for (hcpp::u32 spin = 0; spin < 0x80000; ++spin) {
+                    asm volatile("pause");
+                }
+                lpib = hda::izau_playback_position(controller, playback);
+            }
+            serial::write("hda lpib=");
+            write_hex32(lpib);
+            serial::write("\r\n");
+            serial::write("audio playback=");
+            serial::write_line(lpib != 0 ? "ok" : "fail");
+        }
+
         void bringup_hda_card(hcpp::size_t card_index) noexcept {
             hda::IzauController controller{};
             const bool bound = hda::izau_bind(card_index, controller);
@@ -35,6 +59,18 @@ namespace hype::audio {
                 serial::write("hda codec vid=");
                 write_hex32(codecs[i].vendor);
                 serial::write("\r\n");
+            }
+            hda::IzauPlayback playback{};
+            const bool started = hda::izau_playback_start(controller, codecs[0].address, playback);
+            serial::write("audio stream=");
+            serial::write_line(started ? "run" : "fail");
+            if (started) {
+                serial::write("hda path pin=");
+                write_hex8(playback.pin_node);
+                serial::write(" dac=");
+                write_hex8(playback.dac_node);
+                serial::write("\r\n");
+                verify_playback(controller, playback);
             }
         }
     }
