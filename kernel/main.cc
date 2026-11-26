@@ -6,6 +6,7 @@
 #include "hcpp/text_writer.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/boot_info.hpp"
+#include "kernel/core_services.h"
 #include "kernel/serial.hpp"
 
 namespace {
@@ -191,7 +192,10 @@ void append_hdr_line(hcpp::TextWriter& line, const MonitorReport& report) noexce
 extern "C" void hype_kernel_main(BootInfo* boot_info) noexcept {
     serial::initialize();
     hcpp::fonts::initialize_default_fonts();
+    hype::core::initialize_services();
     serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
+    serial::write("core services running=");
+    serial::write_line(hype::core::services_running() ? "yes" : "no");
     serial::write("font default=");
     serial::write(hcpp::fonts::default_font_name());
     serial::write(" registered=");

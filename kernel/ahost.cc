@@ -1,0 +1,2 @@
+#include "kernel/ahost.h"
+namespace hype::host { namespace { constexpr hcpp::size_t capacity=8; HostEndpoint endpoints[capacity]; hcpp::size_t count; } void host_initialize() noexcept {count=0;for(auto&e:endpoints)e={};} bool host_register(const HostEndpoint& endpoint) noexcept {if(endpoint.id==0||count>=capacity)return false; endpoints[count++]=endpoint; return true;} const HostEndpoint* host_find(hcpp::u32 id) noexcept {for(hcpp::size_t i=0;i<count;++i)if(endpoints[i].id==id)return &endpoints[i];return nullptr;} hcpp::size_t host_count() noexcept{return count;} }

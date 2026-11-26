@@ -1,0 +1,2 @@
+#include "kernel/apgsecurtiy.h"
+namespace hype::security { bool capabilities_valid(hcpp::u32 capabilities) noexcept { constexpr hcpp::u32 all=capability_read|capability_write|capability_execute|capability_devices|capability_users; return (capabilities&~all)==0; } bool capability_allowed(hcpp::u32 granted,hcpp::u32 required) noexcept {return capabilities_valid(granted)&&capabilities_valid(required)&&(granted&required)==required;} }
