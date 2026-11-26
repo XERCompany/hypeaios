@@ -6,6 +6,7 @@
 #include "hcpp/text_writer.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/boot_info.hpp"
+#include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
@@ -201,6 +202,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     hcpp::fonts::initialize_default_fonts();
     const hype::runtime::RuntimeInfo runtime_info = hype::runtime::boot(*boot_info);
     serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
+    serial::write("version=");
+    serial::write_line(HYPEAI_VERSION_FULL);
     serial::write("core services running=");
     serial::write_line(runtime_info.core_started ? "yes" : "no");
     serial::write("core selftest=");

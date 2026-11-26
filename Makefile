@@ -3,7 +3,7 @@ CXX ?= g++
 LD ?= ld
 BUILD := build
 
-CXXFLAGS := -std=c++20 -O2 -ffreestanding -fno-exceptions -fno-rtti \
+CXXFLAGS := -I$(BUILD) -std=c++20 -O2 -ffreestanding -fno-exceptions -fno-rtti \
 	-fno-use-cxa-atexit -fno-threadsafe-statics -fno-stack-protector \
 	-fno-pic -fno-pie -mno-red-zone -m64 -mcmodel=large -Wall -Wextra -I.
 
@@ -34,7 +34,10 @@ $(BUILD)/%.o: %.asm | $(BUILD)
 	mkdir -p $(dir $@)
 	$(NASM) -f elf64 $< -o $@
 
-$(BUILD)/%.o: %.cc $(KERNEL_HEADERS) | $(BUILD)
+$(BUILD)/version_generated.h: tools/version.py | $(BUILD)
+	python3 tools/version.py >/dev/null
+
+$(BUILD)/%.o: %.cc $(KERNEL_HEADERS) $(BUILD)/version_generated.h | $(BUILD)
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -46,6 +49,11 @@ $(BUILD)/hypeai-os.img: $(BUILD)/stage1.bin $(BUILD)/stage2.bin $(BUILD)/kernel.
 
 run: all
 	qemu-system-x86_64 -drive format=raw,file=$(BUILD)/hypeai-os.img -serial stdio -display none -no-reboot
+
+$(BUILD)/hypeai-os.iso: $(BUILD)/hypeai-os.img tools/mkiso.py $(BUILD)/version_generated.h
+	python3 tools/mkiso.py
+
+iso: $(BUILD)/hypeai-os.iso
 
 test: all
 	./tools/test-qemu.sh
