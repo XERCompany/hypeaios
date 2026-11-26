@@ -24,12 +24,7 @@ struct HdrStaticMetadataBlock {
     bool has_min_luminance = false;
 };
 
-inline constexpr bool hdr_eotf_pq_supported(u8 eotf_flags) noexcept {
-    return (eotf_flags & (1U << 2)) != 0;
-}
-
-inline constexpr bool hdr_eotf_hlg_supported(u8 eotf_flags) noexcept {
-    return (eotf_flags & (1U << 3)) != 0;
-}
+bool hdr_eotf_pq_supported(u8 eotf_flags) noexcept;
+bool hdr_eotf_hlg_supported(u8 eotf_flags) noexcept;
 
 } // namespace hcpp::display

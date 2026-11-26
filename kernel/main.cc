@@ -51,7 +51,7 @@ void write_scaled_decimal_x100(hcpp::u16 value) noexcept {
 struct MonitorReport {
     bool edid_available = false;
     hcpp::display::EdidInfo edid;
-    hcpp::display::HdrStaticMetadataBlock hdr;
+    hcpp::display::CtaExtensionInfo cta;
 };
 
 MonitorReport analyze_monitor(const BootInfo& boot_info) noexcept {
@@ -66,7 +66,7 @@ MonitorReport analyze_monitor(const BootInfo& boot_info) noexcept {
 
     report.edid = hcpp::display::parse_edid_base(edid_data);
     report.edid_available = report.edid.header_valid;
-    report.hdr = hcpp::display::scan_edid_hdr_static_metadata(
+    report.cta = hcpp::display::scan_edid_cta_extensions(
         edid_data,
         boot_info.edid_blocks);
 
@@ -115,21 +115,32 @@ MonitorReport analyze_monitor(const BootInfo& boot_info) noexcept {
     serial::write_hex64(boot_info.dpms_capabilities);
     serial::write("\r\n");
 
-    if (report.hdr.present) {
+    if (report.cta.hdr.present) {
         serial::write("hdr static metadata present eotf_flags=");
-        serial::write_hex64(report.hdr.eotf_flags);
+        serial::write_hex64(report.cta.hdr.eotf_flags);
         serial::write(" pq=");
-        serial::write(hcpp::display::hdr_eotf_pq_supported(report.hdr.eotf_flags) ? "yes" : "no");
+        serial::write(hcpp::display::hdr_eotf_pq_supported(report.cta.hdr.eotf_flags) ? "yes" : "no");
         serial::write(" hlg=");
-        serial::write_line(hcpp::display::hdr_eotf_hlg_supported(report.hdr.eotf_flags) ? "yes" : "no");
+        serial::write_line(hcpp::display::hdr_eotf_hlg_supported(report.cta.hdr.eotf_flags) ? "yes" : "no");
     } else {
         serial::write_line("hdr static metadata not present in readable EDID blocks");
+    }
+
+    if (report.cta.colorimetry.present) {
+        serial::write("colorimetry flags=");
+        serial::write_hex64(report.cta.colorimetry.colorimetry_flags);
+        serial::write(" bt2020_rgb=");
+        serial::write(hcpp::display::colorimetry_bt2020_rgb_supported(report.cta.colorimetry.colorimetry_flags) ? "yes" : "no");
+        serial::write(" bt2020_ycc=");
+        serial::write_line(hcpp::display::colorimetry_bt2020_ycc_supported(report.cta.colorimetry.colorimetry_flags) ? "yes" : "no");
+    } else {
+        serial::write_line("CTA colorimetry block not present");
     }
 
     return report;
 }
 
-void append_monitor_line(hcpp::TextWriter<96>& line, const MonitorReport& report) noexcept {
+void append_monitor_line(hcpp::TextWriter& line, const MonitorReport& report) noexcept {
     line.append("MONITOR ");
     if (!report.edid_available) {
         line.append("EDID UNAVAILABLE");
@@ -144,7 +155,7 @@ void append_monitor_line(hcpp::TextWriter<96>& line, const MonitorReport& report
     }
 }
 
-void append_technical_line(hcpp::TextWriter<96>& line, const MonitorReport& report) noexcept {
+void append_technical_line(hcpp::TextWriter& line, const MonitorReport& report) noexcept {
     if (!report.edid_available) {
         line.append("VBE DDC READ FAILED");
         return;
@@ -163,15 +174,15 @@ void append_technical_line(hcpp::TextWriter<96>& line, const MonitorReport& repo
     line.append("CM");
 }
 
-void append_hdr_line(hcpp::TextWriter<96>& line, const MonitorReport& report) noexcept {
-    if (!report.hdr.present) {
+void append_hdr_line(hcpp::TextWriter& line, const MonitorReport& report) noexcept {
+    if (!report.cta.hdr.present) {
         line.append("HDR METADATA NOT FOUND");
         return;
     }
     line.append("HDR EOTF PQ ");
-    line.append(hcpp::display::hdr_eotf_pq_supported(report.hdr.eotf_flags) ? "YES" : "NO");
+    line.append(hcpp::display::hdr_eotf_pq_supported(report.cta.hdr.eotf_flags) ? "YES" : "NO");
     line.append(" HLG ");
-    line.append(hcpp::display::hdr_eotf_hlg_supported(report.hdr.eotf_flags) ? "YES" : "NO");
+    line.append(hcpp::display::hdr_eotf_hlg_supported(report.cta.hdr.eotf_flags) ? "YES" : "NO");
 }
 
 } // namespace
@@ -250,7 +261,7 @@ extern "C" void hype_kernel_main(BootInfo* boot_info) noexcept {
         accent_color,
         2);
 
-    hcpp::TextWriter<96> line;
+    hcpp::TextWriter line;
     append_monitor_line(line, monitor);
     hcpp::graphics::draw_text(framebuffer, panel_x + 30, panel_y + 102, line.view(), title_color, 2);
 

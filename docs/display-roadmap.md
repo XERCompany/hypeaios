@@ -50,9 +50,9 @@ VBE/PM can report DPMS capability at boot, but runtime BIOS calls are unavailabl
 - Detect HDR Static Metadata Data Block, extended tag `0x06`.
 - Parse supported EOTF bits: traditional gamma, PQ and HLG.
 - Parse desired max luminance, frame-average luminance and min luminance when present.
-- Parse colorimetry blocks for BT.2020 support.
+- Parse colorimetry blocks for BT.2020 RGB/YCC support.
 
-The parser scaffolding is present in `hcpp/display/edid.hpp`; QEMU's current EDID does not advertise HDR static metadata.
+The parser implementation is present in `hcpp/display/edid.cc`; QEMU's current EDID does not advertise HDR static metadata or BT.2020 colorimetry.
 
 ## Stage 5 — HDR colorspace support
 

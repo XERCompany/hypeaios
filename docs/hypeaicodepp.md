@@ -10,15 +10,18 @@ HypeAICode++ (`hcpp`) is the freestanding C++ runtime and library layer for Hype
 - exceptions and RTTI are disabled;
 - allocation APIs are explicit and fail predictably;
 - kernel code must remain usable before a heap exists;
-- algorithms and containers are added only when memory management is ready.
+- algorithms and containers are added only when memory management is ready;
+- headers declare interfaces only; function implementations live in `.cc` files rather than inline header code.
 
 ## Initial modules
 
 - `hcpp/types.hpp`: fixed-width integer types, `size_t`, byte order assumptions.
 - `hcpp/memory.hpp`: `copy`, `move`, `set`, `compare`, zeroing primitives.
 - `hcpp/string_view.hpp`: non-owning immutable string view.
-- `hcpp/result.hpp`: lightweight value/error result type.
+- `hcpp/result.hpp`: lightweight status/error reporting type.
+- `hcpp/text_writer.hpp`: fixed-capacity kernel text formatter.
 - `hcpp/graphics/framebuffer.hpp`: framebuffer description and drawing primitives.
+- `hcpp/display/*`: EDID, CTA colorimetry, HDR metadata and color-space model.
 
 ## Relationship to C++ stdlib
 
