@@ -2,12 +2,16 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-output="$(timeout 4 qemu-system-x86_64 \
+output="$(timeout 5 qemu-system-x86_64 \
+  -machine pc \
+  -vga std \
   -drive format=raw,file=build/hypeai-os.img \
   -serial stdio \
   -display none \
   -no-reboot 2>&1 || true)"
 
 printf '%s\n' "$output"
-grep -q "HYPEAI OS BOOT OK - x86_64 long mode" <<<"$output"
-echo "QEMU boot test passed"
+grep -q "HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode" <<<"$output"
+grep -q "VBE framebuffer active; graphics primitives initialized" <<<"$output"
+grep -q "HypeAICode++ runtime active" <<<"$output"
+echo "QEMU boot and framebuffer test passed"

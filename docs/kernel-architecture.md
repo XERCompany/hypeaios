@@ -12,7 +12,7 @@ HypeCore is planned as a small capability-oriented microkernel. Hardware drivers
 
 ## Milestone state
 
-M1 is intentionally minimal: a BIOS-loaded assembly kernel that proves the custom boot chain reaches x86_64 long mode and can write to COM1 and VGA text memory.
+M1 proved the custom boot chain reaches x86_64 long mode. The current M2 prototype adds a freestanding HypeAICode++ kernel runtime, VBE linear framebuffer handoff, direct pixel/rectangle drawing and 5x7 framebuffer text output.
 
 ## Next implementation order
 
