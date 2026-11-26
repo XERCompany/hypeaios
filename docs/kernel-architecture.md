@@ -24,6 +24,21 @@ M1 proved the custom boot chain reaches x86_64 long mode. The current M2 prototy
 6. Add timer and keyboard interrupts.
 7. Implement context switching and ring 3 userspace.
 
+
+## Linux-inspired OS Core module pass
+
+The custom `kernel/*.h` filenames are not public Linux or POSIX API names. Internet/source inspection therefore maps them by intended subsystem rather than by exact upstream filename. The current implementation adapts Linux design concepts without copying GPL implementation code:
+
+- input: Linux-style typed input events, key bitsets, input device registration and sync events;
+- VFS/filesystem: Linux-style `FileOperations`, open-file state, seek/read/write dispatch and a small memory-backed quick filesystem;
+- security/users: Linux-inspired credentials, UID/GID and capability bits;
+- LMH tasks/processes: Linux-inspired process/task lifecycle, priorities and a fixed-capacity scheduler queue;
+- IMMT memory: fixed-block kernel allocator with allocation statistics;
+- IMMT core: module registration, priority-ordered initialization and reverse shutdown;
+- host devices: Linux-inspired device/driver registration, matching, probe and remove callbacks.
+
+Linux references inspected: `include/linux/fs.h`, `include/linux/input.h`, `include/linux/cred.h`, `include/linux/sched.h` and `include/linux/device.h` in the upstream `torvalds/linux` tree.
+
 ## Language direction
 
 Assembly remains necessary for boot, interrupt entry, context switching and syscall entry. Larger kernel components should migrate to Rust `no_std` once the low-level ABI and build flow are stable.

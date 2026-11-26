@@ -216,6 +216,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
   serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
   serial::write("core services running=");
   serial::write_line(hype::core::services_running() ? "yes" : "no");
+  serial::write("core selftest=");
+  serial::write_line(hype::core::services_self_test() ? "passed" : "failed");
   serial::write("font default=");
   serial::write(hcpp::fonts::default_font_name());
   serial::write(" registered=");
