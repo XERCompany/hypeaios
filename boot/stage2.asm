@@ -3,7 +3,7 @@
 
 KERNEL_LOAD_ADDR equ 0x00010000
 KERNEL_LBA       equ 33
-KERNEL_SECTORS   equ 128
+KERNEL_SECTORS   equ 256
 PAGE_TABLES      equ 0x00070000
 STACK_TOP        equ 0x00090000
 BOOT_INFO_ADDR   equ 0x00005000
@@ -56,12 +56,27 @@ print16:
     ret
 
 load_kernel:
+    mov word [kernel_dap + 2], 64
+    mov word [kernel_dap + 4], 0
+    mov word [kernel_dap + 6], 0x1000
+    mov dword [kernel_dap + 8], KERNEL_LBA
+    mov dword [kernel_dap + 12], 0
+    mov cx, KERNEL_SECTORS / 64
+.next_chunk:
+    push cx
     mov si, kernel_dap
     mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
-    jc .error
+    jc .error_pop
+    pop cx
+    add dword [kernel_dap + 8], 64
+    adc dword [kernel_dap + 12], 0
+    add word [kernel_dap + 6], 0x0800
+    loop .next_chunk
     ret
+.error_pop:
+    pop cx
 .error:
     mov si, disk_error_msg
     call print16

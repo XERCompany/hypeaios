@@ -3,7 +3,7 @@ from pathlib import Path
 
 SECTOR_SIZE = 512
 STAGE2_SECTORS = 32
-KERNEL_SECTORS = 128
+KERNEL_SECTORS = 256
 TOTAL_SECTORS = 512
 
 root = Path(__file__).resolve().parents[1]
@@ -17,7 +17,7 @@ if len(stage1) != SECTOR_SIZE:
 if len(stage2) > STAGE2_SECTORS * SECTOR_SIZE:
     raise SystemExit("stage2 exceeds fixed 32-sector layout")
 if len(kernel) > KERNEL_SECTORS * SECTOR_SIZE:
-    raise SystemExit("kernel exceeds fixed 64-sector layout")
+    raise SystemExit("kernel exceeds fixed 256-sector layout")
 
 image = bytearray(TOTAL_SECTORS * SECTOR_SIZE)
 image[0:len(stage1)] = stage1
