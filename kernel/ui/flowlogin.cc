@@ -41,17 +41,6 @@ namespace hype::ui::flowlogin {
         WidgetTree tree;
         bool built = false;
 
-        hcpp::u32 count_widgets(const Widget& widget) noexcept {
-            hcpp::u32 count = 1;
-            for (hcpp::size_t i = 0; i < widget.child_count(); ++i) {
-                const Widget* child = widget.child_at(i);
-                if (child != nullptr) {
-                    count += count_widgets(*child);
-                }
-            }
-            return count;
-        }
-
         void build() noexcept {
             if (built) {
                 return;
@@ -126,16 +115,7 @@ namespace hype::ui::flowlogin {
                           static_cast<hcpp::i32>(framebuffer.height())};
         canvas.fill_rect(screen, canvas.color(theme.background));
 
-        hcpp::i32 window_w = 440;
-        hcpp::i32 window_h = 300;
-        if (window_w > screen.w - 32) {
-            window_w = screen.w - 32;
-        }
-        if (window_h > screen.h - 32) {
-            window_h = screen.h - 32;
-        }
-        const Rect window_rect{(screen.w - window_w) / 2,
-                               (screen.h - window_h) / 2, window_w, window_h};
+        const Rect window_rect = centered_window(screen, 440, 300);
         tree.layout_root(window_rect);
         tree.paint_tree(canvas);
         toasts.paint(canvas, screen);
@@ -160,7 +140,7 @@ namespace hype::ui::flowlogin {
         }
         repaint(framebuffer);
         serial::write_line("ui login=shown");
-        return count_widgets(window);
+        return widget_count(window);
     }
 
     bool handle_char(char ascii) noexcept {

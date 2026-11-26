@@ -43,6 +43,7 @@ namespace hype::codec {
 
     constexpr hcpp::u8 codec_flag_decode = 1;
     constexpr hcpp::u8 codec_flag_encode = 2;
+    constexpr hcpp::size_t codec_reserved_ids = 1;
 
     struct FrameBuf {
         hcpp::u32 width;

@@ -20,17 +20,6 @@ namespace hype::ui {
 
         bool codec_image_painted = false;
 
-        hcpp::u32 count_widgets(const Widget& widget) noexcept {
-            hcpp::u32 count = 1;
-            for (hcpp::size_t i = 0; i < widget.child_count(); ++i) {
-                const Widget* child = widget.child_at(i);
-                if (child != nullptr) {
-                    count += count_widgets(*child);
-                }
-            }
-            return count;
-        }
-
         void paint_codec_image(Canvas& canvas, const Rect& window_rect) noexcept {
             namespace codec = hype::codec;
             codec_image_painted = false;
@@ -138,16 +127,7 @@ namespace hype::ui {
                           static_cast<hcpp::i32>(framebuffer.height())};
         canvas.fill_rect(screen, canvas.color(theme.background));
 
-        hcpp::i32 window_w = 560;
-        hcpp::i32 window_h = 320;
-        if (window_w > screen.w - 32) {
-            window_w = screen.w - 32;
-        }
-        if (window_h > screen.h - 32) {
-            window_h = screen.h - 32;
-        }
-        const Rect window_rect{(screen.w - window_w) / 2,
-                               (screen.h - window_h) / 2, window_w, window_h};
+        const Rect window_rect = centered_window(screen, 560, 320);
 
         tree.layout_root(window_rect);
         tree.paint_tree(canvas);
@@ -159,7 +139,7 @@ namespace hype::ui {
         }
         toasts.paint(canvas, screen);
 
-        return count_widgets(window);
+        return widget_count(window);
     }
 
     bool demo_codec_image_painted() noexcept { return codec_image_painted; }

@@ -60,6 +60,10 @@ namespace hype::audio {
                 write_hex32(codecs[i].vendor);
                 serial::write("\r\n");
             }
+            if (found == 0) {
+                serial::write_line("audio stream=skip");
+                return;
+            }
             hda::IzauPlayback playback{};
             const bool started = hda::izau_playback_start(controller, codecs[0].address, playback);
             serial::write("audio stream=");

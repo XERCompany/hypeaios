@@ -30,17 +30,15 @@ namespace hype::hello {
         hcpp::u32 flags;
     };
 
-    // users table
-    hcpp::u32 hello_register_user(hcpp::StringView name) noexcept;  // uid, 0 on failure
-    hcpp::u32 hello_find_user(hcpp::StringView name) noexcept;      // uid, 0 if absent
+    hcpp::u32 hello_register_user(hcpp::StringView name) noexcept;
+    hcpp::u32 hello_find_user(hcpp::StringView name) noexcept;
     hcpp::u32 hello_user_count() noexcept;
 
-    // credentials
     bool hello_enroll(hcpp::u32 uid, HelloMethod method, const void* secret,
                       hcpp::size_t secret_size) noexcept;
     HelloResult hello_auth(hcpp::u32 uid, HelloMethod method, const void* secret,
                            hcpp::size_t secret_size) noexcept;
-    hcpp::u32 hello_methods(hcpp::u32 uid) noexcept;  // bitmask, bit per HelloMethod
+    hcpp::u32 hello_methods(hcpp::u32 uid) noexcept;
     hcpp::u32 hello_credential_count() noexcept;
     bool hello_reset_failures(hcpp::u32 uid, HelloMethod method) noexcept;
 

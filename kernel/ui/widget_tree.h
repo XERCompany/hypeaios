@@ -6,6 +6,9 @@
 
 namespace hype::ui {
 
+    hcpp::u32 widget_count(const Widget& root) noexcept;
+    Rect centered_window(const Rect& screen, hcpp::i32 width, hcpp::i32 height) noexcept;
+
     class WidgetTree {
     public:
         void set_root(Widget* root) noexcept;
