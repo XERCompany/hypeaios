@@ -20,6 +20,10 @@
 #include "kernel/ui/demo.h"
 #include "kernel/video/videov4lv.h"
 
+using InitArrayFunction = void (*)();
+extern "C" InitArrayFunction __init_array_start[];
+extern "C" InitArrayFunction __init_array_end[];
+
 namespace {
 
     void write_vga_text(const char *text) noexcept {
@@ -203,6 +207,9 @@ namespace {
 }  // namespace
 
 extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
+    for (InitArrayFunction *fn = __init_array_start; fn != __init_array_end; ++fn) {
+        (*fn)();
+    }
     serial::initialize();
     hcpp::fonts::initialize_default_fonts();
     const hype::runtime::RuntimeInfo runtime_info = hype::runtime::boot(*boot_info);
@@ -217,6 +224,13 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.pci_devices));
     serial::write(" runtime boot=");
     serial::write_line(hype::runtime::booted() ? "yes" : "no");
+    serial::write("stages=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.stages_registered));
+    serial::write(" completed=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.stages_completed));
+    serial::write(" failed=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.stages_failed));
+    serial::write("\r\n");
     const hype::pci::PciDevice *display_device = hype::pci::find_class(0x03);
     if (display_device != nullptr) {
         const hype::chips::ChipInfo display_chip = hype::chips::identify(*display_device);

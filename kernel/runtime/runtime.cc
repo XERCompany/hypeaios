@@ -104,6 +104,7 @@ namespace hype::runtime {
         register_stage(acpi_stage);
         register_stage(interrupt_stage);
         register_stage(context_stage);
+        current.stages_registered = stage_count;
     }
 
     bool register_stage(RuntimeStage& stage) noexcept {
@@ -115,6 +116,8 @@ namespace hype::runtime {
 
     bool run_stages() noexcept {
         current.stages_completed = current.stages_failed = 0;
+        current.stages_registered = stage_count;
+        if (stage_count == 0) return false;
         for (hcpp::size_t done = 0; done < stage_count; ++done) {
             RuntimeStage* best = nullptr;
             for (hcpp::size_t i = 0; i < stage_count; ++i) {
