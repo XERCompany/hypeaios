@@ -35,3 +35,14 @@ Started 2026-11-26.
 - `docs/hypeaicodepp.md` still documents the pre-#4 8x7 font model.
 - Toast lifetime ticks down per `paint()` call — no real timer source wired yet.
 - Vendored `hypeai-8x16` covers ASCII-95 only; Cyrillic needs a font with that coverage.
+
+## Program: Hello + Audio (spec #13, 2026-11-26) — COMPLETE
+
+- Ticket graph (all merged & closed): #14 crypto, #15 db, #16 audio-skeleton, #17 hello-core, #18 key+face, #19 HDA, #20 PCM, #21 login-UI, #22 decoders. Depended on #12 (static init, `dd68202`) — all 7 runtime stages run (`stages=7 completed=7 failed=0`).
+- Details: see [hello-audio.md](hello-audio.md).
+- **Superseded:** the 2026-11-26 plan above said credentials DB would be a native `hypedb` engine, NOT vendored sqlite3 — written while the #15 port was mid-flight. What actually merged (commit `2fb6fd8`+): **vendored SQLite 3.50.4 on a native "hypevfs" memdb VFS** + heap over PMM (`sqlite=ok`). A pure from-scratch DB remains an open option (see [hello-audio.md](hello-audio.md) open questions).
+
+## Program: CodecApps (spec #23, 2026-11-26) — COMPLETE
+
+- Ticket graph (all merged & closed): #24 core registry/magic/arena → #25 BMP/PNM/TGA/QOI, #26 PNG+inflate, #27 JPEG baseline, #28 GIF/ICO/EXIF/TIFF, #29 ADPCM/G.711/MP3/FLAC → #30 Ogg/Vorbis/ALAC → #31 integration + demo image.
+- Details: see [codecapps.md](codecapps.md).
