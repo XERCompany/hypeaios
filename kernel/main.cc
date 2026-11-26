@@ -1,6 +1,7 @@
 #include "hcpp/display/color_space.hpp"
 #include "hcpp/display/edid.hpp"
 #include "hcpp/fonts/font.hpp"
+#include "hcpp/fonts/hpf.hpp"
 #include "hcpp/graphics/framebuffer.hpp"
 #include "hcpp/graphics/text.hpp"
 #include "hcpp/text_writer.hpp"
@@ -249,11 +250,13 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write(" core=ready\r\n");
     serial::write("kernel threads=");
     serial::write_line(runtime_info.scheduler_ready ? "ready" : "failed");
-    serial::write("font default=");
-    serial::write(hcpp::fonts::default_font_name());
-    serial::write(" registered=");
+    serial::write("fonts=");
     serial::write_dec32(static_cast<hcpp::u32>(hcpp::fonts::registered_font_count()));
+    serial::write(" default=");
+    serial::write(hcpp::fonts::default_font_name());
     serial::write("\r\n");
+    serial::write("hpf selftest=");
+    serial::write_line(hcpp::fonts::hpf_selftest() ? "ok" : "failed");
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         serial::write_line("boot info missing or invalid");

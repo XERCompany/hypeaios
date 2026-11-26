@@ -1,5 +1,7 @@
 #include "hcpp/fonts/font.hpp"
 
+#include "hcpp/fonts/hpf.hpp"
+
 namespace hcpp::fonts {
 
     namespace {
@@ -43,6 +45,7 @@ namespace hcpp::fonts {
         registry_count = 0;
         default_index = 0;
         register_font(arial_font());
+        load_embedded_fonts();
     }
 
     bool register_font(const FontFace& font) noexcept {
