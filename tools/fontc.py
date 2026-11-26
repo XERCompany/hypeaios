@@ -396,14 +396,14 @@ def cc_emit(name, blob):
         f"// HPF v1 face '{name}', {len(blob)} bytes.",
         "namespace hcpp::fonts {",
         "",
-        f"const unsigned char {sym}[] = {{",
+        f"extern const unsigned char {sym}[] = {{",
     ]
     for i in range(0, len(blob), 12):
         chunk = blob[i : i + 12]
         lines.append("    " + " ".join(f"0x{b:02X}," for b in chunk))
     lines += [
         "};",
-        f"const unsigned int {sym}_size = {len(blob)};",
+        f"extern const unsigned int {sym}_size = {len(blob)};",
         "",
         "}  // namespace hcpp::fonts",
         "",

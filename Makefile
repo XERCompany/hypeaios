@@ -11,7 +11,8 @@ CC_SOURCES := $(shell find hcpp kernel -name '*.cc' 2>/dev/null | sort)
 CC_OBJECTS := $(patsubst %.cc,$(BUILD)/%.o,$(CC_SOURCES))
 ASM_SOURCES := $(shell find kernel -name '*.asm' ! -path 'kernel/entry.asm' 2>/dev/null | sort)
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD)/%.o,$(ASM_SOURCES))
-KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(ASM_OBJECTS)
+FONT_OBJECTS := $(BUILD)/fonts/hypeai-8x16_hpf.o
+KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(ASM_OBJECTS) $(FONT_OBJECTS)
 KERNEL_HEADERS := $(shell find hcpp kernel -name '*.hpp' -o -name '*.h' 2>/dev/null)
 
 PYTHON ?= python3
@@ -45,6 +46,10 @@ $(BUILD)/fonts/%_hpf.cc: tools/fonts/%.psfu tools/fontc.py | $(BUILD)
 	$(PYTHON) tools/fontc.py $< --name $* --hpf $(BUILD)/fonts/$*.hpf --cc $@
 
 $(BUILD)/%.o: %.cc $(KERNEL_HEADERS) $(BUILD)/version_generated.h | $(BUILD)
+	mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/fonts/%.o: $(BUILD)/fonts/%.cc | $(BUILD)
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
