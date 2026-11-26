@@ -1,19 +1,30 @@
 NASM ?= nasm
 CXX ?= g++
+CC ?= clang
 LD ?= ld
 BUILD := build
 
 CXXFLAGS := -I$(BUILD) -std=c++20 -Os -ffreestanding -fno-exceptions -fno-rtti \
 	-fno-use-cxa-atexit -fno-threadsafe-statics -fno-stack-protector \
-	-fno-pic -fno-pie -mno-red-zone -m64 -mcmodel=large -Wall -Wextra -I.
+	-fno-pic -fno-pie -mno-red-zone -m64 -mcmodel=large -Wall -Wextra -I. \
+	-Ithird_party/sqlite
+
+CFLAGS := --target=x86_64-unknown-none-elf -Os -ffreestanding -fno-builtin \
+	-fno-stack-protector -fno-pic -fno-pie -mno-red-zone -m64 -mcmodel=large \
+	-w -isystem third_party/sqlite/freestanding -Ithird_party/sqlite \
+	-DSQLITE_OS_OTHER=1 -DSQLITE_THREADSAFE=0 -DNDEBUG \
+	-DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL -DSQLITE_OMIT_UTF16 \
+	-DSQLITE_OMIT_FOREIGN_KEY -DSQLITE_DEFAULT_MEMSTATUS=0
 
 CC_SOURCES := $(shell find hcpp kernel -name '*.cc' 2>/dev/null | sort)
 CC_OBJECTS := $(patsubst %.cc,$(BUILD)/%.o,$(CC_SOURCES))
+C_SOURCES := $(shell find third_party -name '*.c' 2>/dev/null | sort)
+C_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(C_SOURCES))
 ASM_SOURCES := $(shell find kernel -name '*.asm' ! -path 'kernel/entry.asm' 2>/dev/null | sort)
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD)/%.o,$(ASM_SOURCES))
 FONT_OBJECTS := $(BUILD)/fonts/hypeai-8x16_hpf.o
-KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(ASM_OBJECTS) $(FONT_OBJECTS)
-KERNEL_HEADERS := $(shell find hcpp kernel -name '*.hpp' -o -name '*.h' 2>/dev/null)
+KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(C_OBJECTS) $(ASM_OBJECTS) $(FONT_OBJECTS)
+KERNEL_HEADERS := $(shell find hcpp kernel third_party -name '*.hpp' -o -name '*.h' 2>/dev/null)
 
 PYTHON ?= python3
 FONT_ASSETS := $(BUILD)/fonts/hypeai-8x16_hpf.cc
@@ -48,6 +59,10 @@ $(BUILD)/fonts/%_hpf.cc: tools/fonts/%.psfu tools/fontc.py | $(BUILD)
 $(BUILD)/%.o: %.cc $(KERNEL_HEADERS) $(BUILD)/version_generated.h | $(BUILD)
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: %.c $(KERNEL_HEADERS) | $(BUILD)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/fonts/%.o: $(BUILD)/fonts/%.cc | $(BUILD)
 	mkdir -p $(dir $@)
