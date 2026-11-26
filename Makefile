@@ -14,9 +14,12 @@ ASM_OBJECTS := $(patsubst %.asm,$(BUILD)/%.o,$(ASM_SOURCES))
 KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(ASM_OBJECTS)
 KERNEL_HEADERS := $(shell find hcpp kernel -name '*.hpp' 2>/dev/null)
 
+PYTHON ?= python3
+FONT_ASSETS := $(BUILD)/fonts/hypeai-8x16_hpf.cc
+
 .PHONY: all clean run test
 
-all: $(BUILD)/hypeai-os.img
+all: $(BUILD)/hypeai-os.img $(FONT_ASSETS)
 
 $(BUILD):
 	mkdir -p $@
@@ -36,6 +39,10 @@ $(BUILD)/%.o: %.asm | $(BUILD)
 
 $(BUILD)/version_generated.h: tools/version.py | $(BUILD)
 	python3 tools/version.py >/dev/null
+
+$(BUILD)/fonts/%_hpf.cc: tools/fonts/%.psfu tools/fontc.py | $(BUILD)
+	mkdir -p $(dir $@)
+	$(PYTHON) tools/fontc.py $< --name $* --hpf $(BUILD)/fonts/$*.hpf --cc $@
 
 $(BUILD)/%.o: %.cc $(KERNEL_HEADERS) $(BUILD)/version_generated.h | $(BUILD)
 	mkdir -p $(dir $@)
