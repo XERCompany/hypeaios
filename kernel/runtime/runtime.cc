@@ -9,6 +9,7 @@
 #include "kernel/memory/vmm.h"
 #include "kernel/pci/pci.h"
 #include "kernel/sched/context.h"
+#include "kernel/sched/scheduler.h"
 
 namespace hype::runtime {
     namespace {
@@ -60,7 +61,9 @@ namespace hype::runtime {
         }
         bool context_enter(void*) noexcept {
             current.context_switch_ready = sched::context_selftest();
-            return current.context_switch_ready;
+            sched::scheduler_initialize();
+            current.scheduler_ready = sched::scheduler_selftest();
+            return current.context_switch_ready && current.scheduler_ready;
         }
         bool interrupt_enter(void*) noexcept {
             interrupts::idt_initialize();
@@ -133,7 +136,8 @@ namespace hype::runtime {
         current.core_started = core::services_running();
         current.core_selftest = core::services_self_test();
         is_booted = stages_ok && current.core_started && current.core_selftest && current.memory_initialized &&
-                    current.interrupts_ready && current.vmm_selftest && current.context_switch_ready;
+                    current.interrupts_ready && current.vmm_selftest && current.context_switch_ready &&
+                    current.scheduler_ready;
         return current;
     }
 
