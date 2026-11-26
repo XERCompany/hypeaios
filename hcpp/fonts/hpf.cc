@@ -11,6 +11,20 @@ namespace hcpp::fonts {
         constexpr size_t hpf_record_size = 14;
         constexpr u32 hpf_magic = 0x31465048;
         constexpr u16 hpf_version = 1;
+        constexpr size_t hpf_version_offset = 4;
+        constexpr size_t hpf_name_offset = 8;
+        constexpr size_t hpf_height_offset = 40;
+        constexpr size_t hpf_baseline_offset = 41;
+        constexpr size_t hpf_advance_offset = 42;
+        constexpr size_t hpf_reserved_offset = 43;
+        constexpr size_t hpf_glyph_count_offset = 44;
+        constexpr size_t hpf_rec_bitmap_offset = 4;
+        constexpr size_t hpf_rec_width = 8;
+        constexpr size_t hpf_rec_rows = 9;
+        constexpr size_t hpf_rec_advance = 10;
+        constexpr size_t hpf_rec_bearing_x = 11;
+        constexpr size_t hpf_rec_bearing_y = 12;
+        constexpr size_t hpf_rec_reserved = 13;
         constexpr u32 hpf_selftest_slot = hpf_max_slots - 1;
 
         struct HpfSlot {
@@ -51,15 +65,16 @@ namespace hcpp::fonts {
                 return FontGlyph{};
             }
             const u8* record = table + low * hpf_record_size;
-            const i8 advance = static_cast<i8>(record[10]);
+            const i8 advance = static_cast<i8>(record[hpf_rec_advance]);
             FontGlyph glyph;
-            glyph.bitmap = loaded.data + read_u32(record + 4);
-            glyph.row_stride = static_cast<u8>((static_cast<u32>(record[8]) + 7U) / 8U);
-            glyph.width = record[8];
-            glyph.height = record[9];
+            glyph.bitmap = loaded.data + read_u32(record + hpf_rec_bitmap_offset);
+            glyph.row_stride =
+                static_cast<u8>((static_cast<u32>(record[hpf_rec_width]) + 7U) / 8U);
+            glyph.width = record[hpf_rec_width];
+            glyph.height = record[hpf_rec_rows];
             glyph.advance = advance > 0 ? static_cast<u8>(advance) : 0;
-            glyph.bearing_x = static_cast<i8>(record[11]);
-            glyph.bearing_y = static_cast<i8>(record[12]);
+            glyph.bearing_x = static_cast<i8>(record[hpf_rec_bearing_x]);
+            glyph.bearing_y = static_cast<i8>(record[hpf_rec_bearing_y]);
             return glyph;
         }
 
@@ -113,13 +128,13 @@ namespace hcpp::fonts {
                 return false;
             }
             copy(bad, blob, size);
-            bad[43] = 0x01;
+            bad[hpf_reserved_offset] = 0x01;
             if (hpf_load(bad, size, hpf_selftest_slot) != nullptr) {
                 return false;
             }
             copy(bad, blob, size);
-            bad[44] = 0xFF;
-            bad[45] = 0xFF;
+            bad[hpf_glyph_count_offset] = 0xFF;
+            bad[hpf_glyph_count_offset + 1] = 0xFF;
             if (hpf_load(bad, size, hpf_selftest_slot) != nullptr) {
                 return false;
             }
@@ -130,12 +145,12 @@ namespace hcpp::fonts {
                 return false;
             }
             copy(bad, blob, size);
-            bad[hpf_header_size + 13] = 0x01;
+            bad[hpf_header_size + hpf_rec_reserved] = 0x01;
             if (hpf_load(bad, size, hpf_selftest_slot) != nullptr) {
                 return false;
             }
             copy(bad, blob, size);
-            bad[hpf_header_size + 4] = 0x01;
+            bad[hpf_header_size + hpf_rec_bitmap_offset] = 0x01;
             if (hpf_load(bad, size, hpf_selftest_slot) != nullptr) {
                 return false;
             }
@@ -154,17 +169,19 @@ namespace hcpp::fonts {
         if (data == nullptr || slot >= hpf_max_slots || size < hpf_header_size) {
             return nullptr;
         }
-        if (read_u32(data) != hpf_magic || read_u16(data + 4) != hpf_version || data[43] != 0) {
+        if (read_u32(data) != hpf_magic ||
+            read_u16(data + hpf_version_offset) != hpf_version ||
+            data[hpf_reserved_offset] != 0) {
             return nullptr;
         }
-        const char* name = reinterpret_cast<const char*>(data + 8);
+        const char* name = reinterpret_cast<const char*>(data + hpf_name_offset);
         if (!valid_name(name)) {
             return nullptr;
         }
-        const u8 height = data[40];
-        const u8 baseline = data[41];
-        const u8 default_advance = data[42];
-        const u32 glyph_count = read_u32(data + 44);
+        const u8 height = data[hpf_height_offset];
+        const u8 baseline = data[hpf_baseline_offset];
+        const u8 default_advance = data[hpf_advance_offset];
+        const u32 glyph_count = read_u32(data + hpf_glyph_count_offset);
         if (height == 0 || default_advance == 0 || baseline > height || glyph_count == 0 ||
             glyph_count > 0xFFFF) {
             return nullptr;
@@ -179,10 +196,10 @@ namespace hcpp::fonts {
         for (u32 index = 0; index < glyph_count; ++index) {
             const u8* record = table + index * hpf_record_size;
             const u32 codepoint = read_u32(record);
-            const u32 data_offset = read_u32(record + 4);
-            const u32 width = record[8];
-            const u32 rows = record[9];
-            if (record[13] != 0 || width == 0 || rows == 0) {
+            const u32 data_offset = read_u32(record + hpf_rec_bitmap_offset);
+            const u32 width = record[hpf_rec_width];
+            const u32 rows = record[hpf_rec_rows];
+            if (record[hpf_rec_reserved] != 0 || width == 0 || rows == 0) {
                 return nullptr;
             }
             if (index != 0 && codepoint <= previous) {

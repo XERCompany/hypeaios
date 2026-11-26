@@ -23,10 +23,7 @@ namespace hype::ui {
     const hcpp::fonts::FontFace* Button::font() const noexcept { return font_; }
 
     const hcpp::fonts::FontFace* Button::resolved_font() const noexcept {
-        if (font_ != nullptr) {
-            return font_;
-        }
-        return Theme::dark().resolved_font();
+        return resolve_font(font_);
     }
 
     Size Button::measure(Size available) noexcept {

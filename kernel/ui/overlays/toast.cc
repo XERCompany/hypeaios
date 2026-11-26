@@ -23,12 +23,24 @@ namespace hype::ui {
     }  // namespace
 
     bool ToastHost::show(hcpp::StringView message, ToastKind kind,
-                         hcpp::StringView title) noexcept {
+                         hcpp::StringView title,
+                         hcpp::u32 duration_ticks) noexcept {
         if (count_ >= max_toasts) {
             return false;
         }
-        toasts_[count_] = Toast{title, message, kind};
+        toasts_[count_] = Toast{title, message, kind, duration_ticks};
         ++count_;
+        return true;
+    }
+
+    bool ToastHost::dismiss(hcpp::size_t index) noexcept {
+        if (index >= count_) {
+            return false;
+        }
+        for (hcpp::size_t i = index; i + 1 < count_; ++i) {
+            toasts_[i] = toasts_[i + 1];
+        }
+        --count_;
         return true;
     }
 
@@ -37,6 +49,25 @@ namespace hype::ui {
     hcpp::size_t ToastHost::count() const noexcept { return count_; }
 
     void ToastHost::paint(Canvas& canvas, const Rect& screen) noexcept {
+        hcpp::size_t kept = 0;
+        for (hcpp::size_t i = 0; i < count_; ++i) {
+            Toast& toast = toasts_[i];
+            if (toast.remaining > 0) {
+                --toast.remaining;
+            }
+            if (toast.remaining == 0) {
+                continue;
+            }
+            if (kept != i) {
+                toasts_[kept] = toast;
+            }
+            ++kept;
+        }
+        count_ = kept;
+        if (count_ == 0) {
+            return;
+        }
+
         const Theme& theme = Theme::dark();
         const hcpp::fonts::FontFace* face = theme.resolved_font();
         const hcpp::i32 margin = static_cast<hcpp::i32>(theme.spacing_lg);
