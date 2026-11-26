@@ -32,4 +32,6 @@ namespace hype::ui {
         Rect clip_;
     };
 
+    Size text_extent(hcpp::StringView text, const hcpp::fonts::FontFace& font) noexcept;
+
 }  // namespace hype::ui

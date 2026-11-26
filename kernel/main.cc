@@ -14,6 +14,7 @@
 #include "kernel/interrupts/idt.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
+#include "kernel/ui/demo.h"
 #include "kernel/video/videov4lv.h"
 
 namespace {
@@ -333,6 +334,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         "HDR colorspace activation is not possible through legacy "
         "VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
+    const hcpp::u32 ui_widgets = hype::ui::demo(framebuffer);
+    serial::write("ui demo=painted widgets=");
+    serial::write_dec32(ui_widgets);
+    serial::write("\r\n");
     serial::write_line("HypeAICode++ runtime active");
     const hcpp::u64 pit_start = hype::interrupts::pit_ticks();
     hype::interrupts::pit_wait_ticks(10);
