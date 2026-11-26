@@ -470,23 +470,23 @@ namespace hype::audio {
         if (function_node_counts[card_index] != 0) {
             return function_node_codecs[card_index] == codec_address;
         }
+        hda::IzauController controller{};
+        hcpp::u32 vendor_id = 0;
+        if (!hda::izau_bind(card_index, controller) || !hda::izau_reset(controller) ||
+            !hda::izau_codec_verb(controller, codec_address, 0, hda::verb_get_parameter,
+                                  hda::param_vendor_id, vendor_id) ||
+            vendor_id == 0 || vendor_id == 0xFFFFFFFF) {
+            return false;
+        }
         AudioFunctionNode *nodes = &function_nodes[card_index * audiofudev_max_nodes];
         for (hcpp::u8 i = 0; i < 2; ++i) {
             nodes[i] = {};
             nodes[i].card_index = card_index;
             nodes[i].codec_address = codec_address;
             nodes[i].node_id = i;
+            nodes[i].vendor_id = vendor_id;
         }
         nodes[1].function_group = hda::function_group_audio;
-        hda::IzauController controller{};
-        if (hda::izau_bind(card_index, controller) && hda::izau_reset(controller)) {
-            hcpp::u32 vendor_id = 0;
-            if (hda::izau_codec_verb(controller, codec_address, 0, hda::verb_get_parameter,
-                                     hda::param_vendor_id, vendor_id)) {
-                nodes[0].vendor_id = vendor_id;
-                nodes[1].vendor_id = vendor_id;
-            }
-        }
         function_node_codecs[card_index] = codec_address;
         function_node_counts[card_index] = 2;
         return true;
