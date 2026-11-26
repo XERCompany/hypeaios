@@ -2,8 +2,6 @@
 
 namespace hcpp::graphics {
 
-Glyph5x7 glyph_for(char character) noexcept {
-    return hcpp::fonts::arial_glyph(character);
-}
+    Glyph5x7 glyph_for(char character) noexcept { return hcpp::fonts::arial_glyph(character); }
 
-} // namespace hcpp::graphics
+}  // namespace hcpp::graphics

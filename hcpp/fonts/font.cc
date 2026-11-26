@@ -2,77 +2,73 @@
 
 namespace hcpp::fonts {
 
-namespace {
+    namespace {
 
-FontFace registry[max_registered_fonts];
-size_t registry_count;
-size_t default_index;
+        FontFace registry[max_registered_fonts];
+        size_t registry_count;
+        size_t default_index;
 
-bool name_equals(StringView left, const char* right) noexcept {
-    size_t index = 0;
-    while (right[index] != '\0') {
-        if (index >= left.size() || left[index] != right[index]) {
+        bool name_equals(StringView left, const char* right) noexcept {
+            size_t index = 0;
+            while (right[index] != '\0') {
+                if (index >= left.size() || left[index] != right[index]) {
+                    return false;
+                }
+                ++index;
+            }
+            return index == left.size();
+        }
+
+    }  // namespace
+
+    void initialize_default_fonts() noexcept {
+        registry_count = 0;
+        default_index = 0;
+        register_font(arial_font());
+    }
+
+    bool register_font(const FontFace& font) noexcept {
+        if (font.name == nullptr || font.glyph_for == nullptr || font.width == 0 || font.height == 0 ||
+            font.advance == 0 || registry_count >= max_registered_fonts || find_font(font.name) != nullptr) {
             return false;
         }
-        ++index;
+
+        registry[registry_count] = font;
+        ++registry_count;
+        return true;
     }
-    return index == left.size();
-}
 
-} // namespace
+    const FontFace* find_font(StringView name) noexcept {
+        for (size_t index = 0; index < registry_count; ++index) {
+            if (name_equals(name, registry[index].name)) {
+                return &registry[index];
+            }
+        }
+        return nullptr;
+    }
 
-void initialize_default_fonts() noexcept {
-    registry_count = 0;
-    default_index = 0;
-    register_font(arial_font());
-}
+    const FontFace* default_font() noexcept {
+        if (registry_count == 0) {
+            initialize_default_fonts();
+        }
+        return registry_count == 0 ? nullptr : &registry[default_index];
+    }
 
-bool register_font(const FontFace& font) noexcept {
-    if (font.name == nullptr || font.glyph_for == nullptr ||
-        font.width == 0 || font.height == 0 || font.advance == 0 ||
-        registry_count >= max_registered_fonts ||
-        find_font(font.name) != nullptr) {
+    bool set_default_font(StringView name) noexcept {
+        for (size_t index = 0; index < registry_count; ++index) {
+            if (name_equals(name, registry[index].name)) {
+                default_index = index;
+                return true;
+            }
+        }
         return false;
     }
 
-    registry[registry_count] = font;
-    ++registry_count;
-    return true;
-}
-
-const FontFace* find_font(StringView name) noexcept {
-    for (size_t index = 0; index < registry_count; ++index) {
-        if (name_equals(name, registry[index].name)) {
-            return &registry[index];
-        }
+    StringView default_font_name() noexcept {
+        const FontFace* font = default_font();
+        return font == nullptr ? StringView() : StringView(font->name);
     }
-    return nullptr;
-}
 
-const FontFace* default_font() noexcept {
-    if (registry_count == 0) {
-        initialize_default_fonts();
-    }
-    return registry_count == 0 ? nullptr : &registry[default_index];
-}
+    size_t registered_font_count() noexcept { return registry_count; }
 
-bool set_default_font(StringView name) noexcept {
-    for (size_t index = 0; index < registry_count; ++index) {
-        if (name_equals(name, registry[index].name)) {
-            default_index = index;
-            return true;
-        }
-    }
-    return false;
-}
-
-StringView default_font_name() noexcept {
-    const FontFace* font = default_font();
-    return font == nullptr ? StringView() : StringView(font->name);
-}
-
-size_t registered_font_count() noexcept {
-    return registry_count;
-}
-
-} // namespace hcpp::fonts
+}  // namespace hcpp::fonts
