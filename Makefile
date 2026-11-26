@@ -9,7 +9,7 @@ CXXFLAGS := -std=c++20 -O2 -ffreestanding -fno-exceptions -fno-rtti \
 
 CC_SOURCES := $(shell find hcpp kernel -name '*.cc' 2>/dev/null | sort)
 CC_OBJECTS := $(patsubst %.cc,$(BUILD)/%.o,$(CC_SOURCES))
-ASM_SOURCES := $(shell find kernel/interrupts -name '*.asm' 2>/dev/null | sort)
+ASM_SOURCES := $(shell find kernel -name '*.asm' ! -path 'kernel/entry.asm' 2>/dev/null | sort)
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD)/%.o,$(ASM_SOURCES))
 KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(ASM_OBJECTS)
 KERNEL_HEADERS := $(shell find hcpp kernel -name '*.hpp' 2>/dev/null)

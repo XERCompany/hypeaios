@@ -8,6 +8,7 @@
 #include "kernel/memory/pmm.h"
 #include "kernel/memory/vmm.h"
 #include "kernel/pci/pci.h"
+#include "kernel/sched/context.h"
 
 namespace hype::runtime {
     namespace {
@@ -57,6 +58,10 @@ namespace hype::runtime {
             current.apic_base = acpi::apic_info().apic_base;
             return true;
         }
+        bool context_enter(void*) noexcept {
+            current.context_switch_ready = sched::context_selftest();
+            return current.context_switch_ready;
+        }
         bool interrupt_enter(void*) noexcept {
             interrupts::idt_initialize();
             interrupts::pic_initialize();
@@ -66,7 +71,7 @@ namespace hype::runtime {
             interrupts::pic_unmask(1);
             interrupts::interrupts_enable();
             current.interrupts_ready = interrupts::interrupts_initialized();
-            return current.interrupts_ready && current.vmm_selftest;
+            return current.interrupts_ready;
         }
 
         RuntimeStage core_stage{"core.services", 10, core_enter, nullptr, StageState::Pending};
@@ -75,6 +80,7 @@ namespace hype::runtime {
         RuntimeStage vmm_stage{"memory.vmm", 35, vmm_enter, nullptr, StageState::Pending};
         RuntimeStage acpi_stage{"acpi.discover", 40, acpi_enter, nullptr, StageState::Pending};
         RuntimeStage interrupt_stage{"interrupts.foundation", 50, interrupt_enter, nullptr, StageState::Pending};
+        RuntimeStage context_stage{"sched.context", 60, context_enter, nullptr, StageState::Pending};
     }  // namespace
 
     void initialize() noexcept {
@@ -88,6 +94,7 @@ namespace hype::runtime {
         register_stage(vmm_stage);
         register_stage(acpi_stage);
         register_stage(interrupt_stage);
+        register_stage(context_stage);
     }
 
     bool register_stage(RuntimeStage& stage) noexcept {
@@ -126,7 +133,7 @@ namespace hype::runtime {
         current.core_started = core::services_running();
         current.core_selftest = core::services_self_test();
         is_booted = stages_ok && current.core_started && current.core_selftest && current.memory_initialized &&
-                    current.interrupts_ready && current.vmm_selftest;
+                    current.interrupts_ready && current.vmm_selftest && current.context_switch_ready;
         return current;
     }
 

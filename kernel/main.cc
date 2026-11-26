@@ -237,6 +237,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.ioapics));
     serial::write(" apic=");
     serial::write_line(runtime_info.apic_supported ? "enabled" : "unavailable");
+    serial::write("context switch=");
+    serial::write_line(runtime_info.context_switch_ready ? "ready" : "failed");
     serial::write("font default=");
     serial::write(hcpp::fonts::default_font_name());
     serial::write(" registered=");

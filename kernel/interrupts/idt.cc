@@ -1,5 +1,7 @@
 #include "kernel/interrupts/idt.h"
 
+#include "kernel/arch/x86/cpu.h"
+#include "kernel/arch/x86/io.h"
 #include "kernel/functionemitkeys.h"
 #include "kernel/input/scancode.h"
 #include "kernel/irq.h"
@@ -12,14 +14,6 @@ namespace hype::interrupts {
         IdtEntry entries[256];
         bool initialized;
         volatile hcpp::u64 ticks;
-        inline void outb(hcpp::u16 port, hcpp::u8 value) noexcept {
-            asm volatile("outb %0,%1" ::"a"(value), "Nd"(port));
-        }
-        inline hcpp::u8 inb(hcpp::u16 port) noexcept {
-            hcpp::u8 value;
-            asm volatile("inb %1,%0" : "=a"(value) : "Nd"(port));
-            return value;
-        }
         void set_gate(hcpp::size_t index, hcpp::uintptr_t handler) noexcept {
             entries[index] = {
                 static_cast<hcpp::u16>(handler),       0x18, 0, 0x8E, static_cast<hcpp::u16>(handler >> 16),
@@ -31,7 +25,7 @@ namespace hype::interrupts {
         } __attribute__((packed));
         void timer_handler(void*, hcpp::u32) noexcept { ticks = ticks + 1; }
         void keyboard_handler(void*, hcpp::u32) noexcept {
-            const input::DecodedKey key = input::scancode_decode(inb(0x60));
+            const input::DecodedKey key = input::scancode_decode(hype_port_in8(0x60));
             if (key.valid)
                 input::emit_key_event(key.key_code, key.pressed ? input::KeyState::Pressed : input::KeyState::Released,
                                       ticks);
@@ -56,37 +50,37 @@ namespace hype::interrupts {
         initialized = true;
     }
     void pic_initialize() noexcept {
-        outb(0x20, 0x11);
-        outb(0xA0, 0x11);
-        outb(0x21, 0x20);
-        outb(0xA1, 0x28);
-        outb(0x21, 0x04);
-        outb(0xA1, 0x02);
-        outb(0x21, 0x01);
-        outb(0xA1, 0x01);
+        hype_port_out8(0x20, 0x11);
+        hype_port_out8(0xA0, 0x11);
+        hype_port_out8(0x21, 0x20);
+        hype_port_out8(0xA1, 0x28);
+        hype_port_out8(0x21, 0x04);
+        hype_port_out8(0xA1, 0x02);
+        hype_port_out8(0x21, 0x01);
+        hype_port_out8(0xA1, 0x01);
         pic_mask_all();
     }
     void pic_mask_all() noexcept {
-        outb(0x21, 0xFF);
-        outb(0xA1, 0xFF);
+        hype_port_out8(0x21, 0xFF);
+        hype_port_out8(0xA1, 0xFF);
     }
     void pic_unmask(hcpp::u8 irq) noexcept {
         if (irq >= 16) return;
         const hcpp::u16 port = irq < 8 ? 0x21 : 0xA1;
         const hcpp::u8 bit = irq < 8 ? irq : irq - 8;
-        outb(port, inb(port) & ~(hcpp::u8(1) << bit));
+        hype_port_out8(port, hype_port_in8(port) & ~(hcpp::u8(1) << bit));
     }
     void pic_send_eoi(hcpp::u8 irq) noexcept {
-        if (irq >= 8) outb(0xA0, 0x20);
-        outb(0x20, 0x20);
+        if (irq >= 8) hype_port_out8(0xA0, 0x20);
+        hype_port_out8(0x20, 0x20);
     }
     void pit_initialize(hcpp::u32 frequency) noexcept {
         if (frequency == 0) frequency = 100;
         hcpp::u16 divisor = static_cast<hcpp::u16>(1193182 / frequency);
         if (divisor == 0) divisor = 1;
-        outb(0x43, 0x36);
-        outb(0x40, static_cast<hcpp::u8>(divisor));
-        outb(0x40, static_cast<hcpp::u8>(divisor >> 8));
+        hype_port_out8(0x43, 0x36);
+        hype_port_out8(0x40, static_cast<hcpp::u8>(divisor));
+        hype_port_out8(0x40, static_cast<hcpp::u8>(divisor >> 8));
         kernel::irq_register(0, timer_handler, nullptr);
     }
     void keyboard_initialize() noexcept {
@@ -96,9 +90,9 @@ namespace hype::interrupts {
     hcpp::u64 pit_ticks() noexcept { return ticks; }
     void pit_wait_ticks(hcpp::u64 count) noexcept {
         const hcpp::u64 start = ticks;
-        while (ticks - start < count) asm volatile("hlt");
+        while (ticks - start < count) hype_cpu_halt();
     }
     bool interrupts_initialized() noexcept { return initialized; }
-    void interrupts_enable() noexcept { asm volatile("sti"); }
-    void interrupts_disable() noexcept { asm volatile("cli"); }
+    void interrupts_enable() noexcept { hype_cpu_enable_interrupts(); }
+    void interrupts_disable() noexcept { hype_cpu_disable_interrupts(); }
 }  // namespace hype::interrupts

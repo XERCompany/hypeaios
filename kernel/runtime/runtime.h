@@ -36,6 +36,7 @@ namespace hype::runtime {
         bool apic_supported;
         hcpp::uintptr_t apic_base;
         bool interrupts_ready;
+        bool context_switch_ready;
         hcpp::size_t stages_completed;
         hcpp::size_t stages_failed;
     };

@@ -1,5 +1,6 @@
 #include "kernel/memory/vmm.h"
 
+#include "kernel/arch/x86/cpu.h"
 #include "kernel/memory/pmm.h"
 
 namespace hype::memory {
@@ -12,7 +13,7 @@ namespace hype::memory {
 
         hcpp::uintptr_t read_cr3() noexcept {
             hcpp::uintptr_t value;
-            asm volatile("mov %%cr3,%0" : "=r"(value));
+            value = hype_cpu_read_cr3();
             return value & entry_address_mask;
         }
         hcpp::u64* table(hcpp::uintptr_t physical) noexcept { return reinterpret_cast<hcpp::u64*>(physical); }
@@ -44,7 +45,7 @@ namespace hype::memory {
             parent[index] = child | vmm_present | vmm_writable;
             return table(child);
         }
-        void invalidate(hcpp::uintptr_t address) noexcept { asm volatile("invlpg (%0)" ::"r"(address) : "memory"); }
+        void invalidate(hcpp::uintptr_t address) noexcept { hype_cpu_invlpg(address); }
     }  // namespace
 
     void vmm_initialize() noexcept {
