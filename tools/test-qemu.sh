@@ -9,6 +9,7 @@ qemu-system-x86_64 \
   -machine pc \
   -vga std \
   -drive format=raw,file=build/hypeai-os.img \
+  -device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
   -serial file:build/test-serial.log \
   -monitor unix:build/qemu-monitor.sock,server,nowait \
   -pidfile build/qemu.pid \
@@ -74,6 +75,7 @@ if ! grep -q "HYPEAI OS BOOT OK" <<<"$output"; then
   output="$(timeout 5 qemu-system-x86_64 \
     -machine pc -vga std \
     -drive format=raw,file=build/hypeai-os.img \
+    -device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
     -serial stdio -display none -no-reboot 2>&1 || true)"
 fi
 printf '%s\n' "$output"
@@ -82,20 +84,29 @@ grep -q "core services running=yes" <<<"$output"
 grep -q "core selftest=passed" <<<"$output"
 grep -q "runtime boot=yes" <<<"$output"
 grep -q "pci display=QEMU Standard VGA vendor=QEMU" <<<"$output"
-grep -q "memory free=126MB e820=" <<<"$output"
+grep -q "memory free=124MB e820=" <<<"$output"
 grep -q "acpi=yes tables=" <<<"$output"
 grep -q "interrupts=ready" <<<"$output"
 grep -q "vmm=ready madt=yes cpus=1 ioapics=1 apic=enabled" <<<"$output"
 grep -q "context switch=ready" <<<"$output"
 grep -q "video devices=1 core=ready" <<<"$output"
 grep -q "kernel threads=ready" <<<"$output"
-grep -q "font default=Arial registered=1" <<<"$output"
+grep -q "fonts=[0-9]" <<<"$output"
+grep -q "default=hypeai-8x16" <<<"$output"
+grep -q "hpf selftest=ok" <<<"$output"
+grep -q "sqlite=ok" <<<"$output"
+grep -q "db selftest=ok" <<<"$output"
 grep -q "edid blocks=2 extensions=1 checksum=ok" <<<"$output"
 grep -q "monitor name=QEMU Monitor" <<<"$output"
 grep -q "hdr static metadata not present" <<<"$output"
 grep -q "CTA colorimetry block not present" <<<"$output"
 grep -q "VBE framebuffer active; graphics primitives initialized" <<<"$output"
+grep -q "ui demo=painted widgets=" <<<"$output"
 grep -q "HypeAICode++ runtime active" <<<"$output"
 grep -q "pit ticks after 100ms=10 interrupts active=yes" <<<"$output"
 grep -q "decoder=ready" <<<"$output"
+grep -q "hda init=ok" <<<"$output"
+grep -q "hda codec vid=" <<<"$output"
+grep -q "audio stream=run" <<<"$output"
+grep -q "audio playback=ok" <<<"$output"
 echo "QEMU boot, memory, ACPI, interrupt, keyboard and framebuffer test passed"

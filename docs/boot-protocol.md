@@ -13,9 +13,9 @@ Target: x86_64 legacy BIOS, no Linux or existing bootloader in the target path.
 
 1. BIOS loads Stage 1 to physical address `0x7C00` and jumps to it in 16-bit real mode.
 2. Stage 1 uses BIOS INT 13h extensions to load Stage 2 to `0x7E00`.
-3. Stage 2 loads the kernel to physical address `0x10000`.
+3. Stage 2 loads the kernel to physical address `0x100000`: each BIOS INT 13h chunk lands in a bounce buffer at `0x20000` and is copied above 1 MiB with INT 15h AH=87h.
 4. Stage 2 captures the BIOS E820 memory map at physical `0x5500`, queries VBE/DDC EDID data, captures VBE/PM capabilities, selects VBE mode `0x118` with a linear framebuffer, and stores boot data in the boot-info structure at physical `0x5000`.
-5. Stage 2 enables A20, installs a temporary GDT, builds identity-mapped page tables for the first 4 GiB, enters protected mode, enables PAE and long mode, then jumps to the kernel entry point.
+5. Stage 2 enables A20 before the high-memory copy, installs a temporary GDT, builds identity-mapped page tables for the first 4 GiB, enters protected mode, enables PAE and long mode, then jumps to the kernel entry point.
 6. The kernel starts in 64-bit long mode with interrupts disabled and `RDI` pointing to the boot-info structure.
 
 ## Boot-info structure v2

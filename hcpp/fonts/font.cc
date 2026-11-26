@@ -1,5 +1,7 @@
 #include "hcpp/fonts/font.hpp"
 
+#include "hcpp/fonts/hpf.hpp"
+
 namespace hcpp::fonts {
 
     namespace {
@@ -21,15 +23,33 @@ namespace hcpp::fonts {
 
     }  // namespace
 
+    bool FontGlyph::valid() const noexcept { return bitmap != nullptr && width != 0 && height != 0; }
+
+    const u8* FontGlyph::row_data(u32 row) const noexcept {
+        if (bitmap == nullptr || row >= height) {
+            return nullptr;
+        }
+        return bitmap + row * row_stride;
+    }
+
+    bool FontGlyph::pixel(u32 column, u32 row) const noexcept {
+        const u8* data = row_data(row);
+        if (data == nullptr || column >= width) {
+            return false;
+        }
+        return (data[column / 8] >> (7U - (column % 8))) & 1U;
+    }
+
     void initialize_default_fonts() noexcept {
         registry_count = 0;
         default_index = 0;
         register_font(arial_font());
+        load_embedded_fonts();
     }
 
     bool register_font(const FontFace& font) noexcept {
-        if (font.name == nullptr || font.glyph_for == nullptr || font.width == 0 || font.height == 0 ||
-            font.advance == 0 || registry_count >= max_registered_fonts || find_font(font.name) != nullptr) {
+        if (font.name == nullptr || font.glyph_for == nullptr || font.height == 0 || font.advance == 0 ||
+            registry_count >= max_registered_fonts || find_font(font.name) != nullptr) {
             return false;
         }
 

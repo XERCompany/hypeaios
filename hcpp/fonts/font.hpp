@@ -6,16 +6,27 @@
 namespace hcpp::fonts {
 
     struct FontGlyph {
-        u8 rows[7];
-    };
-
-    using GlyphLookup = FontGlyph (*)(char character) noexcept;
-
-    struct FontFace {
-        const char* name;
+        const u8* bitmap;
+        u8 row_stride;
         u8 width;
         u8 height;
         u8 advance;
+        i8 bearing_x;
+        i8 bearing_y;
+
+        bool valid() const noexcept;
+        const u8* row_data(u32 row) const noexcept;
+        bool pixel(u32 column, u32 row) const noexcept;
+    };
+
+    using GlyphLookup = FontGlyph (*)(u32 codepoint) noexcept;
+
+    struct FontFace {
+        const char* name;
+        u8 height;
+        u8 baseline;
+        u8 advance;
+        u16 glyph_count;
         GlyphLookup glyph_for;
     };
 
@@ -29,7 +40,7 @@ namespace hcpp::fonts {
     StringView default_font_name() noexcept;
     size_t registered_font_count() noexcept;
 
-    FontGlyph arial_glyph(char character) noexcept;
+    FontGlyph arial_glyph(u32 codepoint) noexcept;
     const FontFace& arial_font() noexcept;
 
 }  // namespace hcpp::fonts

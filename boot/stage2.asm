@@ -1,9 +1,10 @@
 [BITS 16]
 [ORG 0x7E00]
 
-KERNEL_LOAD_ADDR equ 0x00010000
+KERNEL_LOAD_ADDR equ 0x00100000
 KERNEL_LBA       equ 33
-KERNEL_SECTORS   equ 128
+KERNEL_SECTORS   equ 4096
+BOUNCE_SEG       equ 0x2000
 PAGE_TABLES      equ 0x00070000
 STACK_TOP        equ 0x00090000
 BOOT_INFO_ADDR   equ 0x00005000
@@ -28,13 +29,13 @@ start:
     mov si, loading_msg
     call print16
 
-    call load_kernel
     call init_boot_info
     call init_e820
     call init_edid
     call init_dpms
     call init_vbe
     call enable_a20
+    call load_kernel
 
     cli
     lgdt [gdt_descriptor]
@@ -56,13 +57,35 @@ print16:
     ret
 
 load_kernel:
+    mov di, KERNEL_SECTORS
+    mov dword [kernel_dest], KERNEL_LOAD_ADDR
+.next_chunk:
+    test di, di
+    jz .done
+    mov ax, di
+    cmp ax, 127
+    jbe .set
+    mov ax, 127
+.set:
+    mov [kernel_dap + 2], ax
+    push di
     mov si, kernel_dap
     mov ah, 0x42
     mov dl, [boot_drive]
     xor dh, dh
     int 0x13
-    jc .error
+    jc .error_pop
+    call move_chunk
+    jc .error_pop
+    pop di
+    movzx eax, word [kernel_dap + 2]
+    sub di, ax
+    add dword [kernel_dap + 8], eax
+    jmp .next_chunk
+.done:
     ret
+.error_pop:
+    pop di
 .error:
     mov si, disk_error_msg
     call print16
@@ -70,6 +93,30 @@ load_kernel:
     cli
     hlt
     jmp .halt
+
+move_chunk:
+    mov eax, [kernel_dest]
+    mov [move_dst + 2], al
+    mov [move_dst + 3], ah
+    shr eax, 16
+    mov [move_dst + 4], al
+    mov cx, [kernel_dap + 2]
+    shl cx, 8
+    xor ax, ax
+    mov es, ax
+    mov si, gdt_move
+    mov ah, 0x87
+    int 0x15
+    jc .fail
+    sti
+    movzx eax, word [kernel_dap + 2]
+    shl eax, 9
+    add [kernel_dest], eax
+    clc
+    ret
+.fail:
+    stc
+    ret
 
 init_boot_info:
     mov dword [BOOT_INFO_ADDR + 0], BOOT_MAGIC
@@ -272,8 +319,27 @@ kernel_dap:
     db 0
     dw KERNEL_SECTORS
     dw 0x0000
-    dw 0x1000
+    dw BOUNCE_SEG
     dq KERNEL_LBA
+
+align 8
+gdt_move:
+    dq 0
+    dq 0
+move_src:
+    dw 0xFFFF
+    db 0x00, 0x00, 0x02
+    db 0x93
+    dw 0
+move_dst:
+    dw 0xFFFF
+    db 0x00, 0x00, 0x00
+    db 0x93
+    dw 0
+    dq 0
+    dq 0
+
+kernel_dest dd 0
 
 align 8
 gdt_start:

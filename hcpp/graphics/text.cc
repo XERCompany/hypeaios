@@ -1,4 +1,5 @@
 #include "hcpp/graphics/text.hpp"
+#include "hcpp/utf8.hpp"
 
 namespace hcpp::graphics {
 
@@ -17,16 +18,31 @@ namespace hcpp::graphics {
         }
 
         u32 cursor_x = x;
-        for (size_t index = 0; index < text.size(); ++index) {
-            const hcpp::fonts::FontGlyph glyph = font.glyph_for(text[index]);
-            for (u32 row = 0; row < font.height && row < 7; ++row) {
-                for (u32 column = 0; column < font.width && column < 8; ++column) {
-                    if ((glyph.rows[row] >> (font.width - 1 - column)) & 1U) {
-                        target.fill_rect(cursor_x + column * scale, y + row * scale, scale, scale, color);
+        size_t cursor = 0;
+        while (cursor < text.size()) {
+            const u32 codepoint = hcpp::utf8::next_codepoint(text, cursor);
+            const hcpp::fonts::FontGlyph glyph = font.glyph_for(codepoint);
+            const i64 origin_x =
+                static_cast<i64>(cursor_x) + static_cast<i64>(glyph.bearing_x) * scale;
+            const i64 origin_y = static_cast<i64>(y) +
+                                 (static_cast<i64>(font.baseline) - static_cast<i64>(glyph.bearing_y)) *
+                                     scale;
+            for (u32 row = 0; row < glyph.height; ++row) {
+                for (u32 column = 0; column < glyph.width; ++column) {
+                    if (!glyph.pixel(column, row)) {
+                        continue;
                     }
+                    const i64 pixel_x = origin_x + column * scale;
+                    const i64 pixel_y = origin_y + row * scale;
+                    if (pixel_x < 0 || pixel_y < 0) {
+                        continue;
+                    }
+                    target.fill_rect(static_cast<u32>(pixel_x), static_cast<u32>(pixel_y), scale, scale,
+                                     color);
                 }
             }
-            cursor_x += font.advance * scale;
+            const u8 advance = glyph.advance != 0 ? glyph.advance : font.advance;
+            cursor_x += advance * scale;
         }
     }
 

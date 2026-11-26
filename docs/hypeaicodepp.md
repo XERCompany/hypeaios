@@ -20,7 +20,9 @@ HypeAICode++ (`hcpp`) is the freestanding C++ runtime and library layer for Hype
 - `hcpp/string_view.hpp`: non-owning immutable string view.
 - `hcpp/result.hpp`: lightweight status/error reporting type.
 - `hcpp/text_writer.hpp`: fixed-capacity kernel text formatter.
-- `hcpp/fonts/font.hpp`: HypeAIFont registry, runtime font registration and default font selection; the built-in boot font is an Arial-compatible 5x7 bitmap fallback rather than Microsoft's proprietary vector Arial file.
+- `hcpp/fonts/font.hpp`: HypeAIFont registry built on `FontFace` (name, height, baseline, advance, glyph_count, `glyph_for` codepoint lookup) and `FontGlyph` metrics (bitmap, row_stride, width, height, advance, bearing_x/y), with runtime registration and default font selection; the built-in boot font is an Arial-compatible bitmap fallback rather than Microsoft's proprietary vector Arial file.
+- `hcpp/fonts/hpf.hpp`: loader for the HPF binary font format (see `docs/hypeai-font-format.md`); the embedded `hypeai-8x16` face is registered at boot through `load_embedded_fonts`.
+- `hcpp/utf8.hpp`: UTF-8 decoding — `next_codepoint` walks a `StringView` and yields codepoints (with U+FFFD replacement on malformed input) that are passed to `FontFace::glyph_for`.
 - `hcpp/graphics/framebuffer.hpp`: framebuffer description and drawing primitives.
 - `hcpp/display/*`: EDID, CTA colorimetry, HDR metadata and color-space model.
 - `hcpp/atomic.h`, `hcpp/bitset.h`, `hcpp/crc32.h`, `hcpp/guid.h`: low-level kernel-safe primitives inspired by Linux kernel atomics and Windows GUID/Interlocked APIs.
