@@ -25,6 +25,7 @@
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
 #include "kernel/ui/demo.h"
+#include "kernel/ui/flowlogin.h"
 #include "kernel/video/videov4lv.h"
 
 using InitArrayFunction = void (*)();
@@ -447,13 +448,20 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         "HDR colorspace activation is not possible through legacy "
         "VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
-    const hcpp::u32 ui_widgets = hype::ui::demo(framebuffer);
-    if (ui_widgets > 0) {
-        serial::write("ui demo=painted widgets=");
-        serial::write_dec32(ui_widgets);
-        serial::write("\r\n");
+    hype::ui::flowlogin::drive(framebuffer);
+    if (hype::ui::flowlogin::authenticated() ||
+        hype::ui::flowlogin::state() ==
+            hype::ui::flowlogin::State::Unavailable) {
+        const hcpp::u32 ui_widgets = hype::ui::demo(framebuffer);
+        if (ui_widgets > 0) {
+            serial::write("ui demo=painted widgets=");
+            serial::write_dec32(ui_widgets);
+            serial::write("\r\n");
+        } else {
+            serial::write_line("ui demo=failed");
+        }
     } else {
-        serial::write_line("ui demo=failed");
+        serial::write_line("ui demo=blocked");
     }
     serial::write_line("HypeAICode++ runtime active");
     const hcpp::u64 pit_start = hype::interrupts::pit_ticks();
