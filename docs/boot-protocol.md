@@ -6,7 +6,7 @@ Target: x86_64 legacy BIOS, no Linux or existing bootloader in the target path.
 
 - LBA 0: HypeBoot Stage 1, exactly one 512-byte boot sector.
 - LBA 1-32: HypeBoot Stage 2, fixed 32-sector region.
-- LBA 33-288: HypeCore kernel image, fixed 256-sector region.
+- LBA 33-160: HypeCore kernel image, fixed 128-sector region.
 - Later sectors: reserved for boot modules and a future filesystem.
 
 ## Boot chain

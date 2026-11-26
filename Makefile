@@ -3,7 +3,7 @@ CXX ?= g++
 LD ?= ld
 BUILD := build
 
-CXXFLAGS := -I$(BUILD) -std=c++20 -O2 -ffreestanding -fno-exceptions -fno-rtti \
+CXXFLAGS := -I$(BUILD) -std=c++20 -Os -ffreestanding -fno-exceptions -fno-rtti \
 	-fno-use-cxa-atexit -fno-threadsafe-statics -fno-stack-protector \
 	-fno-pic -fno-pie -mno-red-zone -m64 -mcmodel=large -Wall -Wextra -I.
 
