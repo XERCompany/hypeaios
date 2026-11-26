@@ -33,7 +33,8 @@ namespace hype::memory {
             if (page != 0) zero_table(table(page));
             return page;
         }
-        hcpp::u64* child_table_or_allocate(hcpp::u64* parent, hcpp::size_t index, bool allocate, bool user = false) noexcept {
+        hcpp::u64* child_table_or_allocate(hcpp::u64* parent, hcpp::size_t index, bool allocate,
+                                           bool user = false) noexcept {
             hcpp::u64 entry = parent[index];
             if ((entry & vmm_present) != 0) {
                 if ((entry & vmm_huge_page) != 0) return nullptr;

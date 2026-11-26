@@ -10,9 +10,9 @@
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
-#include "kernel/video/videov4lv.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
+#include "kernel/video/videov4lv.h"
 
 namespace {
 
