@@ -37,8 +37,7 @@ namespace hcpp::fonts {
         if (data == nullptr || column >= width) {
             return false;
         }
-        const u32 bit_index = static_cast<u32>(width - 1) - column;
-        return (data[bit_index / 8] >> (bit_index % 8)) & 1U;
+        return (data[column / 8] >> (7U - (column % 8))) & 1U;
     }
 
     void initialize_default_fonts() noexcept {
