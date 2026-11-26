@@ -56,12 +56,32 @@ print16:
     ret
 
 load_kernel:
+    mov di, KERNEL_SECTORS
+.next_chunk:
+    test di, di
+    jz .done
+    mov ax, di
+    cmp ax, 127
+    jbe .set
+    mov ax, 127
+.set:
+    mov [kernel_dap + 2], ax
+    push di
     mov si, kernel_dap
     mov ah, 0x42
     mov dl, [boot_drive]
     xor dh, dh
     int 0x13
+    pop di
     jc .error
+    movzx eax, word [kernel_dap + 2]
+    sub di, ax
+    add dword [kernel_dap + 8], eax
+    shl eax, 9
+    shr eax, 4
+    add word [kernel_dap + 6], ax
+    jmp .next_chunk
+.done:
     ret
 .error:
     mov si, disk_error_msg
