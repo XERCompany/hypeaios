@@ -1,5 +1,8 @@
 #include "hcpp/display/color_space.hpp"
 #include "hcpp/display/edid.hpp"
+#include "hcpp/ecdsa.hpp"
+#include "hcpp/rng.hpp"
+#include "hcpp/sha256.hpp"
 #include "hcpp/fonts/font.hpp"
 #include "hcpp/fonts/hpf.hpp"
 #include "hcpp/graphics/framebuffer.hpp"
@@ -258,6 +261,16 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("\r\n");
     serial::write("hpf selftest=");
     serial::write_line(hcpp::fonts::hpf_selftest() ? "ok" : "failed");
+    serial::write("sha256=");
+    serial::write_line(hcpp::sha256_selftest() ? "ok" : "failed");
+    serial::write("pbkdf2=");
+    serial::write_line(hcpp::pbkdf2_selftest() ? "ok" : "failed");
+    serial::write("rng=");
+    serial::write(hcpp::rng_backend() == hcpp::RngBackend::Rdrand ? "rdrand" : "tsc");
+    serial::write(" selftest=");
+    serial::write_line(hcpp::rng_selftest() ? "ok" : "failed");
+    serial::write("ecdsa=");
+    serial::write_line(hcpp::ecdsa_selftest() ? "ok" : "failed");
     const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
     hcpp::u32 cyrillic_found = 0;
     hcpp::u32 cyrillic_pixels = 0;

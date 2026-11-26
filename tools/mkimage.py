@@ -3,7 +3,7 @@ from pathlib import Path
 
 SECTOR_SIZE = 512
 STAGE2_SECTORS = 32
-KERNEL_SECTORS = 160
+KERNEL_SECTORS = 256
 TOTAL_SECTORS = 512
 
 root = Path(__file__).resolve().parents[1]
