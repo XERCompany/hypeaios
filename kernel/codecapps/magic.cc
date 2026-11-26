@@ -1,4 +1,7 @@
 #include "kernel/codecapps/arena.h"
+#include "kernel/codecapps/audio/adpcm.h"
+#include "kernel/codecapps/audio/flac.h"
+#include "kernel/codecapps/audio/mp3.h"
 #include "kernel/codecapps/codec.h"
 #include "kernel/codecapps/image/bmp.h"
 #include "kernel/codecapps/image/pnm.h"
@@ -192,18 +195,18 @@ namespace hype::codec {
              codec_stub_encode},
             {"yuv", CodecKind::Image, CodecId::RawYuv, 0, probe_rawyuv, codec_stub_decode,
              codec_stub_encode},
-            {"adpcm", CodecKind::Audio, CodecId::Adpcm, 0, probe_adpcm, codec_stub_decode,
-             codec_stub_encode},
+            {"adpcm", CodecKind::Audio, CodecId::Adpcm, codec_flag_decode, probe_adpcm,
+             audio_adpcm_decode, codec_stub_encode},
             {"wav", CodecKind::Audio, CodecId::Wav, 0, probe_wav, codec_stub_decode,
              codec_stub_encode},
             {"vorbis", CodecKind::Audio, CodecId::Vorbis, 0, probe_vorbis, codec_stub_decode,
              codec_stub_encode},
             {"opus", CodecKind::Audio, CodecId::Opus, 0, probe_opus, codec_stub_decode,
              codec_stub_encode},
-            {"flac", CodecKind::Audio, CodecId::Flac, 0, probe_flac, codec_stub_decode,
-             codec_stub_encode},
-            {"mp3", CodecKind::Audio, CodecId::Mp3, 0, probe_mp3, codec_stub_decode,
-             codec_stub_encode},
+            {"flac", CodecKind::Audio, CodecId::Flac, codec_flag_decode, probe_flac,
+             audio_flac_decode, codec_stub_encode},
+            {"mp3", CodecKind::Audio, CodecId::Mp3, codec_flag_decode, probe_mp3,
+             audio_mp3_decode, codec_stub_encode},
             {"aac", CodecKind::Audio, CodecId::Aac, 0, probe_aac, codec_stub_decode,
              codec_stub_encode},
             {"ogg", CodecKind::Container, CodecId::Ogg, 0, probe_ogg, codec_stub_decode,

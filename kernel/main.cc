@@ -11,6 +11,7 @@
 #include "hcpp/types.hpp"
 #include "kernel/audio/audio-serivce.h"
 #include "kernel/boot_info.hpp"
+#include "kernel/codecapps/audio/selftest.h"
 #include "kernel/codecapps/image/image.h"
 #include "kernel/codecapps/registry.h"
 #include "version_generated.h"
@@ -284,6 +285,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("image simple selftest=");
     serial::write_line(image_selftest_ok ? "ok" : "fail");
     hype::codec::codec_report();
+    hype::codec::audio_codec_selftest();
     serial::write("memory free=");
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_free_bytes / (1024 * 1024)));
     serial::write("MB e820=");
