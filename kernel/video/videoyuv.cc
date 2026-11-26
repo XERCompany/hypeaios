@@ -1,0 +1,20 @@
+#include "kernel/video/videoyuv.h"
+namespace hype::video {
+    hcpp::u8 yuv_clamp(int v) noexcept { return v < 0 ? 0 : v > 255 ? 255 : static_cast<hcpp::u8>(v); }
+    bool yuv420_to_rgb24(const VideoFrame& in, VideoFrame& out) noexcept {
+        if (!frame_valid(in) || !frame_valid(out) || in.format != PixelFormat::YUV420 ||
+            out.format != PixelFormat::RGB24 || in.width != out.width || in.height != out.height)
+            return false;
+        for (hcpp::u32 y = 0; y < in.height; ++y)
+            for (hcpp::u32 x = 0; x < in.width; ++x) {
+                int Y = in.data[y * in.width + x];
+                int U = in.data[in.width * in.height + (y / 2) * (in.width / 2) + x / 2] - 128;
+                int V = in.data[in.width * in.height * 5 / 4 + (y / 2) * (in.width / 2) + x / 2] - 128;
+                hcpp::u8* p = out.data + (y * out.width + x) * 3;
+                p[0] = yuv_clamp(Y + ((359 * V) >> 8));
+                p[1] = yuv_clamp(Y - ((88 * U + 183 * V) >> 8));
+                p[2] = yuv_clamp(Y + ((454 * U) >> 8));
+            }
+        return true;
+    }
+}  // namespace hype::video

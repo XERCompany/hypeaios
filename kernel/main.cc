@@ -6,12 +6,14 @@
 #include "hcpp/text_writer.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/boot_info.hpp"
+#include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
+#include "kernel/video/videov4lv.h"
 
 namespace {
 
@@ -200,6 +202,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     hcpp::fonts::initialize_default_fonts();
     const hype::runtime::RuntimeInfo runtime_info = hype::runtime::boot(*boot_info);
     serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
+    serial::write("version=");
+    serial::write_line(HYPEAI_VERSION_FULL);
     serial::write("core services running=");
     serial::write_line(runtime_info.core_started ? "yes" : "no");
     serial::write("core selftest=");
@@ -240,6 +244,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_line(runtime_info.apic_supported ? "enabled" : "unavailable");
     serial::write("context switch=");
     serial::write_line(runtime_info.context_switch_ready ? "ready" : "failed");
+    serial::write("video devices=");
+    serial::write_dec32(static_cast<hcpp::u32>(hype::video::v4lv_device_count()));
+    serial::write(" core=ready\r\n");
     serial::write("kernel threads=");
     serial::write_line(runtime_info.scheduler_ready ? "ready" : "failed");
     serial::write("font default=");

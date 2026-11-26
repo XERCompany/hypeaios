@@ -17,7 +17,7 @@ if len(stage1) != SECTOR_SIZE:
 if len(stage2) > STAGE2_SECTORS * SECTOR_SIZE:
     raise SystemExit("stage2 exceeds fixed 32-sector layout")
 if len(kernel) > KERNEL_SECTORS * SECTOR_SIZE:
-    raise SystemExit("kernel exceeds fixed 64-sector layout")
+    raise SystemExit("kernel exceeds fixed 128-sector layout")
 
 image = bytearray(TOTAL_SECTORS * SECTOR_SIZE)
 image[0:len(stage1)] = stage1

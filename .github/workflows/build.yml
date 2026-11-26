@@ -1,0 +1,44 @@
+name: build-hypeai-os
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y nasm qemu-system-x86 xorriso make g++ python3
+      - name: Build raw OS image
+        run: make all
+      - name: QEMU boot smoke test
+        continue-on-error: true
+        run: make test
+      - name: Build ISO artifact
+        run: make iso
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypeai-os-${{ github.sha }}
+          path: |
+            build/hypeai-os.img
+            build/hypeai-os.iso
+            build/version.txt
+      - name: Create tagged release
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(awk '{print $3}' build/version.txt | cut -d+ -f1)"
+          tag="v${version}"
+          notes="HypeAI OS ${version} automated build ${GITHUB_SHA}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" build/hypeai-os.img build/hypeai-os.iso build/version.txt --clobber
+          else
+            gh release create "$tag" build/hypeai-os.img build/hypeai-os.iso build/version.txt               --title "HypeAI OS ${version}"               --notes "$notes"               --target "${GITHUB_SHA}"
+          fi

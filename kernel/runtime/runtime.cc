@@ -10,6 +10,9 @@
 #include "kernel/pci/pci.h"
 #include "kernel/sched/context.h"
 #include "kernel/sched/scheduler.h"
+#include "kernel/video/videoclient.h"
+#include "kernel/video/videocoretest.h"
+#include "kernel/video/videovirtual.h"
 
 namespace hype::runtime {
     namespace {
@@ -63,6 +66,9 @@ namespace hype::runtime {
             current.context_switch_ready = sched::context_selftest();
             sched::scheduler_initialize();
             current.scheduler_ready = sched::scheduler_selftest();
+            video::video_client_initialize();
+            video::virtual_video_register();
+            if (!video::video_core_selftest()) return false;
             return current.context_switch_ready && current.scheduler_ready;
         }
         bool interrupt_enter(void*) noexcept {

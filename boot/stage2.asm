@@ -59,6 +59,7 @@ load_kernel:
     mov si, kernel_dap
     mov ah, 0x42
     mov dl, [boot_drive]
+    xor dh, dh
     int 0x13
     jc .error
     ret

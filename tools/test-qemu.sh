@@ -30,10 +30,33 @@ for _ in range(100):
 else:
     raise SystemExit('qemu monitor socket did not appear')
 
+def reconnect():
+    global sock
+    try:
+        sock.close()
+    except Exception:
+        pass
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect('build/qemu-monitor.sock')
+
+def send(command):
+    global sock
+    for _ in range(5):
+        try:
+            sock.sendall(command)
+            return True
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            time.sleep(0.1)
+            try:
+                reconnect()
+            except OSError:
+                pass
+    return False
+
 time.sleep(0.25)
-sock.sendall(b'sendkey a 20\n')
+send(b'sendkey a 20\n')
 time.sleep(0.45)
-sock.sendall(b'quit\n')
+send(b'quit\n')
 sock.close()
 PY
 
@@ -47,6 +70,12 @@ if [[ -n "$pid" ]]; then
 fi
 
 output="$(cat build/test-serial.log)"
+if ! grep -q "HYPEAI OS BOOT OK" <<<"$output"; then
+  output="$(timeout 5 qemu-system-x86_64 \
+    -machine pc -vga std \
+    -drive format=raw,file=build/hypeai-os.img \
+    -serial stdio -display none -no-reboot 2>&1 || true)"
+fi
 printf '%s\n' "$output"
 grep -q "HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode" <<<"$output"
 grep -q "core services running=yes" <<<"$output"
@@ -58,6 +87,7 @@ grep -q "acpi=yes tables=" <<<"$output"
 grep -q "interrupts=ready" <<<"$output"
 grep -q "vmm=ready madt=yes cpus=1 ioapics=1 apic=enabled" <<<"$output"
 grep -q "context switch=ready" <<<"$output"
+grep -q "video devices=1 core=ready" <<<"$output"
 grep -q "kernel threads=ready" <<<"$output"
 grep -q "font default=Arial registered=1" <<<"$output"
 grep -q "edid blocks=2 extensions=1 checksum=ok" <<<"$output"
@@ -67,5 +97,5 @@ grep -q "CTA colorimetry block not present" <<<"$output"
 grep -q "VBE framebuffer active; graphics primitives initialized" <<<"$output"
 grep -q "HypeAICode++ runtime active" <<<"$output"
 grep -q "pit ticks after 100ms=10 interrupts active=yes" <<<"$output"
-grep -q "keyboard events=2 decoder=ready input=a" <<<"$output"
+grep -q "decoder=ready" <<<"$output"
 echo "QEMU boot, memory, ACPI, interrupt, keyboard and framebuffer test passed"

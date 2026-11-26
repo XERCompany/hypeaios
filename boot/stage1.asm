@@ -19,6 +19,7 @@ start:
     mov si, stage2_dap
     mov ah, 0x42
     mov dl, [boot_drive]
+    xor dh, dh
     int 0x13
     jc disk_error
 
