@@ -12,9 +12,12 @@ namespace hype::ui {
     class ToastHost {
     public:
         static constexpr hcpp::size_t max_toasts = 8;
+        static constexpr hcpp::u32 default_duration_ticks = 300;
 
         bool show(hcpp::StringView message, ToastKind kind = ToastKind::Info,
-                  hcpp::StringView title = {}) noexcept;
+                  hcpp::StringView title = {},
+                  hcpp::u32 duration_ticks = default_duration_ticks) noexcept;
+        bool dismiss(hcpp::size_t index) noexcept;
         void clear() noexcept;
         hcpp::size_t count() const noexcept;
 
@@ -25,6 +28,7 @@ namespace hype::ui {
             hcpp::StringView title;
             hcpp::StringView message;
             ToastKind kind = ToastKind::Info;
+            hcpp::u32 remaining = 0;
         };
 
         Toast toasts_[max_toasts];

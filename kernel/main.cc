@@ -335,9 +335,13 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         "VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
     const hcpp::u32 ui_widgets = hype::ui::demo(framebuffer);
-    serial::write("ui demo=painted widgets=");
-    serial::write_dec32(ui_widgets);
-    serial::write("\r\n");
+    if (ui_widgets > 0) {
+        serial::write("ui demo=painted widgets=");
+        serial::write_dec32(ui_widgets);
+        serial::write("\r\n");
+    } else {
+        serial::write_line("ui demo=failed");
+    }
     serial::write_line("HypeAICode++ runtime active");
     const hcpp::u64 pit_start = hype::interrupts::pit_ticks();
     hype::interrupts::pit_wait_ticks(10);

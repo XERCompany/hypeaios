@@ -32,4 +32,9 @@ namespace hype::ui {
         static const Theme& dark() noexcept;
     };
 
+    inline const hcpp::fonts::FontFace* resolve_font(
+        const hcpp::fonts::FontFace* font) noexcept {
+        return font != nullptr ? font : Theme::dark().resolved_font();
+    }
+
 }  // namespace hype::ui

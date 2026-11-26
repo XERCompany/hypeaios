@@ -28,10 +28,7 @@ namespace hype::ui {
     }
 
     const hcpp::fonts::FontFace* Panel::resolved_font() const noexcept {
-        if (font_ != nullptr) {
-            return font_;
-        }
-        return Theme::dark().resolved_font();
+        return resolve_font(font_);
     }
 
     Rect Panel::content_rect() const noexcept {

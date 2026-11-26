@@ -18,7 +18,7 @@ namespace hype::ui {
             .radius_sm = 2,
             .radius_md = 4,
             .radius_lg = 8,
-            .font = &hcpp::fonts::arial_font(),
+            .font = nullptr,
         };
         return theme;
     }
