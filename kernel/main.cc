@@ -9,6 +9,7 @@
 #include "hcpp/graphics/text.hpp"
 #include "hcpp/text_writer.hpp"
 #include "hcpp/types.hpp"
+#include "kernel/audio/audio-serivce.h"
 #include "kernel/boot_info.hpp"
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
@@ -53,6 +54,14 @@ namespace {
         serial::write(" bpp=");
         serial::write_dec32(boot_info.bits_per_pixel);
         serial::write("\r\n");
+    }
+
+    void write_hex16(hcpp::u16 value) noexcept {
+        for (int shift = 12; shift >= 0; shift -= 4) {
+            const hcpp::u8 digit = static_cast<hcpp::u8>((value >> shift) & 0xF);
+            serial::write_char(digit < 10 ? static_cast<char>('0' + digit)
+                                          : static_cast<char>('a' + digit - 10));
+        }
     }
 
     void write_scaled_decimal_x100(hcpp::u16 value) noexcept {
@@ -238,6 +247,23 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         serial::write(display_chip.device_name);
         serial::write(" vendor=");
         serial::write_line(display_chip.vendor_name);
+    }
+    hype::audio::initialize();
+    serial::write("audio chips=");
+    serial::write_dec32(static_cast<hcpp::u32>(hype::audio::chip_count()));
+    serial::write("\r\n");
+    for (hcpp::size_t chip_index = 0; chip_index < hype::audio::chip_count(); ++chip_index) {
+        const hype::audio::AudioCard *card = hype::audio::chip(chip_index);
+        if (card == nullptr) {
+            continue;
+        }
+        serial::write("audio chip=");
+        serial::write(card->name);
+        serial::write(" ");
+        write_hex16(card->vendor_id);
+        serial::write_char(':');
+        write_hex16(card->device_id);
+        serial::write("\r\n");
     }
     serial::write("memory free=");
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_free_bytes / (1024 * 1024)));
