@@ -106,17 +106,20 @@ namespace hcpp::fonts {
             'H', 'P', 'F', '1', 0x01, 0x00, 0x01, 0x00,
             'H', 'P', 'F', 'T', 'e', 's', 't', 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            8, 6, 8, 0, 0x02, 0x00, 0x00, 0x00,
-            0x41, 0x00, 0x00, 0x00, 0x4C, 0x00, 0x00, 0x00, 8, 8, 8, 0, 6, 0,
-            0x42, 0x00, 0x00, 0x00, 0x54, 0x00, 0x00, 0x00, 8, 8, 8, 0, 6, 0,
+            8, 6, 8, 0, 0x03, 0x00, 0x00, 0x00,
+            0x41, 0x00, 0x00, 0x00, 0x5A, 0x00, 0x00, 0x00, 8, 8, 8, 0, 6, 0,
+            0x42, 0x00, 0x00, 0x00, 0x62, 0x00, 0x00, 0x00, 8, 8, 8, 0, 6, 0,
+            0x57, 0x00, 0x00, 0x00, 0x6A, 0x00, 0x00, 0x00, 16, 8, 16, 0, 6, 0,
             0x18, 0x3C, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x00,
             0x7C, 0x66, 0x66, 0x7C, 0x66, 0x66, 0x7C, 0x00,
+            0x80, 0x01, 0x40, 0x02, 0x20, 0x04, 0x10, 0x08,
+            0x08, 0x10, 0x04, 0x20, 0x02, 0x40, 0x01, 0x80,
         };
 
-        static_assert(sizeof(selftest_blob) == 92);
+        static_assert(sizeof(selftest_blob) == 122);
 
         bool reject_corrupted(const u8* blob, size_t size) noexcept {
-            u8 bad[92];
+            u8 bad[sizeof(selftest_blob)];
             copy(bad, blob, size);
             bad[0] = 'X';
             if (hpf_load(bad, size, hpf_selftest_slot) != nullptr) {
@@ -235,18 +238,31 @@ namespace hcpp::fonts {
     bool hpf_selftest() noexcept {
         const FontFace* face =
             hpf_load(selftest_blob, sizeof(selftest_blob), hpf_selftest_slot);
-        if (face == nullptr || face->glyph_count != 2 || face->height != 8 || face->baseline != 6 ||
+        if (face == nullptr || face->glyph_count != 3 || face->height != 8 || face->baseline != 6 ||
             face->advance != 8) {
             return false;
         }
         const FontGlyph glyph_a = face->glyph_for('A');
         const FontGlyph glyph_b = face->glyph_for('B');
+        const FontGlyph glyph_w = face->glyph_for('W');
         if (!glyph_a.valid() || !glyph_b.valid() || glyph_a.width != 8 || glyph_a.height != 8 ||
             glyph_a.row_stride != 1 || glyph_a.advance != 8 || glyph_a.bearing_y != 6) {
             return false;
         }
+        if (!glyph_w.valid() || glyph_w.width != 16 || glyph_w.row_stride != 2 ||
+            glyph_w.advance != 16) {
+            return false;
+        }
         if (!glyph_a.pixel(3, 0) || glyph_a.pixel(0, 0) || glyph_a.pixel(0, 7) ||
             glyph_b.pixel(7, 0)) {
+            return false;
+        }
+        if (!glyph_w.pixel(0, 0) || !glyph_w.pixel(15, 0) || !glyph_w.pixel(1, 1) ||
+            !glyph_w.pixel(14, 1) || !glyph_w.pixel(7, 7) || !glyph_w.pixel(8, 7)) {
+            return false;
+        }
+        if (glyph_w.pixel(7, 0) || glyph_w.pixel(8, 0) || glyph_w.pixel(0, 7) ||
+            glyph_w.pixel(15, 7) || glyph_w.pixel(16, 0) || glyph_w.pixel(0, 8)) {
             return false;
         }
         if (face->glyph_for('C').valid() || face->glyph_for(0x20).valid()) {

@@ -258,6 +258,30 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("\r\n");
     serial::write("hpf selftest=");
     serial::write_line(hcpp::fonts::hpf_selftest() ? "ok" : "failed");
+    const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
+    hcpp::u32 cyrillic_found = 0;
+    hcpp::u32 cyrillic_pixels = 0;
+    if (cyrillic_font != nullptr) {
+        for (hcpp::u32 cp = 0x0400; cp <= 0x045F; ++cp) {
+            const hcpp::fonts::FontGlyph glyph = cyrillic_font->glyph_for(cp);
+            if (!glyph.valid()) {
+                continue;
+            }
+            ++cyrillic_found;
+            for (hcpp::u32 row = 0; row < glyph.height; ++row) {
+                for (hcpp::u32 column = 0; column < glyph.width; ++column) {
+                    if (glyph.pixel(column, row)) {
+                        ++cyrillic_pixels;
+                    }
+                }
+            }
+        }
+    }
+    serial::write("cyrillic glyphs=");
+    serial::write_dec32(cyrillic_found);
+    serial::write("/66 pixels=");
+    serial::write_dec32(cyrillic_pixels);
+    serial::write("\r\n");
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         serial::write_line("boot info missing or invalid");
