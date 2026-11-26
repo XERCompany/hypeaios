@@ -8,6 +8,7 @@
 #include "kernel/codecapps/image/gif.h"
 #include "kernel/codecapps/image/ico.h"
 #include "kernel/codecapps/image/jpeg.h"
+#include "kernel/codecapps/image/png.h"
 #include "kernel/codecapps/image/tiff.h"
 #include "kernel/codecapps/image/pnm.h"
 #include "kernel/codecapps/image/qoi.h"
@@ -174,8 +175,9 @@ namespace hype::codec {
             {"qoi", CodecKind::Image, CodecId::Qoi,
              codec_flag_decode | codec_flag_encode, probe_qoi, image::qoi_decode,
              image::qoi_encode},
-            {"png", CodecKind::Image, CodecId::Png, 0, probe_png, codec_stub_decode,
-             codec_stub_encode},
+            {"png", CodecKind::Image, CodecId::Png,
+             codec_flag_decode | codec_flag_encode, probe_png, image::png_decode,
+             image::png_encode},
             {"gif", CodecKind::Image, CodecId::Gif, codec_flag_decode, probe_gif,
              image::gif_decode, codec_stub_encode},
             {"jpeg", CodecKind::Image, CodecId::Jpeg, codec_flag_decode, probe_jpeg,
