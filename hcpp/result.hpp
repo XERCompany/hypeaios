@@ -12,7 +12,7 @@ namespace hcpp {
     };
 
     class Status {
-       public:
+    public:
         static Status ok() noexcept;
         static Status error(StatusCode code) noexcept;
 
@@ -20,7 +20,7 @@ namespace hcpp {
         bool is_error() const noexcept;
         StatusCode code() const noexcept;
 
-       private:
+    private:
         explicit Status(StatusCode code) noexcept;
 
         StatusCode code_;

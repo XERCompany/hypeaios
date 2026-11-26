@@ -5,7 +5,7 @@
 namespace hcpp::graphics {
 
     class Framebuffer {
-       public:
+    public:
         Framebuffer() noexcept;
         Framebuffer(volatile u8* base, u32 width, u32 height, u32 pitch, u8 bits_per_pixel, u8 red_mask_size,
                     u8 red_position, u8 green_mask_size, u8 green_position, u8 blue_mask_size,
@@ -22,7 +22,7 @@ namespace hcpp::graphics {
         void clear(u32 color) const noexcept;
         void draw_test_pattern() const noexcept;
 
-       private:
+    private:
         static u32 scale_channel(u8 value, u8 bits) noexcept;
         u32 bytes_per_pixel() const noexcept;
 

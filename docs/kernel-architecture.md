@@ -39,6 +39,14 @@ The custom `kernel/*.h` filenames are not public Linux or POSIX API names. Inter
 
 Linux references inspected: `include/linux/fs.h`, `include/linux/input.h`, `include/linux/cred.h`, `include/linux/sched.h` and `include/linux/device.h` in the upstream `torvalds/linux` tree.
 
+## Runtime, PCI and cross-platform kernel primitives
+
+`kernel/runtime` now owns staged OS Core startup. Runtime stages initialize core services and scan PCI before framebuffer/monitor reporting.
+
+PCI support is split into configuration-space access, I/O/BAR helpers, capability-list parsing and MSI/MSI-X control. Chip identification is split by vendor family (`intel`, `qemu`, `virtio`) plus generic PCI class mapping.
+
+Linux/Windows-inspired primitives now include atomic/interlocked operations, spinlocks, mutexes, semaphores, wait queues, IRQ dispatch registration, syscall dispatch, thread priority metadata, kernel object handles and NTSTATUS-style error codes. They are architecture-level building blocks, not ABI-compatible clones of Linux or Windows.
+
 ## Language direction
 
 Assembly remains necessary for boot, interrupt entry, context switching and syscall entry. Larger kernel components should migrate to Rust `no_std` once the low-level ABI and build flow are stable.

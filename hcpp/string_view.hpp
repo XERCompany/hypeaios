@@ -5,7 +5,7 @@
 namespace hcpp {
 
     class StringView {
-       public:
+    public:
         StringView() noexcept;
         StringView(const char* text) noexcept;
         StringView(const char* text, size_t size) noexcept;
@@ -15,7 +15,7 @@ namespace hcpp {
         bool empty() const noexcept;
         char operator[](size_t index) const noexcept;
 
-       private:
+    private:
         static size_t length(const char* text) noexcept;
 
         const char* data_ = nullptr;

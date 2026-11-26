@@ -6,7 +6,7 @@
 namespace hcpp {
 
     class TextWriter {
-       public:
+    public:
         static constexpr size_t capacity = 128;
 
         TextWriter() noexcept;
@@ -21,7 +21,7 @@ namespace hcpp {
         size_t size() const noexcept;
         StringView view() const noexcept;
 
-       private:
+    private:
         char data_[capacity + 1]{};
         size_t size_ = 0;
     };

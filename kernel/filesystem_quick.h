@@ -5,12 +5,11 @@
 
 namespace hype::fs {
 
-void quick_fs_initialize() noexcept;
-bool quick_fs_add(hcpp::StringView path, hcpp::u8 *data,
-                  hcpp::size_t capacity) noexcept;
-const VFileBuffer *quick_fs_find(hcpp::StringView path) noexcept;
-IFileSystem *quick_fs() noexcept;
-hcpp::size_t quick_fs_count() noexcept;
-bool quick_fs_remove(hcpp::StringView path) noexcept;
+    void quick_fs_initialize() noexcept;
+    bool quick_fs_add(hcpp::StringView path, hcpp::u8 *data, hcpp::size_t capacity) noexcept;
+    const VFileBuffer *quick_fs_find(hcpp::StringView path) noexcept;
+    IFileSystem *quick_fs() noexcept;
+    hcpp::size_t quick_fs_count() noexcept;
+    bool quick_fs_remove(hcpp::StringView path) noexcept;
 
-} // namespace hype::fs
+}  // namespace hype::fs

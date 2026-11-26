@@ -23,6 +23,7 @@ HypeAICode++ (`hcpp`) is the freestanding C++ runtime and library layer for Hype
 - `hcpp/fonts/font.hpp`: HypeAIFont registry, runtime font registration and default font selection; the built-in boot font is an Arial-compatible 5x7 bitmap fallback rather than Microsoft's proprietary vector Arial file.
 - `hcpp/graphics/framebuffer.hpp`: framebuffer description and drawing primitives.
 - `hcpp/display/*`: EDID, CTA colorimetry, HDR metadata and color-space model.
+- `hcpp/atomic.h`, `hcpp/bitset.h`, `hcpp/crc32.h`, `hcpp/guid.h`: low-level kernel-safe primitives inspired by Linux kernel atomics and Windows GUID/Interlocked APIs.
 
 ## Relationship to C++ stdlib
 
