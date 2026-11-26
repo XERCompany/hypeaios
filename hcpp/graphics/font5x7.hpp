@@ -1,12 +1,10 @@
 #pragma once
 
-#include "hcpp/types.hpp"
+#include "hcpp/fonts/font.hpp"
 
 namespace hcpp::graphics {
 
-struct Glyph5x7 {
-    u8 rows[7];
-};
+using Glyph5x7 = hcpp::fonts::FontGlyph;
 
 Glyph5x7 glyph_for(char character) noexcept;
 

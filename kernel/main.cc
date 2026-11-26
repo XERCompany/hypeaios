@@ -1,5 +1,6 @@
 #include "hcpp/display/color_space.hpp"
 #include "hcpp/display/edid.hpp"
+#include "hcpp/fonts/font.hpp"
 #include "hcpp/graphics/framebuffer.hpp"
 #include "hcpp/graphics/text.hpp"
 #include "hcpp/text_writer.hpp"
@@ -189,7 +190,13 @@ void append_hdr_line(hcpp::TextWriter& line, const MonitorReport& report) noexce
 
 extern "C" void hype_kernel_main(BootInfo* boot_info) noexcept {
     serial::initialize();
+    hcpp::fonts::initialize_default_fonts();
     serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
+    serial::write("font default=");
+    serial::write(hcpp::fonts::default_font_name());
+    serial::write(" registered=");
+    serial::write_dec32(static_cast<hcpp::u32>(hcpp::fonts::registered_font_count()));
+    serial::write("\r\n");
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         serial::write_line("boot info missing or invalid");
@@ -288,6 +295,12 @@ extern "C" void hype_kernel_main(BootInfo* boot_info) noexcept {
         "HDR SIGNALING NEEDS NATIVE GPU DRIVER",
         muted_color,
         1);
+
+    line.clear();
+    line.append("FONT ");
+    line.append(hcpp::fonts::default_font_name());
+    line.append(" LOADED");
+    hcpp::graphics::draw_text(framebuffer, panel_x + 30, panel_y + 226, line.view(), accent_color, 1);
 
     serial::write("preferred colorspace=");
     serial::write_line(hcpp::display::color_space_name(hcpp::display::ColorSpace::Srgb));

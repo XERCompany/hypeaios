@@ -12,6 +12,7 @@ output="$(timeout 5 qemu-system-x86_64 \
 
 printf '%s\n' "$output"
 grep -q "HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode" <<<"$output"
+grep -q "font default=Arial registered=1" <<<"$output"
 grep -q "edid blocks=2 extensions=1 checksum=ok" <<<"$output"
 grep -q "monitor name=QEMU Monitor" <<<"$output"
 grep -q "hdr static metadata not present" <<<"$output"
