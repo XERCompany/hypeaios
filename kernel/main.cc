@@ -14,6 +14,7 @@
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/db/hypedb.hpp"
+#include "kernel/hello/hello.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
@@ -319,9 +320,13 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         serial::write_line("sqlite=ok");
         serial::write("db selftest=");
         serial::write_line(hype::db::db_selftest() ? "ok" : "failed");
+        const bool hello_ok = hype::hello::hello_selftest();
+        serial::write("hello selftest=");
+        serial::write_line(hello_ok ? "ok" : "failed");
     } else {
         serial::write("sqlite=fail ");
         serial::write_line(db_error);
+        serial::write_line("hello selftest=skipped no-db");
     }
     const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
     hcpp::u32 cyrillic_found = 0;
