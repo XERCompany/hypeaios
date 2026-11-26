@@ -27,6 +27,10 @@ QEMU was installed via `choco install qemu` (2026-11-26) → `C:\Program Files\q
 
 **Pitfall:** QEMU on Windows mangles non-ASCII paths. The repo lives under `...\OneDrive\Документы\` (Cyrillic), so QEMU cannot open images inside the repo tree. Copy `build\hypeai-os.img` to an ASCII path (e.g. `C:\Users\alino\hypeai-os.img`) before booting, or run QEMU from a shell that passes the raw image bytes. Worktrees must also live under ASCII paths (e.g. `C:\Users\alino\hypeaios-wt-*`).
 
+## Headless screenshots (2026-11-26)
+
+Run QEMU with `-qmp tcp:127.0.0.1:4444,server,nowait` and `-serial file:<log>` (note: `-serial file:` may not create the log on Windows — capture stdout instead). Then drive QMP over a raw socket with sendall/recv (line-buffered `makefile` blocks — use `recv` with explicit timeouts): `qmp_capabilities`, then `human-monitor-command` → `screendump C:/path/out.ppm`. PPM→PNG conversion is a ~15-line zlib script. Serial log via file: is unreliable; `-serial stdio` in a foreground shell works.
+
 ## Boot state (2026-11-26)
 
 Serial log shows `HYPEAI OS BOOT OK`, framebuffer 1024x768x24 EDID-parsed, but several runtime stages report failures (`interrupts=failed`, `vmm=failed`, `kernel threads=failed`, PMM sees no memory) — pre-existing kernel bugs, not build problems.
