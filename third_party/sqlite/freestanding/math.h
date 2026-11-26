@@ -3,6 +3,7 @@
 
 double fabs(double x);
 double floor(double x);
+double ldexp(double x, int e);
 double ceil(double x);
 double trunc(double x);
 double fmod(double x, double y);

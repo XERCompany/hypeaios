@@ -118,6 +118,148 @@ extern "C" {
 
     double fabs(double x) noexcept { return x < 0.0 ? -x : x; }
 
+    int abs(int x) noexcept { return x < 0 ? -x : x; }
+
+    namespace {
+
+        constexpr double libm_ln2 = 0.6931471805599453;
+        constexpr double libm_pi = 3.14159265358979323846;
+        constexpr double libm_sqrt2 = 1.4142135623730951;
+
+    }
+
+    double ldexp(double x, int e) noexcept {
+        if (x == 0.0 || e == 0) return x;
+        union {
+            double d;
+            hcpp::u64 u;
+        } f{};
+        while (e > 300) {
+            f.u = (hcpp::u64)(1023 + 300) << 52;
+            x *= f.d;
+            e -= 300;
+        }
+        while (e < -300) {
+            f.u = (hcpp::u64)(1023 - 300) << 52;
+            x *= f.d;
+            e += 300;
+        }
+        f.u = (hcpp::u64)(1023 + e) << 52;
+        return x * f.d;
+    }
+
+    double floor(double x) noexcept {
+        constexpr double big = 4503599627370496.0;
+        if (x != x || x >= big || x <= -big) return x;
+        const hcpp::i64 t = static_cast<hcpp::i64>(x);
+        const double d = static_cast<double>(t);
+        return d > x ? d - 1.0 : d;
+    }
+
+    double exp(double x) noexcept {
+        if (x != x) return x;
+        if (x > 709.0) return __builtin_huge_val();
+        if (x < -745.0) return 0.0;
+        const double k = floor(x / libm_ln2 + 0.5);
+        const double r = x - k * libm_ln2;
+        double sum = 1.0;
+        double term = 1.0;
+        for (int i = 1; i <= 18; ++i) {
+            term *= r / i;
+            sum += term;
+        }
+        return ldexp(sum, static_cast<int>(k));
+    }
+
+    double log(double x) noexcept {
+        if (x != x || x < 0.0) return __builtin_nan("");
+        if (x == 0.0) return -__builtin_huge_val();
+        union {
+            double d;
+            hcpp::u64 u;
+        } f{x};
+        int e = static_cast<int>((f.u >> 52) & 0x7FF) - 1023;
+        f.u = (f.u & ~((hcpp::u64)0x7FF << 52)) | ((hcpp::u64)1023 << 52);
+        double m = f.d;
+        if (m > libm_sqrt2) {
+            m *= 0.5;
+            ++e;
+        }
+        const double t = (m - 1.0) / (m + 1.0);
+        const double t2 = t * t;
+        double term = t;
+        double sum = t;
+        for (int i = 3; i <= 33; i += 2) {
+            term *= t2;
+            sum += term / i;
+        }
+        return 2.0 * sum + static_cast<double>(e) * libm_ln2;
+    }
+
+    double pow(double x, double y) noexcept {
+        if (y == 0.0 || x == 1.0) return 1.0;
+        const hcpp::i64 yi = static_cast<hcpp::i64>(y);
+        if (y == static_cast<double>(yi) && yi >= -64 && yi <= 64) {
+            const bool negative = yi < 0;
+            hcpp::u64 n = negative ? static_cast<hcpp::u64>(-yi)
+                                   : static_cast<hcpp::u64>(yi);
+            double base = x;
+            double result = 1.0;
+            while (n != 0) {
+                if ((n & 1) != 0) result *= base;
+                base *= base;
+                n >>= 1;
+            }
+            return negative ? 1.0 / result : result;
+        }
+        if (x <= 0.0) return __builtin_nan("");
+        return exp(y * log(x));
+    }
+
+    double sin(double x) noexcept {
+        if (x != x) return x;
+        const double q = floor(x / libm_pi + 0.5);
+        const double r = x - q * libm_pi;
+        const double r2 = r * r;
+        double sum = r;
+        double term = r;
+        for (int i = 1; i <= 9; ++i) {
+            term *= -r2 / (2.0 * i * (2.0 * i + 1.0));
+            sum += term;
+        }
+        return (static_cast<hcpp::i64>(q) & 1) != 0 ? -sum : sum;
+    }
+
+    double cos(double x) noexcept {
+        if (x != x) return x;
+        const double q = floor(x / libm_pi + 0.5);
+        const double r = x - q * libm_pi;
+        const double r2 = r * r;
+        double sum = 1.0;
+        double term = 1.0;
+        for (int i = 1; i <= 10; ++i) {
+            term *= -r2 / ((2.0 * i - 1.0) * (2.0 * i));
+            sum += term;
+        }
+        return (static_cast<hcpp::i64>(q) & 1) != 0 ? -sum : sum;
+    }
+
+    void qsort(void *base, hcpp::size_t count, hcpp::size_t size,
+               int (*compare)(const void *, const void *)) noexcept {
+        auto *bytes = static_cast<hcpp::u8 *>(base);
+        for (hcpp::size_t i = 1; i < count; ++i) {
+            hcpp::size_t j = i;
+            while (j > 0 && compare(bytes + j * size, bytes + (j - 1) * size) < 0) {
+                for (hcpp::size_t k = 0; k < size; ++k) {
+                    const hcpp::u8 t = bytes[j * size + k];
+                    bytes[j * size + k] = bytes[(j - 1) * size + k];
+                    bytes[(j - 1) * size + k] = t;
+                }
+                --j;
+            }
+        }
+    }
+
     struct tm;
 
     struct tm* localtime(const void* value) noexcept {

@@ -1,7 +1,10 @@
 #include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/audio/adpcm.h"
+#include "kernel/codecapps/audio/alac_codec.h"
 #include "kernel/codecapps/audio/flac.h"
 #include "kernel/codecapps/audio/mp3.h"
+#include "kernel/codecapps/audio/ogg.h"
+#include "kernel/codecapps/audio/vorbis.h"
 #include "kernel/codecapps/codec.h"
 #include "kernel/codecapps/image/bmp.h"
 #include "kernel/codecapps/image/exif.h"
@@ -196,8 +199,8 @@ namespace hype::codec {
              codec_stub_encode},
             {"heic", CodecKind::Image, CodecId::Heic, 0, probe_heic, codec_stub_decode,
              codec_stub_encode},
-            {"alac", CodecKind::Audio, CodecId::Alac, 0, probe_alac, codec_stub_decode,
-             codec_stub_encode},
+            {"alac", CodecKind::Audio, CodecId::Alac, codec_flag_decode, probe_alac,
+             audio_alac_decode, codec_stub_encode},
             {"exif", CodecKind::Image, CodecId::Exif, codec_flag_decode, probe_exif,
              image::exif_decode, codec_stub_encode},
             {"yuv", CodecKind::Image, CodecId::RawYuv, 0, probe_rawyuv, codec_stub_decode,
@@ -206,8 +209,8 @@ namespace hype::codec {
              audio_adpcm_decode, codec_stub_encode},
             {"wav", CodecKind::Audio, CodecId::Wav, 0, probe_wav, codec_stub_decode,
              codec_stub_encode},
-            {"vorbis", CodecKind::Audio, CodecId::Vorbis, 0, probe_vorbis, codec_stub_decode,
-             codec_stub_encode},
+            {"vorbis", CodecKind::Audio, CodecId::Vorbis, codec_flag_decode, probe_vorbis,
+             audio_vorbis_decode, codec_stub_encode},
             {"opus", CodecKind::Audio, CodecId::Opus, 0, probe_opus, codec_stub_decode,
              codec_stub_encode},
             {"flac", CodecKind::Audio, CodecId::Flac, codec_flag_decode, probe_flac,
@@ -216,8 +219,8 @@ namespace hype::codec {
              audio_mp3_decode, codec_stub_encode},
             {"aac", CodecKind::Audio, CodecId::Aac, 0, probe_aac, codec_stub_decode,
              codec_stub_encode},
-            {"ogg", CodecKind::Container, CodecId::Ogg, 0, probe_ogg, codec_stub_decode,
-             codec_stub_encode},
+            {"ogg", CodecKind::Container, CodecId::Ogg, codec_flag_decode, probe_ogg,
+             audio_ogg_decode, codec_stub_encode},
             {"mp4", CodecKind::Container, CodecId::Mp4, 0, probe_mp4, codec_stub_decode,
              codec_stub_encode},
         };

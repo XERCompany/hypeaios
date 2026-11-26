@@ -367,6 +367,144 @@ namespace hype::audio {
         state.status = AlacDecodeStatus::Ok;
     }
 
+    namespace {
+        constexpr hcpp::u32 alac_max_element_frames = 4096;
+        constexpr hcpp::u8 alac_max_lpc_order = 32;
+        hcpp::i32 alac_work[2][alac_max_element_frames];
+
+        hcpp::u32 alac_bits_peek(const AlacBitReader &reader, hcpp::u8 count) noexcept {
+            AlacBitReader copy = reader;
+            return alac_bits_read(copy, count);
+        }
+
+        hcpp::u8 alac_log2(hcpp::u32 value) noexcept {
+            hcpp::u8 result = 0;
+            while (value > 1) {
+                value >>= 1;
+                ++result;
+            }
+            return result;
+        }
+
+        hcpp::i32 alac_sign_extend(hcpp::i32 value, hcpp::u8 bits) noexcept {
+            if (bits == 0 || bits >= 32) return value;
+            const hcpp::u32 shifted = static_cast<hcpp::u32>(value) << (32 - bits);
+            return static_cast<hcpp::i32>(shifted) >> (32 - bits);
+        }
+
+        hcpp::i32 alac_sign(hcpp::i32 value) noexcept {
+            return value > 0 ? 1 : value < 0 ? -1 : 0;
+        }
+
+        hcpp::u32 alac_decode_scalar(AlacBitReader &reader, hcpp::u8 k,
+                                     hcpp::u8 bps) noexcept {
+            hcpp::u32 x = 0;
+            while (x <= 8 && !reader.overflow) {
+                if (alac_bits_read(reader, 1) != 0) {
+                    ++x;
+                } else {
+                    break;
+                }
+            }
+            if (reader.overflow) return 0;
+            if (x > 8) return alac_bits_read(reader, bps);
+            if (k != 1) {
+                const hcpp::u32 extrabits = alac_bits_peek(reader, k);
+                x = (x << k) - x;
+                if (extrabits > 1) {
+                    x += extrabits - 1;
+                    alac_bits_read(reader, k);
+                } else {
+                    alac_bits_read(reader, k - 1);
+                }
+            }
+            return x;
+        }
+
+        bool alac_rice_decompress(AlacBitReader &reader, hcpp::i32 *out, hcpp::u32 count,
+                                  hcpp::u8 bps, hcpp::u32 history_mult,
+                                  const AlacConfig &config) noexcept {
+            hcpp::u32 history = config.initial_history;
+            hcpp::u32 sign_modifier = 0;
+            hcpp::u32 i = 0;
+            while (i < count && !reader.overflow) {
+                hcpp::u8 k = alac_log2((history >> 9) + 3);
+                if (k > config.rice_modifier) k = config.rice_modifier;
+                hcpp::u32 x = alac_decode_scalar(reader, k, bps);
+                if (reader.overflow) break;
+                x += sign_modifier;
+                sign_modifier = 0;
+                out[i] = static_cast<hcpp::i32>((x >> 1) ^ (0u - (x & 1)));
+                if (x > 0xFFFF) {
+                    history = 0xFFFF;
+                } else {
+                    history += x * history_mult - ((history * history_mult) >> 9);
+                }
+                if (history < 128 && i + 1 < count) {
+                    hcpp::i32 kz = 7 - alac_log2(history) +
+                                   static_cast<hcpp::i32>((history + 16) >> 6);
+                    if (kz < 0) kz = 0;
+                    const hcpp::u8 block_k =
+                        kz > config.rice_modifier ? config.rice_modifier
+                                                  : static_cast<hcpp::u8>(kz);
+                    const hcpp::u32 block = alac_decode_scalar(reader, block_k, 16);
+                    if (reader.overflow) break;
+                    if (block > 0) {
+                        hcpp::u32 run = block;
+                        if (run >= count - i) run = count - i - 1;
+                        for (hcpp::u32 z = 0; z < run; ++z) out[i + 1 + z] = 0;
+                        i += run;
+                    }
+                    if (block <= 0xFFFF) sign_modifier = 1;
+                    history = 0;
+                }
+                ++i;
+            }
+            return !reader.overflow;
+        }
+
+        void alac_lpc_predict(hcpp::i32 *buffer, hcpp::u32 count, hcpp::u8 bps,
+                              hcpp::i16 *coefs, hcpp::u8 order,
+                              hcpp::u8 quant) noexcept {
+            if (count <= 1 || order == 0) return;
+            hcpp::u32 i = 1;
+            if (order == 31) {
+                for (; i < count; ++i)
+                    buffer[i] = alac_sign_extend(buffer[i - 1] + buffer[i], bps);
+                return;
+            }
+            for (; i <= order && i < count; ++i)
+                buffer[i] = alac_sign_extend(buffer[i - 1] + buffer[i], bps);
+            for (; i < count; ++i) {
+                const hcpp::i32 base = buffer[i - order - 1];
+                hcpp::i64 val = 0;
+                for (hcpp::u8 j = 0; j < order; ++j)
+                    val += static_cast<hcpp::i64>(buffer[i - order + j] - base) * coefs[j];
+                val = (val + (1LL << (quant - 1))) >> quant;
+                const hcpp::i32 error = buffer[i];
+                buffer[i] = alac_sign_extend(static_cast<hcpp::i32>(val + base + error),
+                                             bps);
+                hcpp::i32 residual = error;
+                const hcpp::i32 error_sign = alac_sign(residual);
+                if (error_sign != 0) {
+                    for (hcpp::u8 j = 0;
+                         j < order &&
+                         static_cast<hcpp::i32>(static_cast<hcpp::u32>(residual) *
+                                                static_cast<hcpp::u32>(error_sign)) > 0;
+                         ++j) {
+                        hcpp::i32 delta = base - buffer[i - order + j];
+                        const hcpp::i32 sign = alac_sign(delta) * error_sign;
+                        coefs[j] = static_cast<hcpp::i16>(coefs[j] - sign);
+                        delta *= sign;
+                        residual = static_cast<hcpp::i32>(
+                            static_cast<hcpp::u32>(residual) -
+                            ((static_cast<hcpp::u32>(delta) >> quant) * (j + 1u)));
+                    }
+                }
+            }
+        }
+    }  // namespace
+
     hcpp::u32 alac_decoder_decode(AlacDecoderState &state, const void *packet, hcpp::u32 packet_bytes,
                                   hcpp::i16 *output, hcpp::u32 max_frames) noexcept {
         if (!state.initialized) {
@@ -410,20 +548,100 @@ namespace hype::audio {
             if (reader.overflow || element_frames == 0) {
                 break;
             }
-            if (is_not_compressed == 0 || uncompressed_bytes != 0 ||
-                element_channels > state.config.channels || frames + element_frames > max_frames) {
+            if (element_channels > state.config.channels ||
+                frames + element_frames > max_frames) {
                 state.status = AlacDecodeStatus::Unsupported;
                 break;
             }
-            hcpp::i16 channel_samples[8];
-            for (hcpp::u32 i = 0; i < element_frames; ++i) {
-                for (hcpp::u8 c = 0; c < element_channels; ++c) {
-                    channel_samples[c] = static_cast<hcpp::i16>(
-                        static_cast<hcpp::u16>(alac_bits_read(reader, 16)));
+            if (is_not_compressed != 0) {
+                if (uncompressed_bytes != 0) {
+                    state.status = AlacDecodeStatus::Unsupported;
+                    break;
                 }
-                for (hcpp::u8 c = 0; c < state.config.channels; ++c) {
-                    output[(frames + i) * state.config.channels + c] =
-                        channel_samples[c < element_channels ? c : 0];
+                hcpp::i16 channel_samples[8];
+                for (hcpp::u32 i = 0; i < element_frames; ++i) {
+                    for (hcpp::u8 c = 0; c < element_channels; ++c) {
+                        channel_samples[c] = static_cast<hcpp::i16>(
+                            static_cast<hcpp::u16>(alac_bits_read(reader, 16)));
+                    }
+                    for (hcpp::u8 c = 0; c < state.config.channels; ++c) {
+                        output[(frames + i) * state.config.channels + c] =
+                            channel_samples[c < element_channels ? c : 0];
+                    }
+                }
+            } else {
+                if (uncompressed_bytes != 0 || element_frames > alac_max_element_frames ||
+                    element_channels > 2) {
+                    state.status = AlacDecodeStatus::Unsupported;
+                    break;
+                }
+                const hcpp::u32 decorr_shift = alac_bits_read(reader, 8);
+                const hcpp::u32 decorr_weight = alac_bits_read(reader, 8);
+                hcpp::i16 coefs[2][alac_max_lpc_order];
+                hcpp::u8 lpc_order[2]{};
+                hcpp::u8 lpc_quant[2]{};
+                hcpp::u8 rice_history[2]{};
+                hcpp::u8 prediction_type[2]{};
+                bool bad = false;
+                for (hcpp::u8 c = 0; c < element_channels && !bad; ++c) {
+                    prediction_type[c] =
+                        static_cast<hcpp::u8>(alac_bits_read(reader, 4));
+                    lpc_quant[c] = static_cast<hcpp::u8>(alac_bits_read(reader, 4));
+                    rice_history[c] = static_cast<hcpp::u8>(alac_bits_read(reader, 3));
+                    lpc_order[c] = static_cast<hcpp::u8>(alac_bits_read(reader, 5));
+                    if (lpc_quant[c] == 0 || lpc_order[c] > alac_max_lpc_order) {
+                        bad = true;
+                        break;
+                    }
+                    for (hcpp::i8 j = static_cast<hcpp::i8>(lpc_order[c]) - 1; j >= 0; --j)
+                        coefs[c][j] = static_cast<hcpp::i16>(
+                            static_cast<hcpp::u16>(alac_bits_read(reader, 16)));
+                }
+                if (bad || reader.overflow) {
+                    state.status = reader.overflow ? AlacDecodeStatus::BadPacket
+                                                 : AlacDecodeStatus::Unsupported;
+                    break;
+                }
+                const hcpp::u8 bps = static_cast<hcpp::u8>(
+                    state.config.bit_depth + element_channels - 1);
+                for (hcpp::u8 c = 0; c < element_channels; ++c) {
+                    const hcpp::u32 mult =
+                        static_cast<hcpp::u32>(rice_history[c]) *
+                        state.config.history_multiplier / 4;
+                    if (!alac_rice_decompress(reader, alac_work[c], element_frames, bps,
+                                              mult, state.config)) {
+                        bad = true;
+                        break;
+                    }
+                    if (prediction_type[c] == 15)
+                        alac_lpc_predict(alac_work[c], element_frames, bps, nullptr, 31, 0);
+                    alac_lpc_predict(alac_work[c], element_frames, bps, coefs[c],
+                                     lpc_order[c], lpc_quant[c]);
+                }
+                if (bad) {
+                    state.status = AlacDecodeStatus::BadPacket;
+                    break;
+                }
+                if (element_channels == 2 && decorr_weight != 0) {
+                    for (hcpp::u32 i = 0; i < element_frames; ++i) {
+                        const hcpp::i32 mid = alac_work[0][i];
+                        const hcpp::i32 side = alac_work[1][i];
+                        const hcpp::i32 right =
+                            mid - static_cast<hcpp::i32>(
+                                      (static_cast<hcpp::i64>(side) * decorr_weight) >>
+                                      decorr_shift);
+                        alac_work[0][i] = side + right;
+                        alac_work[1][i] = right;
+                    }
+                }
+                for (hcpp::u32 i = 0; i < element_frames; ++i) {
+                    for (hcpp::u8 c = 0; c < state.config.channels; ++c) {
+                        const hcpp::i32 sample =
+                            alac_work[c < element_channels ? c : 0][i];
+                        output[(frames + i) * state.config.channels + c] =
+                            static_cast<hcpp::i16>(
+                                alac_sign_extend(sample, state.config.bit_depth));
+                    }
                 }
             }
             if (reader.overflow) {
