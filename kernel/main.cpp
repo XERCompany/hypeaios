@@ -1,5 +1,8 @@
+#include "hcpp/display/color_space.hpp"
+#include "hcpp/display/edid.hpp"
 #include "hcpp/graphics/framebuffer.hpp"
 #include "hcpp/graphics/text.hpp"
+#include "hcpp/text_writer.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/boot_info.hpp"
 #include "kernel/serial.hpp"
@@ -35,6 +38,142 @@ void write_boot_info(const BootInfo& boot_info) noexcept {
     serial::write("\r\n");
 }
 
+void write_scaled_decimal_x100(hcpp::u16 value) noexcept {
+    serial::write_dec32(value / 100);
+    serial::write_char('.');
+    const hcpp::u16 fraction = value % 100;
+    if (fraction < 10) {
+        serial::write_char('0');
+    }
+    serial::write_dec32(fraction);
+}
+
+struct MonitorReport {
+    bool edid_available = false;
+    hcpp::display::EdidInfo edid;
+    hcpp::display::HdrStaticMetadataBlock hdr;
+};
+
+MonitorReport analyze_monitor(const BootInfo& boot_info) noexcept {
+    MonitorReport report;
+    if (boot_info.edid_blocks == 0 || boot_info.edid_physical == 0) {
+        serial::write_line("monitor EDID unavailable through VBE/DDC");
+        return report;
+    }
+
+    const auto* edid_data = reinterpret_cast<const hcpp::u8*>(
+        static_cast<hcpp::uintptr_t>(boot_info.edid_physical));
+
+    report.edid = hcpp::display::parse_edid_base(edid_data);
+    report.edid_available = report.edid.header_valid;
+    report.hdr = hcpp::display::scan_edid_hdr_static_metadata(
+        edid_data,
+        boot_info.edid_blocks);
+
+    serial::write("edid blocks=");
+    serial::write_dec32(boot_info.edid_blocks);
+    serial::write(" extensions=");
+    serial::write_dec32(boot_info.edid_extension_count);
+    serial::write(" checksum=");
+    serial::write_line(report.edid.checksum_ok ? "ok" : "bad");
+
+    if (!report.edid_available) {
+        serial::write_line("monitor EDID header invalid");
+        return report;
+    }
+
+    serial::write("monitor name=");
+    serial::write_line(report.edid.monitor_name[0] != '\0' ? report.edid.monitor_name : "unknown");
+    serial::write("monitor manufacturer=");
+    serial::write(report.edid.manufacturer);
+    serial::write(" product=");
+    serial::write_hex64(report.edid.product_code);
+    serial::write(" serial=");
+    serial::write_hex64(report.edid.serial_number);
+    serial::write("\r\n");
+
+    serial::write("monitor date week=");
+    serial::write_dec32(report.edid.manufacture_week);
+    serial::write(" year=");
+    serial::write_dec32(report.edid.manufacture_year);
+    serial::write(" edid=");
+    serial::write_dec32(report.edid.version);
+    serial::write_char('.');
+    serial::write_dec32(report.edid.revision);
+    serial::write(" size_cm=");
+    serial::write_dec32(report.edid.width_cm);
+    serial::write_char('x');
+    serial::write_dec32(report.edid.height_cm);
+    serial::write(" gamma=");
+    write_scaled_decimal_x100(report.edid.gamma_x100);
+    serial::write("\r\n");
+
+    serial::write("ddc capabilities=");
+    serial::write_hex64(boot_info.ddc_capabilities);
+    serial::write(" dpms supported=");
+    serial::write(boot_info.dpms_supported ? "yes states=" : "no states=");
+    serial::write_hex64(boot_info.dpms_capabilities);
+    serial::write("\r\n");
+
+    if (report.hdr.present) {
+        serial::write("hdr static metadata present eotf_flags=");
+        serial::write_hex64(report.hdr.eotf_flags);
+        serial::write(" pq=");
+        serial::write(hcpp::display::hdr_eotf_pq_supported(report.hdr.eotf_flags) ? "yes" : "no");
+        serial::write(" hlg=");
+        serial::write_line(hcpp::display::hdr_eotf_hlg_supported(report.hdr.eotf_flags) ? "yes" : "no");
+    } else {
+        serial::write_line("hdr static metadata not present in readable EDID blocks");
+    }
+
+    return report;
+}
+
+void append_monitor_line(hcpp::TextWriter<96>& line, const MonitorReport& report) noexcept {
+    line.append("MONITOR ");
+    if (!report.edid_available) {
+        line.append("EDID UNAVAILABLE");
+        return;
+    }
+    if (report.edid.monitor_name[0] != '\0') {
+        line.append(report.edid.monitor_name);
+    } else {
+        line.append(report.edid.manufacturer);
+        line.append(" PRODUCT ");
+        line.append_hex32(report.edid.product_code);
+    }
+}
+
+void append_technical_line(hcpp::TextWriter<96>& line, const MonitorReport& report) noexcept {
+    if (!report.edid_available) {
+        line.append("VBE DDC READ FAILED");
+        return;
+    }
+    line.append(report.edid.manufacturer);
+    line.append(" EDID ");
+    line.append_dec32(report.edid.version);
+    line.append(".");
+    line.append_dec32(report.edid.revision);
+    line.append(" YEAR ");
+    line.append_dec32(report.edid.manufacture_year);
+    line.append(" SIZE ");
+    line.append_dec32(report.edid.width_cm);
+    line.append("X");
+    line.append_dec32(report.edid.height_cm);
+    line.append("CM");
+}
+
+void append_hdr_line(hcpp::TextWriter<96>& line, const MonitorReport& report) noexcept {
+    if (!report.hdr.present) {
+        line.append("HDR METADATA NOT FOUND");
+        return;
+    }
+    line.append("HDR EOTF PQ ");
+    line.append(hcpp::display::hdr_eotf_pq_supported(report.hdr.eotf_flags) ? "YES" : "NO");
+    line.append(" HLG ");
+    line.append(hcpp::display::hdr_eotf_hlg_supported(report.hdr.eotf_flags) ? "YES" : "NO");
+}
+
 } // namespace
 
 extern "C" void hype_kernel_main(BootInfo* boot_info) noexcept {
@@ -48,6 +187,7 @@ extern "C" void hype_kernel_main(BootInfo* boot_info) noexcept {
     }
 
     write_boot_info(*boot_info);
+    const MonitorReport monitor = analyze_monitor(*boot_info);
 
     const bool has_framebuffer =
         (boot_info->flags & 1U) != 0 &&
@@ -84,11 +224,12 @@ extern "C" void hype_kernel_main(BootInfo* boot_info) noexcept {
     const hcpp::u32 panel_color = framebuffer.encode_rgb(4, 10, 28);
     const hcpp::u32 title_color = framebuffer.encode_rgb(240, 250, 255);
     const hcpp::u32 accent_color = framebuffer.encode_rgb(0, 220, 255);
+    const hcpp::u32 muted_color = framebuffer.encode_rgb(170, 205, 225);
 
-    const hcpp::u32 panel_width = framebuffer.width() > 560 ? 560 : framebuffer.width() - 20;
-    const hcpp::u32 panel_height = 150;
+    const hcpp::u32 panel_width = framebuffer.width() > 780 ? 780 : framebuffer.width() - 20;
+    const hcpp::u32 panel_height = 285;
     const hcpp::u32 panel_x = (framebuffer.width() - panel_width) / 2;
-    const hcpp::u32 panel_y = framebuffer.height() / 3;
+    const hcpp::u32 panel_y = framebuffer.height() / 4;
 
     framebuffer.fill_rect(panel_x, panel_y, panel_width, panel_height, panel_color);
     framebuffer.fill_rect(panel_x, panel_y, panel_width, 4, accent_color);
@@ -96,19 +237,50 @@ extern "C" void hype_kernel_main(BootInfo* boot_info) noexcept {
     hcpp::graphics::draw_text(
         framebuffer,
         panel_x + 28,
-        panel_y + 24,
+        panel_y + 18,
         "HYPEAI OS",
         title_color,
-        5);
+        4);
 
     hcpp::graphics::draw_text(
         framebuffer,
         panel_x + 30,
-        panel_y + 88,
+        panel_y + 62,
         "BOOT OK  HCPP ACTIVE",
         accent_color,
         2);
 
+    hcpp::TextWriter<96> line;
+    append_monitor_line(line, monitor);
+    hcpp::graphics::draw_text(framebuffer, panel_x + 30, panel_y + 102, line.view(), title_color, 2);
+
+    line.clear();
+    append_technical_line(line, monitor);
+    hcpp::graphics::draw_text(framebuffer, panel_x + 30, panel_y + 138, line.view(), muted_color, 1);
+
+    line.clear();
+    append_hdr_line(line, monitor);
+    hcpp::graphics::draw_text(framebuffer, panel_x + 30, panel_y + 160, line.view(), accent_color, 1);
+
+    hcpp::graphics::draw_text(
+        framebuffer,
+        panel_x + 30,
+        panel_y + 182,
+        "COLORSPACE SRGB VBE SCANOUT",
+        muted_color,
+        1);
+
+    hcpp::graphics::draw_text(
+        framebuffer,
+        panel_x + 30,
+        panel_y + 204,
+        "HDR SIGNALING NEEDS NATIVE GPU DRIVER",
+        muted_color,
+        1);
+
+    serial::write("preferred colorspace=");
+    serial::write_line(hcpp::display::color_space_name(hcpp::display::ColorSpace::Srgb));
+    serial::write_line("HDR colorspace activation is not possible through legacy VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
     serial::write_line("HypeAICode++ runtime active");
     halt_forever();

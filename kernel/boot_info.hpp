@@ -3,7 +3,7 @@
 #include "hcpp/types.hpp"
 
 constexpr hcpp::u32 HYPEBOOT_MAGIC = 0x48595045;
-constexpr hcpp::u32 HYPEBOOT_VERSION = 1;
+constexpr hcpp::u32 HYPEBOOT_VERSION = 2;
 
 struct BootInfo {
     hcpp::u32 magic;
@@ -21,7 +21,14 @@ struct BootInfo {
     hcpp::u8 blue_mask_size;
     hcpp::u8 flags;
     hcpp::u16 vbe_mode;
-    hcpp::u16 reserved;
+    hcpp::u16 reserved0;
+    hcpp::u32 edid_physical;
+    hcpp::u8 edid_blocks;
+    hcpp::u8 ddc_capabilities;
+    hcpp::u8 edid_extension_count;
+    hcpp::u8 dpms_capabilities;
+    hcpp::u8 dpms_supported;
+    hcpp::u8 reserved1[23];
 } __attribute__((packed));
 
-static_assert(sizeof(BootInfo) == 32);
+static_assert(sizeof(BootInfo) == 64);

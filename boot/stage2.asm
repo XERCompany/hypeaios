@@ -8,6 +8,7 @@ PAGE_TABLES      equ 0x00070000
 STACK_TOP        equ 0x00090000
 BOOT_INFO_ADDR   equ 0x00005000
 VBE_MODE_INFO    equ 0x00005100
+EDID_BUFFER      equ 0x00005200
 VBE_MODE         equ 0x0118
 BOOT_MAGIC       equ 0x48595045
 
@@ -28,6 +29,8 @@ start:
 
     call load_kernel
     call init_boot_info
+    call init_edid
+    call init_dpms
     call init_vbe
     call enable_a20
 
@@ -67,14 +70,93 @@ load_kernel:
 
 init_boot_info:
     mov dword [BOOT_INFO_ADDR + 0], BOOT_MAGIC
-    mov dword [BOOT_INFO_ADDR + 4], 1
-    xor eax, eax
-    mov dword [BOOT_INFO_ADDR + 8], eax
-    mov dword [BOOT_INFO_ADDR + 12], eax
-    mov dword [BOOT_INFO_ADDR + 16], eax
-    mov dword [BOOT_INFO_ADDR + 20], eax
-    mov dword [BOOT_INFO_ADDR + 24], eax
-    mov dword [BOOT_INFO_ADDR + 28], eax
+    mov dword [BOOT_INFO_ADDR + 4], 2
+    mov dword [BOOT_INFO_ADDR + 32], EDID_BUFFER
+
+    mov di, BOOT_INFO_ADDR + 8
+    xor ax, ax
+    mov cx, 12
+    rep stosw
+
+    mov di, BOOT_INFO_ADDR + 36
+    mov cx, 14
+    rep stosw
+    ret
+
+init_edid:
+    pusha
+
+    xor ax, ax
+    mov es, ax
+    mov di, EDID_BUFFER
+    mov cx, 256
+    rep stosw
+
+    xor cx, cx
+    mov es, cx
+    xor di, di
+    xor bx, bx
+    mov ax, 0x4F15
+    int 0x10
+    cmp ax, 0x004F
+    jne .done
+
+    mov [BOOT_INFO_ADDR + 37], bl
+    mov byte [edid_block_index], 0
+    mov byte [edid_extension_limit], 0
+
+.read_block:
+    movzx dx, byte [edid_block_index]
+    mov ax, dx
+    shl ax, 7
+    add ax, EDID_BUFFER
+    mov di, ax
+    xor cx, cx
+    mov es, cx
+    mov ax, 0x4F15
+    mov bx, 0x0001
+    int 0x10
+    cmp ax, 0x004F
+    jne .done
+
+    inc byte [BOOT_INFO_ADDR + 36]
+    cmp byte [edid_block_index], 0
+    jne .next_block
+
+    mov al, [EDID_BUFFER + 126]
+    mov [BOOT_INFO_ADDR + 38], al
+    cmp al, 3
+    jbe .limit_ready
+    mov al, 3
+.limit_ready:
+    mov [edid_extension_limit], al
+
+.next_block:
+    inc byte [edid_block_index]
+    mov al, [edid_block_index]
+    cmp al, [edid_extension_limit]
+    jbe .read_block
+
+.done:
+    popa
+    ret
+
+init_dpms:
+    pusha
+
+    xor cx, cx
+    mov es, cx
+    xor di, di
+    xor bx, bx
+    mov ax, 0x4F10
+    int 0x10
+    cmp ax, 0x004F
+    jne .done
+
+    mov byte [BOOT_INFO_ADDR + 40], 1
+    mov [BOOT_INFO_ADDR + 39], bh
+.done:
+    popa
     ret
 
 init_vbe:
@@ -189,6 +271,8 @@ gdt_descriptor:
     dd gdt_start
 
 boot_drive db 0
+edid_block_index db 0
+edid_extension_limit db 0
 loading_msg db "HypeBoot stage2: loading HypeCore", 13, 10, 0
 disk_error_msg db "HypeBoot stage2: kernel read failed", 13, 10, 0
 
@@ -227,7 +311,7 @@ protected_mode_entry:
     loop .fill_pd
 
     mov eax, cr4
-    or eax, 1 << 5
+    or eax, (1 << 5) | (1 << 9) | (1 << 10)
     mov cr4, eax
 
     mov eax, PAGE_TABLES

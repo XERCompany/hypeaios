@@ -14,18 +14,18 @@ Target: x86_64 legacy BIOS, no Linux or existing bootloader in the target path.
 1. BIOS loads Stage 1 to physical address `0x7C00` and jumps to it in 16-bit real mode.
 2. Stage 1 uses BIOS INT 13h extensions to load Stage 2 to `0x7E00`.
 3. Stage 2 loads the kernel to physical address `0x10000`.
-4. Stage 2 queries VBE mode information, selects mode `0x118` with a linear framebuffer, and stores display data in the boot-info structure at physical `0x5000`.
+4. Stage 2 queries VBE/DDC EDID data, captures VBE/PM capabilities, selects VBE mode `0x118` with a linear framebuffer, and stores display data in the boot-info structure at physical `0x5000`.
 5. Stage 2 enables A20, installs a temporary GDT, builds identity-mapped page tables for the first 4 GiB, enters protected mode, enables PAE and long mode, then jumps to the kernel entry point.
 6. The kernel starts in 64-bit long mode with interrupts disabled and `RDI` pointing to the boot-info structure.
 
-## Boot-info structure v1
+## Boot-info structure v2
 
-Physical address: `0x5000`; size: 32 bytes; packing: packed/little-endian.
+Physical address: `0x5000`; size: 64 bytes; packing: packed/little-endian. EDID blocks are stored separately at physical `0x5200`, up to four 128-byte blocks.
 
 | Offset | Type | Meaning |
 |---:|---|---|
 | 0 | u32 | magic `0x48595045` |
-| 4 | u32 | protocol version, currently `1` |
+| 4 | u32 | protocol version, currently `2` |
 | 8 | u32 | physical linear framebuffer address |
 | 12 | u32 | bytes per scanline (`pitch`) |
 | 16 | u16 | width in pixels |
@@ -40,6 +40,13 @@ Physical address: `0x5000`; size: 32 bytes; packing: packed/little-endian.
 | 27 | u8 | flags; bit 0 means framebuffer present |
 | 28 | u16 | selected VBE mode |
 | 30 | u16 | reserved |
+| 32 | u32 | physical address of EDID block storage |
+| 36 | u8 | number of EDID blocks successfully read |
+| 37 | u8 | VBE/DDC capability bits |
+| 38 | u8 | EDID extension count from block 0 |
+| 39 | u8 | VBE/PM supported DPMS states |
+| 40 | u8 | nonzero when VBE/PM is supported |
+| 41-63 | bytes | reserved |
 
 ## Current limitations
 
@@ -47,5 +54,7 @@ Physical address: `0x5000`; size: 32 bytes; packing: packed/little-endian.
 - VBE mode `0x118` is fixed at 1024x768; dynamic mode enumeration is a next milestone.
 - Both 24-bpp and 32-bpp direct-color framebuffers are accepted by the kernel.
 - The kernel is loaded at a fixed low physical address and is not relocatable.
-- E820 memory map capture, DPMS capability capture, and ELF loading are planned for next milestones.
+- E820 memory map capture and ELF loading are planned for next milestones.
+- EDID block reading and VBE/PM capability capture are implemented.
+- Runtime DPMS calls are unavailable after long mode because BIOS services cannot be called directly; runtime monitor power control requires VM86 or native GPU/I2C drivers.
 - Monitor-internal controls such as brightness and input source require a future EDID/DDC/CI display service; they are not available through the linear framebuffer.
