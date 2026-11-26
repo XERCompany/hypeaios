@@ -1,26 +1,14 @@
 #include "kernel/codecapps/image/png.h"
 #include "hcpp/crc32.h"
+#include "kernel/codecapps/image/imageutil.h"
 #include "kernel/codecapps/image/inflate.h"
 #include "kernel/serial.hpp"
 
-namespace hype::codec {
+namespace hype::codec::image {
 
     namespace {
 
         const hcpp::u8 png_signature[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
-
-        hcpp::u32 read_be32(const hcpp::u8 *p) noexcept {
-            return (static_cast<hcpp::u32>(p[0]) << 24) |
-                   (static_cast<hcpp::u32>(p[1]) << 16) |
-                   (static_cast<hcpp::u32>(p[2]) << 8) | static_cast<hcpp::u32>(p[3]);
-        }
-
-        void write_be32(hcpp::u8 *p, hcpp::u32 value) noexcept {
-            p[0] = static_cast<hcpp::u8>((value >> 24) & 0xFF);
-            p[1] = static_cast<hcpp::u8>((value >> 16) & 0xFF);
-            p[2] = static_cast<hcpp::u8>((value >> 8) & 0xFF);
-            p[3] = static_cast<hcpp::u8>(value & 0xFF);
-        }
 
         bool type_eq(const hcpp::u8 *p, const char *name) noexcept {
             return p[0] == static_cast<hcpp::u8>(name[0]) &&
@@ -138,7 +126,7 @@ namespace hype::codec {
                     info.width = read_be32(data);
                     info.height = read_be32(data + 4);
                     info.color_type = data[9];
-                    if (info.width == 0 || info.height == 0 || data[8] != 8 ||
+                    if (!dims_valid(info.width, info.height) || data[8] != 8 ||
                         data[10] != 0 || data[11] != 0 || data[12] != 0)
                         return CodecStatus::Unsupported;
                     if (bytes_per_pixel(info.color_type) == 0)
@@ -161,52 +149,43 @@ namespace hype::codec {
         }
 
         void emit_pixels(const PngInfo &info, const hcpp::u8 *image,
-                         hcpp::u8 *pixels) noexcept {
+                         FrameBuf &frame) noexcept {
             const hcpp::size_t bpp = bytes_per_pixel(info.color_type);
             const hcpp::size_t count = static_cast<hcpp::size_t>(info.width) * info.height;
             for (hcpp::size_t i = 0; i < count; ++i) {
                 const hcpp::u8 *src = image + i * bpp;
-                hcpp::u8 *dst = pixels + i * 4;
+                hcpp::u8 r = src[0];
+                hcpp::u8 g = src[0];
+                hcpp::u8 b = src[0];
+                hcpp::u8 a = 0xFF;
                 switch (info.color_type) {
-                    case 0:
-                        dst[0] = src[0];
-                        dst[1] = src[0];
-                        dst[2] = src[0];
-                        dst[3] = 0xFF;
-                        break;
                     case 3: {
                         const hcpp::size_t at = static_cast<hcpp::size_t>(src[0]) * 3;
                         if (at + 2 < info.palette_size) {
-                            dst[0] = info.palette[at];
-                            dst[1] = info.palette[at + 1];
-                            dst[2] = info.palette[at + 2];
+                            r = info.palette[at];
+                            g = info.palette[at + 1];
+                            b = info.palette[at + 2];
                         } else {
-                            dst[0] = 0;
-                            dst[1] = 0;
-                            dst[2] = 0;
+                            r = 0;
+                            g = 0;
+                            b = 0;
                         }
-                        dst[3] = 0xFF;
                         break;
                     }
                     case 4:
-                        dst[0] = src[0];
-                        dst[1] = src[0];
-                        dst[2] = src[0];
-                        dst[3] = src[1];
+                        a = src[1];
                         break;
                     case 2:
-                        dst[0] = src[0];
-                        dst[1] = src[1];
-                        dst[2] = src[2];
-                        dst[3] = 0xFF;
+                        g = src[1];
+                        b = src[2];
                         break;
-                    default:
-                        dst[0] = src[0];
-                        dst[1] = src[1];
-                        dst[2] = src[2];
-                        dst[3] = src[3];
+                    case 6:
+                        g = src[1];
+                        b = src[2];
+                        a = src[3];
                         break;
                 }
+                put_pixel(frame, static_cast<hcpp::u32>(i), r, g, b, a);
             }
         }
 
@@ -253,14 +232,9 @@ namespace hype::codec {
         const hcpp::size_t bpp = bytes_per_pixel(info.color_type);
         const hcpp::size_t stride = static_cast<hcpp::size_t>(info.width) * bpp;
         const hcpp::u64 raw_size64 = static_cast<hcpp::u64>(info.height) * (stride + 1);
-        const hcpp::u64 image_size64 = static_cast<hcpp::u64>(info.height) * stride;
-        const hcpp::u64 pixel_size64 =
-            static_cast<hcpp::u64>(info.width) * info.height * 4;
-        if (raw_size64 > 0x7FFFFFFFu || pixel_size64 > 0x7FFFFFFFu)
-            return CodecStatus::NoSpace;
+        if (raw_size64 > 0x7FFFFFFFu) return CodecStatus::NoSpace;
         const hcpp::size_t raw_size = static_cast<hcpp::size_t>(raw_size64);
-        const hcpp::size_t image_size = static_cast<hcpp::size_t>(image_size64);
-        const hcpp::size_t pixel_size = static_cast<hcpp::size_t>(pixel_size64);
+        const hcpp::size_t image_size = static_cast<hcpp::size_t>(info.height) * stride;
         hcpp::u8 *idat = static_cast<hcpp::u8 *>(arena_alloc(arena, info.idat_total, 8));
         hcpp::u8 *raw = static_cast<hcpp::u8 *>(arena_alloc(arena, raw_size, 8));
         hcpp::u8 *image = static_cast<hcpp::u8 *>(arena_alloc(arena, image_size, 8));
@@ -279,18 +253,9 @@ namespace hype::codec {
             const hcpp::u8 *prev = y == 0 ? nullptr : dst - stride;
             if (!unfilter_row(dst, prev, stride, src[0], bpp)) return CodecStatus::BadInput;
         }
-        hcpp::u8 *pixels = frame->data;
-        if (pixels == nullptr || frame->capacity < pixel_size) {
-            pixels = static_cast<hcpp::u8 *>(arena_alloc(arena, pixel_size, 8));
-            if (pixels == nullptr) return CodecStatus::NoSpace;
-        }
-        emit_pixels(info, image, pixels);
-        frame->width = info.width;
-        frame->height = info.height;
-        frame->pitch = info.width * 4;
-        frame->format = video::PixelFormat::RGB32;
-        frame->data = pixels;
-        frame->size = pixel_size;
+        const CodecStatus prepared = frame_prepare(frame, info.width, info.height, arena);
+        if (prepared != CodecStatus::Ok) return prepared;
+        emit_pixels(info, image, *frame);
         return CodecStatus::Ok;
     }
 
@@ -298,35 +263,20 @@ namespace hype::codec {
                            hcpp::size_t &written, Arena &arena) noexcept {
         written = 0;
         const FrameBuf *frame = static_cast<const FrameBuf *>(input);
-        if (frame == nullptr || frame->data == nullptr || frame->width == 0 ||
-            frame->height == 0)
-            return CodecStatus::BadInput;
-        hcpp::u8 color_type = 0;
-        hcpp::size_t bpp = 0;
-        if (frame->format == video::PixelFormat::RGB24) {
-            color_type = 2;
-            bpp = 3;
-        } else if (frame->format == video::PixelFormat::RGB32) {
-            color_type = 6;
-            bpp = 4;
-        } else {
-            return CodecStatus::Unsupported;
-        }
+        if (!frame_source_valid(frame)) return CodecStatus::BadInput;
+        const hcpp::u8 color_type = frame->format == video::PixelFormat::RGB32 ? 6 : 2;
+        const hcpp::size_t bpp = color_type == 6 ? 4 : 3;
         const hcpp::size_t stride = static_cast<hcpp::size_t>(frame->width) * bpp;
+        const hcpp::size_t pitch = source_pitch(*frame);
         const hcpp::u64 raw_size64 = static_cast<hcpp::u64>(frame->height) * (stride + 1);
         if (raw_size64 > 0x7FFFFFFFu) return CodecStatus::NoSpace;
         const hcpp::size_t raw_size = static_cast<hcpp::size_t>(raw_size64);
-        const hcpp::u64 span =
-            static_cast<hcpp::u64>(frame->height - 1) * frame->pitch + stride;
-        const hcpp::u64 available = frame->size != 0 ? frame->size : frame->capacity;
-        if (frame->pitch < stride || span > available) return CodecStatus::BadInput;
         hcpp::u8 *raw = static_cast<hcpp::u8 *>(arena_alloc(arena, raw_size, 8));
         if (raw == nullptr) return CodecStatus::NoSpace;
         for (hcpp::u32 y = 0; y < frame->height; ++y) {
             hcpp::u8 *dst = raw + static_cast<hcpp::size_t>(y) * (stride + 1);
             dst[0] = 0;
-            copy_bytes(dst + 1, frame->data + static_cast<hcpp::size_t>(y) * frame->pitch,
-                       stride);
+            copy_bytes(dst + 1, frame->data + static_cast<hcpp::size_t>(y) * pitch, stride);
         }
         hcpp::size_t pos = 0;
         if (!put_bytes(output, output_cap, pos, png_signature, 8))
@@ -478,4 +428,4 @@ namespace hype::codec {
         return inflate_ok && decode_ok && encode_ok;
     }
 
-}  // namespace hype::codec
+}  // namespace hype::codec::image

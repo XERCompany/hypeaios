@@ -1,15 +1,24 @@
 NASM ?= nasm
-CXX ?= g++
-CC ?= clang
-LD ?= ld
+TRIPLE := x86_64-unknown-none-elf
+CXX ?= clang++
+ifeq ($(origin CXX),default)
+CXX := clang++
+endif
+ifeq ($(origin CC),default)
+CC := clang
+endif
+ifeq ($(origin LD),default)
+LD := $(CXX) --target=$(TRIPLE) -fuse-ld=lld
+endif
+LD ?= $(CXX) --target=$(TRIPLE) -fuse-ld=lld
 BUILD := build
 
-CXXFLAGS := -I$(BUILD) -std=c++20 -Os -ffreestanding -fno-exceptions -fno-rtti \
+CXXFLAGS := -I$(BUILD) --target=$(TRIPLE) -std=c++20 -Os -ffreestanding -fno-exceptions -fno-rtti \
 	-fno-use-cxa-atexit -fno-threadsafe-statics -fno-stack-protector \
 	-fno-pic -fno-pie -mno-red-zone -m64 -mcmodel=large -Wall -Wextra -I. \
 	-Ithird_party/sqlite
 
-CFLAGS := --target=x86_64-unknown-none-elf -Os -ffreestanding -fno-builtin \
+CFLAGS := --target=$(TRIPLE) -Os -ffreestanding -fno-builtin \
 	-fno-stack-protector -fno-pic -fno-pie -mno-red-zone -m64 -mcmodel=large \
 	-w -isystem third_party/sqlite/freestanding -Ithird_party/sqlite \
 	-DSQLITE_OS_OTHER=1 -DSQLITE_THREADSAFE=0 -DNDEBUG \

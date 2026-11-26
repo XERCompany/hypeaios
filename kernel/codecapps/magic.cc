@@ -1,6 +1,18 @@
 #include "kernel/codecapps/arena.h"
+#include "kernel/codecapps/audio/adpcm.h"
+#include "kernel/codecapps/audio/flac.h"
+#include "kernel/codecapps/audio/mp3.h"
 #include "kernel/codecapps/codec.h"
+#include "kernel/codecapps/image/bmp.h"
+#include "kernel/codecapps/image/exif.h"
+#include "kernel/codecapps/image/gif.h"
+#include "kernel/codecapps/image/ico.h"
+#include "kernel/codecapps/image/jpeg.h"
 #include "kernel/codecapps/image/png.h"
+#include "kernel/codecapps/image/tiff.h"
+#include "kernel/codecapps/image/pnm.h"
+#include "kernel/codecapps/image/qoi.h"
+#include "kernel/codecapps/image/tga.h"
 #include "kernel/codecapps/registry.h"
 
 namespace hype::codec {
@@ -39,7 +51,7 @@ namespace hype::codec {
         }
 
         bool probe_tga(const hcpp::u8 *b, hcpp::size_t n) noexcept {
-            return n >= 18 && str_eq_at(b, n, n - 18, "TRUEVISION-XFILE.");
+            return image::tga_probe(b, n);
         }
 
         bool probe_qoi(const hcpp::u8 *b, hcpp::size_t n) noexcept {
@@ -151,22 +163,29 @@ namespace hype::codec {
         }
 
         const CodecDescriptor builtin_descriptors[] = {
-            {"bmp", CodecKind::Image, CodecId::Bmp, 0, probe_bmp, codec_stub_decode,
-             codec_stub_encode},
-            {"pnm", CodecKind::Image, CodecId::Pnm, 0, probe_pnm, codec_stub_decode,
-             codec_stub_encode},
-            {"tga", CodecKind::Image, CodecId::Tga, 0, probe_tga, codec_stub_decode,
-             codec_stub_encode},
-            {"qoi", CodecKind::Image, CodecId::Qoi, 0, probe_qoi, codec_stub_decode,
-             codec_stub_encode},
-            {"gif", CodecKind::Image, CodecId::Gif, 0, probe_gif, codec_stub_decode,
-             codec_stub_encode},
-            {"jpeg", CodecKind::Image, CodecId::Jpeg, 0, probe_jpeg, codec_stub_decode,
-             codec_stub_encode},
-            {"ico", CodecKind::Image, CodecId::Ico, 0, probe_ico, codec_stub_decode,
-             codec_stub_encode},
-            {"tiff", CodecKind::Image, CodecId::Tiff, 0, probe_tiff, codec_stub_decode,
-             codec_stub_encode},
+            {"bmp", CodecKind::Image, CodecId::Bmp,
+             codec_flag_decode | codec_flag_encode, probe_bmp, image::bmp_decode,
+             image::bmp_encode},
+            {"pnm", CodecKind::Image, CodecId::Pnm,
+             codec_flag_decode | codec_flag_encode, probe_pnm, image::pnm_decode,
+             image::pnm_encode},
+            {"tga", CodecKind::Image, CodecId::Tga,
+             codec_flag_decode | codec_flag_encode, probe_tga, image::tga_decode,
+             image::tga_encode},
+            {"qoi", CodecKind::Image, CodecId::Qoi,
+             codec_flag_decode | codec_flag_encode, probe_qoi, image::qoi_decode,
+             image::qoi_encode},
+            {"png", CodecKind::Image, CodecId::Png,
+             codec_flag_decode | codec_flag_encode, probe_png, image::png_decode,
+             image::png_encode},
+            {"gif", CodecKind::Image, CodecId::Gif, codec_flag_decode, probe_gif,
+             image::gif_decode, codec_stub_encode},
+            {"jpeg", CodecKind::Image, CodecId::Jpeg, codec_flag_decode, probe_jpeg,
+             image::jpeg_decode, codec_stub_encode},
+            {"ico", CodecKind::Image, CodecId::Ico, codec_flag_decode, probe_ico,
+             image::ico_decode, codec_stub_encode},
+            {"tiff", CodecKind::Image, CodecId::Tiff, codec_flag_decode, probe_tiff,
+             image::tiff_decode, codec_stub_encode},
             {"psd", CodecKind::Image, CodecId::Psd, 0, probe_psd, codec_stub_decode,
              codec_stub_encode},
             {"webp", CodecKind::Image, CodecId::WebP, 0, probe_webp, codec_stub_decode,
@@ -179,22 +198,22 @@ namespace hype::codec {
              codec_stub_encode},
             {"alac", CodecKind::Audio, CodecId::Alac, 0, probe_alac, codec_stub_decode,
              codec_stub_encode},
-            {"exif", CodecKind::Image, CodecId::Exif, 0, probe_exif, codec_stub_decode,
-             codec_stub_encode},
+            {"exif", CodecKind::Image, CodecId::Exif, codec_flag_decode, probe_exif,
+             image::exif_decode, codec_stub_encode},
             {"yuv", CodecKind::Image, CodecId::RawYuv, 0, probe_rawyuv, codec_stub_decode,
              codec_stub_encode},
-            {"adpcm", CodecKind::Audio, CodecId::Adpcm, 0, probe_adpcm, codec_stub_decode,
-             codec_stub_encode},
+            {"adpcm", CodecKind::Audio, CodecId::Adpcm, codec_flag_decode, probe_adpcm,
+             audio_adpcm_decode, codec_stub_encode},
             {"wav", CodecKind::Audio, CodecId::Wav, 0, probe_wav, codec_stub_decode,
              codec_stub_encode},
             {"vorbis", CodecKind::Audio, CodecId::Vorbis, 0, probe_vorbis, codec_stub_decode,
              codec_stub_encode},
             {"opus", CodecKind::Audio, CodecId::Opus, 0, probe_opus, codec_stub_decode,
              codec_stub_encode},
-            {"flac", CodecKind::Audio, CodecId::Flac, 0, probe_flac, codec_stub_decode,
-             codec_stub_encode},
-            {"mp3", CodecKind::Audio, CodecId::Mp3, 0, probe_mp3, codec_stub_decode,
-             codec_stub_encode},
+            {"flac", CodecKind::Audio, CodecId::Flac, codec_flag_decode, probe_flac,
+             audio_flac_decode, codec_stub_encode},
+            {"mp3", CodecKind::Audio, CodecId::Mp3, codec_flag_decode, probe_mp3,
+             audio_mp3_decode, codec_stub_encode},
             {"aac", CodecKind::Audio, CodecId::Aac, 0, probe_aac, codec_stub_decode,
              codec_stub_encode},
             {"ogg", CodecKind::Container, CodecId::Ogg, 0, probe_ogg, codec_stub_decode,
@@ -268,12 +287,6 @@ namespace hype::codec {
         for (hcpp::size_t i = 0; i < sizeof(builtin_descriptors) / sizeof(builtin_descriptors[0]);
              ++i)
             codec_register(builtin_descriptors[i]);
-        {
-            static const CodecDescriptor png = {
-                "png", CodecKind::Image, CodecId::Png,
-                codec_flag_decode | codec_flag_encode, probe_png, png_decode, png_encode};
-            codec_register(png);
-        }
     }
 
     bool codec_probe_selftest() noexcept {

@@ -1,6 +1,6 @@
 #include "kernel/codecapps/image/inflate.h"
 
-namespace hype::codec {
+namespace hype::codec::image {
 
     namespace {
 
@@ -353,4 +353,4 @@ namespace hype::codec {
         return opos;
     }
 
-}  // namespace hype::codec
+}  // namespace hype::codec::image

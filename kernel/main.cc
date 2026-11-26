@@ -11,11 +11,15 @@
 #include "hcpp/types.hpp"
 #include "kernel/audio/audio-serivce.h"
 #include "kernel/boot_info.hpp"
+#include "kernel/codecapps/audio/selftest.h"
+#include "kernel/codecapps/image/image.h"
+#include "kernel/codecapps/image/jpeg.h"
 #include "kernel/codecapps/image/png.h"
 #include "kernel/codecapps/registry.h"
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/db/hypedb.hpp"
+#include "kernel/hello/hello.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
@@ -279,10 +283,16 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_line(hype::codec::codec_probe_selftest() ? "ok" : "fail");
     serial::write("codec arena=");
     serial::write_line(hype::codec::codec_arena_selftest() ? "ok" : "fail");
+    const bool image_selftest_ok = hype::codec::image::image_simple_selftest();
+    serial::write("image simple selftest=");
+    serial::write_line(image_selftest_ok ? "ok" : "fail");
+    serial::write("jpeg decode=");
+    serial::write_line(hype::codec::image::jpeg_selftest() ? "ok" : "fail");
     hype::codec::codec_report();
-    const bool png_selftest_ok = hype::codec::png_selftest();
+    const bool png_selftest_ok = hype::codec::image::png_selftest();
     serial::write("png selftest=");
     serial::write_line(png_selftest_ok ? "ok" : "fail");
+    hype::codec::audio_codec_selftest();
     serial::write("memory free=");
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_free_bytes / (1024 * 1024)));
     serial::write("MB e820=");
@@ -333,9 +343,13 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         serial::write_line("sqlite=ok");
         serial::write("db selftest=");
         serial::write_line(hype::db::db_selftest() ? "ok" : "failed");
+        const bool hello_ok = hype::hello::hello_selftest();
+        serial::write("hello selftest=");
+        serial::write_line(hello_ok ? "ok" : "failed");
     } else {
         serial::write("sqlite=fail ");
         serial::write_line(db_error);
+        serial::write_line("hello selftest=skipped no-db");
     }
     const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
     hcpp::u32 cyrillic_found = 0;

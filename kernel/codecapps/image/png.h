@@ -1,9 +1,8 @@
 #pragma once
 
-#include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/codec.h"
 
-namespace hype::codec {
+namespace hype::codec::image {
 
     CodecStatus png_decode(const hcpp::u8 *input, hcpp::size_t input_size, void *output,
                            Arena &arena) noexcept;
@@ -11,4 +10,4 @@ namespace hype::codec {
                            hcpp::size_t &written, Arena &arena) noexcept;
     bool png_selftest() noexcept;
 
-}  // namespace hype::codec
+}  // namespace hype::codec::image

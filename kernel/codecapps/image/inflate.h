@@ -2,7 +2,7 @@
 
 #include "hcpp/types.hpp"
 
-namespace hype::codec {
+namespace hype::codec::image {
 
     bool inflate_deflate(const hcpp::u8 *input, hcpp::size_t input_size,
                          hcpp::size_t &consumed, hcpp::u8 *output,
@@ -19,4 +19,4 @@ namespace hype::codec {
     hcpp::size_t zlib_stored(const hcpp::u8 *input, hcpp::size_t input_size,
                              hcpp::u8 *output, hcpp::size_t output_cap) noexcept;
 
-}  // namespace hype::codec
+}  // namespace hype::codec::image
