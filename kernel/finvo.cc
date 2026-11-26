@@ -1,21 +1,34 @@
 #include "kernel/finvo.h"
 namespace hype::invoke {
-    void invocation_reset(Invocation& invocation) noexcept { invocation = {}; }
-    bool invocation_begin(Invocation& invocation, hcpp::u32 operation, hcpp::u32 argument) noexcept {
-        if (invocation.state == InvocationState::Pending) return false;
-        invocation.operation = operation;
-        invocation.argument = argument;
-        invocation.result = 0;
-        invocation.state = InvocationState::Pending;
-        return true;
-    }
-    void invocation_complete(Invocation& invocation, hcpp::u32 result) noexcept {
-        if (invocation.state == InvocationState::Pending) {
-            invocation.result = result;
-            invocation.state = InvocationState::Completed;
-        }
-    }
-    void invocation_fail(Invocation& invocation) noexcept {
-        if (invocation.state == InvocationState::Pending) invocation.state = InvocationState::Failed;
-    }
-}  // namespace hype::invoke
+void invocation_reset(Invocation &invocation) noexcept { invocation = {}; }
+bool invocation_begin(Invocation &invocation, hcpp::u32 operation,
+                      hcpp::u32 argument) noexcept {
+  if (invocation.state == InvocationState::Pending)
+    return false;
+  invocation.operation = operation;
+  invocation.argument = argument;
+  invocation.result = 0;
+  invocation.state = InvocationState::Pending;
+  return true;
+}
+void invocation_complete(Invocation &invocation, hcpp::u32 result) noexcept {
+  if (invocation.state == InvocationState::Pending) {
+    invocation.result = result;
+    invocation.state = InvocationState::Completed;
+  }
+}
+void invocation_fail(Invocation &invocation) noexcept {
+  if (invocation.state == InvocationState::Pending)
+    invocation.state = InvocationState::Failed;
+}
+} // namespace hype::invoke
+
+namespace hype::invoke {
+bool invocation_pending(const Invocation &invocation) noexcept {
+  return invocation.state == InvocationState::Pending;
+}
+bool invocation_finished(const Invocation &invocation) noexcept {
+  return invocation.state == InvocationState::Completed ||
+         invocation.state == InvocationState::Failed;
+}
+} // namespace hype::invoke
