@@ -50,6 +50,16 @@ namespace hype::memory {
         }
 
         mark_range_used(0, 1024 * 1024);
+        if (boot_info.kernel_physical != 0 && boot_info.kernel_size != 0) {
+            mark_range_used(boot_info.kernel_physical, boot_info.kernel_size);
+        }
+        if (boot_info.e820_physical != 0 && boot_info.e820_entries != 0) {
+            mark_range_used(boot_info.e820_physical,
+                            static_cast<hcpp::u64>(boot_info.e820_entries) * sizeof(E820Entry));
+        }
+        if (boot_info.edid_physical != 0 && boot_info.edid_blocks != 0) {
+            mark_range_used(boot_info.edid_physical, static_cast<hcpp::u64>(boot_info.edid_blocks) * 128u);
+        }
         stats.free_bytes = static_cast<hcpp::u64>(count_free()) * page_size;
         stats.used_bytes = stats.usable_bytes > stats.free_bytes ? stats.usable_bytes - stats.free_bytes : 0;
         initialized = stats.free_bytes != 0;
