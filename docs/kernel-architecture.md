@@ -12,17 +12,16 @@ HypeCore is planned as a small capability-oriented microkernel. Hardware drivers
 
 ## Milestone state
 
-M1 proved the custom boot chain reaches x86_64 long mode. The current M2 prototype adds a freestanding HypeAICode++ kernel runtime, VBE linear framebuffer handoff, direct pixel/rectangle drawing and 5x7 framebuffer text output.
+M1 proved the custom boot chain reaches x86_64 long mode. The current prototype adds a freestanding HypeAICode++ kernel runtime, VBE framebuffer handoff, EDID monitor reporting, staged runtime startup, PCI scanning, ACPI discovery, E820-based physical memory allocation and active PIC/PIT/keyboard interrupt plumbing.
 
 ## Next implementation order
 
-1. Capture E820 memory map in Stage 2.
-2. Define a boot information structure passed to the kernel.
-3. Add exception handlers and an IDT.
-4. Implement physical memory allocation.
-5. Replace fixed kernel placement with a relocatable format.
-6. Add timer and keyboard interrupts.
-7. Implement context switching and ring 3 userspace.
+1. Replace fixed kernel placement with a relocatable format.
+2. Parse MADT and move from legacy PIC to APIC/x2APIC.
+3. Add kernel virtual memory and physical-page ownership metadata.
+4. Implement context switching and ring 3 userspace.
+5. Add HPET timekeeping and a keyboard scancode decoder.
+6. Implement PCI storage drivers and the first boot filesystem.
 
 
 ## Linux-inspired OS Core module pass
@@ -46,6 +45,14 @@ Linux references inspected: `include/linux/fs.h`, `include/linux/input.h`, `incl
 PCI support is split into configuration-space access, I/O/BAR helpers, capability-list parsing and MSI/MSI-X control. Chip identification is split by vendor family (`intel`, `qemu`, `virtio`) plus generic PCI class mapping.
 
 Linux/Windows-inspired primitives now include atomic/interlocked operations, spinlocks, mutexes, semaphores, wait queues, IRQ dispatch registration, syscall dispatch, thread priority metadata, kernel object handles and NTSTATUS-style error codes. They are architecture-level building blocks, not ABI-compatible clones of Linux or Windows.
+
+## Memory, ACPI and interrupt foundation
+
+The BIOS bootloader now captures the E820 memory map before leaving real mode. `kernel/memory/pmm` uses usable E820 regions to manage the first 128 MiB of physical memory through a bitmap allocator, reserves the first MiB for boot/kernel/BIOS data, supports contiguous page allocation and exposes allocation statistics. The runtime performs an allocate/free self-test during boot.
+
+`kernel/acpi` searches the RSDP in the EBDA and BIOS ROM area, validates checksums, parses either RSDT or XSDT entries, and records MADT/FADT table locations for later APIC and power-management drivers.
+
+`kernel/interrupts` installs a full 256-entry x86_64 IDT with assembly interrupt stubs, remaps the legacy PIC, initializes the PIT at 100 Hz, bridges keyboard IRQ1 scancodes into the input-event subsystem and enables IRQ0/IRQ1. QEMU validation confirms timer interrupts advance while the kernel is in long mode.
 
 ## Language direction
 

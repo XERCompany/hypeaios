@@ -9,6 +9,7 @@ STACK_TOP        equ 0x00090000
 BOOT_INFO_ADDR   equ 0x00005000
 VBE_MODE_INFO    equ 0x00005100
 EDID_BUFFER      equ 0x00005200
+E820_BUFFER      equ 0x00005500
 VBE_MODE         equ 0x0118
 BOOT_MAGIC       equ 0x48595045
 
@@ -29,6 +30,7 @@ start:
 
     call load_kernel
     call init_boot_info
+    call init_e820
     call init_edid
     call init_dpms
     call init_vbe
@@ -71,8 +73,6 @@ load_kernel:
 init_boot_info:
     mov dword [BOOT_INFO_ADDR + 0], BOOT_MAGIC
     mov dword [BOOT_INFO_ADDR + 4], 2
-    mov dword [BOOT_INFO_ADDR + 32], EDID_BUFFER
-
     mov di, BOOT_INFO_ADDR + 8
     xor ax, ax
     mov cx, 12
@@ -81,6 +81,43 @@ init_boot_info:
     mov di, BOOT_INFO_ADDR + 36
     mov cx, 14
     rep stosw
+    mov dword [BOOT_INFO_ADDR + 32], EDID_BUFFER
+    mov dword [BOOT_INFO_ADDR + 41], E820_BUFFER
+    mov dword [BOOT_INFO_ADDR + 48], KERNEL_LOAD_ADDR
+    mov dword [BOOT_INFO_ADDR + 52], KERNEL_SECTORS * 512
+    mov al, [boot_drive]
+    mov [BOOT_INFO_ADDR + 47], al
+
+    ret
+
+init_e820:
+    pushad
+
+    xor ax, ax
+    mov es, ax
+    mov di, E820_BUFFER
+    xor ebx, ebx
+    mov byte [BOOT_INFO_ADDR + 45], 0
+
+.next_entry:
+    mov eax, 0x0000E820
+    mov ecx, 20
+    mov edx, 0x534D4150
+    int 0x15
+    jc .done
+    cmp eax, 0x534D4150
+    jne .done
+
+    inc byte [BOOT_INFO_ADDR + 45]
+    add di, 20
+    cmp byte [BOOT_INFO_ADDR + 45], 32
+    jae .done
+
+    test ebx, ebx
+    jnz .next_entry
+
+.done:
+    popad
     ret
 
 init_edid:

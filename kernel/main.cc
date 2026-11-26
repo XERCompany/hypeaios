@@ -7,6 +7,7 @@
 #include "hcpp/types.hpp"
 #include "kernel/boot_info.hpp"
 #include "kernel/chips/chipset.h"
+#include "kernel/interrupts/idt.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
 
@@ -195,7 +196,7 @@ namespace {
 extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::initialize();
     hcpp::fonts::initialize_default_fonts();
-    const hype::runtime::RuntimeInfo runtime_info = hype::runtime::boot();
+    const hype::runtime::RuntimeInfo runtime_info = hype::runtime::boot(*boot_info);
     serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
     serial::write("core services running=");
     serial::write_line(runtime_info.core_started ? "yes" : "no");
@@ -213,6 +214,18 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         serial::write(" vendor=");
         serial::write_line(display_chip.vendor_name);
     }
+    serial::write("memory free=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_free_bytes / (1024 * 1024)));
+    serial::write("MB e820=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_e820_entries));
+    serial::write(" usable=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_usable_regions));
+    serial::write(" acpi=");
+    serial::write(runtime_info.acpi_present ? "yes" : "no");
+    serial::write(" tables=");
+    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.acpi_tables));
+    serial::write(" interrupts=");
+    serial::write_line(runtime_info.interrupts_ready ? "ready" : "failed");
     serial::write("font default=");
     serial::write(hcpp::fonts::default_font_name());
     serial::write(" registered=");
@@ -295,5 +308,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         "VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
     serial::write_line("HypeAICode++ runtime active");
+    const hcpp::u64 pit_start = hype::interrupts::pit_ticks();
+    hype::interrupts::pit_wait_ticks(10);
+    serial::write("pit ticks after 100ms=");
+    serial::write_dec32(static_cast<hcpp::u32>(hype::interrupts::pit_ticks() - pit_start));
+    serial::write(" interrupts active=yes\r\n");
     halt_forever();
 }

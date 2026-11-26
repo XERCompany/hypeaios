@@ -1,0 +1,99 @@
+#include "kernel/interrupts/idt.h"
+
+#include "kernel/functionemitkeys.h"
+#include "kernel/irq.h"
+#include "kernel/serial.hpp"
+
+extern "C" hcpp::uintptr_t isr_stub_table[];
+
+namespace hype::interrupts {
+    namespace {
+        IdtEntry entries[256];
+        bool initialized;
+        volatile hcpp::u64 ticks;
+        inline void outb(hcpp::u16 port, hcpp::u8 value) noexcept {
+            asm volatile("outb %0,%1" ::"a"(value), "Nd"(port));
+        }
+        inline hcpp::u8 inb(hcpp::u16 port) noexcept {
+            hcpp::u8 value;
+            asm volatile("inb %1,%0" : "=a"(value) : "Nd"(port));
+            return value;
+        }
+        void set_gate(hcpp::size_t index, hcpp::uintptr_t handler) noexcept {
+            entries[index] = {
+                static_cast<hcpp::u16>(handler),       0x18, 0, 0x8E, static_cast<hcpp::u16>(handler >> 16),
+                static_cast<hcpp::u32>(handler >> 32), 0};
+        }
+        struct IdtPointer {
+            hcpp::u16 limit;
+            hcpp::u64 base;
+        } __attribute__((packed));
+        void timer_handler(void*, hcpp::u32) noexcept { ticks = ticks + 1; }
+        void keyboard_handler(void*, hcpp::u32) noexcept {
+            const hcpp::u8 scan = inb(0x60);
+            input::emit_key_event(scan & 0x7F,
+                                  (scan & 0x80) == 0 ? input::KeyState::Pressed : input::KeyState::Released, ticks);
+        }
+    }  // namespace
+    extern "C" void interrupt_handle(hcpp::u64 vector, hcpp::u64 error) noexcept {
+        if (vector >= 32 && vector < 48) {
+            kernel::irq_dispatch(static_cast<hcpp::u8>(vector - 32));
+            pic_send_eoi(static_cast<hcpp::u8>(vector - 32));
+        } else if (vector < 32) {
+            serial::write("exception vector=");
+            serial::write_dec32(static_cast<hcpp::u32>(vector));
+            serial::write(" error=");
+            serial::write_hex64(error);
+            serial::write("\r\n");
+        }
+    }
+    void idt_initialize() noexcept {
+        for (hcpp::size_t i = 0; i < 256; ++i) set_gate(i, reinterpret_cast<hcpp::uintptr_t>(isr_stub_table[i]));
+        const IdtPointer pointer{sizeof(entries) - 1, reinterpret_cast<hcpp::u64>(entries)};
+        asm volatile("lidt %0" ::"m"(pointer));
+        initialized = true;
+    }
+    void pic_initialize() noexcept {
+        outb(0x20, 0x11);
+        outb(0xA0, 0x11);
+        outb(0x21, 0x20);
+        outb(0xA1, 0x28);
+        outb(0x21, 0x04);
+        outb(0xA1, 0x02);
+        outb(0x21, 0x01);
+        outb(0xA1, 0x01);
+        pic_mask_all();
+    }
+    void pic_mask_all() noexcept {
+        outb(0x21, 0xFF);
+        outb(0xA1, 0xFF);
+    }
+    void pic_unmask(hcpp::u8 irq) noexcept {
+        if (irq >= 16) return;
+        const hcpp::u16 port = irq < 8 ? 0x21 : 0xA1;
+        const hcpp::u8 bit = irq < 8 ? irq : irq - 8;
+        outb(port, inb(port) & ~(hcpp::u8(1) << bit));
+    }
+    void pic_send_eoi(hcpp::u8 irq) noexcept {
+        if (irq >= 8) outb(0xA0, 0x20);
+        outb(0x20, 0x20);
+    }
+    void pit_initialize(hcpp::u32 frequency) noexcept {
+        if (frequency == 0) frequency = 100;
+        hcpp::u16 divisor = static_cast<hcpp::u16>(1193182 / frequency);
+        if (divisor == 0) divisor = 1;
+        outb(0x43, 0x36);
+        outb(0x40, static_cast<hcpp::u8>(divisor));
+        outb(0x40, static_cast<hcpp::u8>(divisor >> 8));
+        kernel::irq_register(0, timer_handler, nullptr);
+    }
+    void keyboard_initialize() noexcept { kernel::irq_register(1, keyboard_handler, nullptr); }
+    hcpp::u64 pit_ticks() noexcept { return ticks; }
+    void pit_wait_ticks(hcpp::u64 count) noexcept {
+        const hcpp::u64 start = ticks;
+        while (ticks - start < count) asm volatile("hlt");
+    }
+    bool interrupts_initialized() noexcept { return initialized; }
+    void interrupts_enable() noexcept { asm volatile("sti"); }
+    void interrupts_disable() noexcept { asm volatile("cli"); }
+}  // namespace hype::interrupts

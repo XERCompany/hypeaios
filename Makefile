@@ -9,7 +9,9 @@ CXXFLAGS := -std=c++20 -O2 -ffreestanding -fno-exceptions -fno-rtti \
 
 CC_SOURCES := $(shell find hcpp kernel -name '*.cc' 2>/dev/null | sort)
 CC_OBJECTS := $(patsubst %.cc,$(BUILD)/%.o,$(CC_SOURCES))
-KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS)
+ASM_SOURCES := $(shell find kernel/interrupts -name '*.asm' 2>/dev/null | sort)
+ASM_OBJECTS := $(patsubst %.asm,$(BUILD)/%.o,$(ASM_SOURCES))
+KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(ASM_OBJECTS)
 KERNEL_HEADERS := $(shell find hcpp kernel -name '*.hpp' 2>/dev/null)
 
 .PHONY: all clean run test
@@ -26,6 +28,10 @@ $(BUILD)/stage2.bin: boot/stage2.asm | $(BUILD)
 	$(NASM) -f bin $< -o $@
 
 $(BUILD)/entry.o: kernel/entry.asm | $(BUILD)
+	$(NASM) -f elf64 $< -o $@
+
+$(BUILD)/%.o: %.asm | $(BUILD)
+	mkdir -p $(dir $@)
 	$(NASM) -f elf64 $< -o $@
 
 $(BUILD)/%.o: %.cc $(KERNEL_HEADERS) | $(BUILD)
