@@ -10,6 +10,7 @@
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
+#include "kernel/video/videov4lv.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
 
@@ -240,6 +241,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_line(runtime_info.apic_supported ? "enabled" : "unavailable");
     serial::write("context switch=");
     serial::write_line(runtime_info.context_switch_ready ? "ready" : "failed");
+    serial::write("video devices=");
+    serial::write_dec32(static_cast<hcpp::u32>(hype::video::v4lv_device_count()));
+    serial::write(" core=ready\r\n");
     serial::write("kernel threads=");
     serial::write_line(runtime_info.scheduler_ready ? "ready" : "failed");
     serial::write("font default=");

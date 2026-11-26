@@ -1,0 +1,2 @@
+#include "kernel/video/videov4lv.h"
+namespace hype::video { namespace{VideoDeviceInfo devices[8];hcpp::size_t count;} void v4lv_initialize()noexcept{count=0;} bool v4lv_register_device(const VideoDeviceInfo&d)noexcept{if(count>=8)return false;devices[count++]=d;return true;} hcpp::size_t v4lv_device_count()noexcept{return count;} const VideoDeviceInfo* v4lv_device(hcpp::size_t i)noexcept{return i<count?&devices[i]:nullptr;} }

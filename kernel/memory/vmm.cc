@@ -33,16 +33,17 @@ namespace hype::memory {
             if (page != 0) zero_table(table(page));
             return page;
         }
-        hcpp::u64* child_table_or_allocate(hcpp::u64* parent, hcpp::size_t index, bool allocate) noexcept {
+        hcpp::u64* child_table_or_allocate(hcpp::u64* parent, hcpp::size_t index, bool allocate, bool user = false) noexcept {
             hcpp::u64 entry = parent[index];
             if ((entry & vmm_present) != 0) {
                 if ((entry & vmm_huge_page) != 0) return nullptr;
+                if (user && (entry & vmm_user) == 0) return nullptr;
                 return table(entry & entry_address_mask);
             }
             if (!allocate) return nullptr;
             const hcpp::uintptr_t child = allocate_table();
             if (child == 0) return nullptr;
-            parent[index] = child | vmm_present | vmm_writable;
+            parent[index] = child | vmm_present | vmm_writable | (user ? vmm_user : 0);
             return table(child);
         }
         void invalidate(hcpp::uintptr_t address) noexcept { hype_cpu_invlpg(address); }
@@ -78,11 +79,11 @@ namespace hype::memory {
                       bool user) noexcept {
         if (!initialized || (virtual_address % page_size) != 0 || (physical_address % page_size) != 0) return false;
         hcpp::u64* pml4 = table(current_cr3);
-        hcpp::u64* pdpt = child_table_or_allocate(pml4, index_at(virtual_address, 39), true);
+        hcpp::u64* pdpt = child_table_or_allocate(pml4, index_at(virtual_address, 39), true, user);
         if (pdpt == nullptr) return false;
-        hcpp::u64* pd = child_table_or_allocate(pdpt, index_at(virtual_address, 30), true);
+        hcpp::u64* pd = child_table_or_allocate(pdpt, index_at(virtual_address, 30), true, user);
         if (pd == nullptr) return false;
-        hcpp::u64* pt = child_table_or_allocate(pd, index_at(virtual_address, 21), true);
+        hcpp::u64* pt = child_table_or_allocate(pd, index_at(virtual_address, 21), true, user);
         if (pt == nullptr) return false;
         hcpp::u64& pte = pt[index_at(virtual_address, 12)];
         if ((pte & vmm_present) != 0) return false;
