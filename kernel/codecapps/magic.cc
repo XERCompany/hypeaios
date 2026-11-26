@@ -1,5 +1,6 @@
 #include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/codec.h"
+#include "kernel/codecapps/image/png.h"
 #include "kernel/codecapps/registry.h"
 
 namespace hype::codec {
@@ -158,8 +159,6 @@ namespace hype::codec {
              codec_stub_encode},
             {"qoi", CodecKind::Image, CodecId::Qoi, 0, probe_qoi, codec_stub_decode,
              codec_stub_encode},
-            {"png", CodecKind::Image, CodecId::Png, 0, probe_png, codec_stub_decode,
-             codec_stub_encode},
             {"gif", CodecKind::Image, CodecId::Gif, 0, probe_gif, codec_stub_decode,
              codec_stub_encode},
             {"jpeg", CodecKind::Image, CodecId::Jpeg, 0, probe_jpeg, codec_stub_decode,
@@ -269,6 +268,12 @@ namespace hype::codec {
         for (hcpp::size_t i = 0; i < sizeof(builtin_descriptors) / sizeof(builtin_descriptors[0]);
              ++i)
             codec_register(builtin_descriptors[i]);
+        {
+            static const CodecDescriptor png = {
+                "png", CodecKind::Image, CodecId::Png,
+                codec_flag_decode | codec_flag_encode, probe_png, png_decode, png_encode};
+            codec_register(png);
+        }
     }
 
     bool codec_probe_selftest() noexcept {
