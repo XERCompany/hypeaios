@@ -19,6 +19,7 @@
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/db/hypedb.hpp"
+#include "kernel/display/clientdisplay.h"
 #include "kernel/display/idscreen.h"
 #include "kernel/display/selftest.h"
 #include "kernel/hello/hello.h"
@@ -358,6 +359,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     report("display core selftest=", display_core_ok);
     const bool display2_ok = hype::display::display2_selftest();
     report("display id/dpi/cta selftest=", display2_ok);
+    const bool display3_ok = hype::display::display3_selftest();
+    report("display modeset/dp selftest=", display3_ok);
     if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
         serial::write_line("sqlite=ok");
         serial::write("db selftest=");
@@ -422,6 +425,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         boot_info->blue_mask_size, boot_info->blue_position);
 
     framebuffer.draw_test_pattern();
+    hype::display::display_bind_target(framebuffer);
 
     const hcpp::u32 panel_color = framebuffer.encode_rgb(4, 10, 28);
     const hcpp::u32 title_color = framebuffer.encode_rgb(240, 250, 255);
