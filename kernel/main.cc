@@ -32,6 +32,7 @@
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
 #include "kernel/hxrt/apps/builtins.h"
+#include "kernel/hxrt/apps/dxbg.h"
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
@@ -506,6 +507,7 @@ namespace {
 
     void stage_hxrt() noexcept {
         hype::hxrt::hxrt_boot();
+        report("dxbg selftest=", hype::hxrt::dxbg_selftest());
         serial::write("hxer sync=");
         serial::write_dec32(hype::vfs::hypefile_sync());
         serial::write("\r\n");
