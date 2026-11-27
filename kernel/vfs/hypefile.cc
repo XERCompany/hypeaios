@@ -168,10 +168,18 @@ namespace hype::vfs {
         return true;
     }
 
-    hcpp::u32 hypefile_sync() noexcept {
+    hcpp::u32 hypefile_sync_dir(char disk) noexcept {
         static hype::vfs::FsStat listing[hypefile_list_cap];
+        char dir_path[24];
+        const char prefix[] = "HYPEOS://";
+        const char dir[] = "/apps";
+        hcpp::u32 pos = 0;
+        for (hcpp::u32 i = 0; prefix[i] != '\0'; ++i) dir_path[pos++] = prefix[i];
+        dir_path[pos++] = disk;
+        for (hcpp::u32 i = 0; dir[i] != '\0'; ++i) dir_path[pos++] = dir[i];
+        dir_path[pos] = '\0';
         const hcpp::u32 count =
-            fs_list("HYPEOS://S/apps", listing, hypefile_list_cap);
+            fs_list(dir_path, listing, hypefile_list_cap);
         const hcpp::u32 bound =
             count < hypefile_list_cap ? count : hypefile_list_cap;
         hcpp::u32 loaded = 0;
@@ -182,7 +190,8 @@ namespace hype::vfs {
                 continue;
             }
             char path[hype::vfs::hypepath_max_length];
-            if (build_app_path(path, sizeof(path), 'S', listing[i].name) == 0) {
+            if (build_app_path(path, sizeof(path), disk, listing[i].name) ==
+                0) {
                 continue;
             }
             if (hypefile_load(path)) {
@@ -190,6 +199,12 @@ namespace hype::vfs {
             }
         }
         return loaded;
+    }
+
+    hcpp::u32 hypefile_sync() noexcept {
+        // S:/apps holds system headers installed at boot; U:/apps holds user
+        // apps plus the app-pack copies shipped in the HYPEDATA blob.
+        return hypefile_sync_dir('S') + hypefile_sync_dir('U');
     }
 
     bool hypefile_selftest(HypefileSelftest& out) noexcept {

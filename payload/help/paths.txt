@@ -1,0 +1,23 @@
+HYPEAI OS - HELP: HYPEOS:// PATHS
+=================================
+
+All filesystem paths use the HYPEOS:// scheme with a single disk letter:
+
+  HYPEOS://S/...  system disk  - blob data, system apps, sys files
+  HYPEOS://U/...  user disk    - apps, wallpapers, home files
+  HYPEOS://T/...  temp disk    - scratch space
+
+Useful locations:
+
+  S:/data/wiki/<page>.md     wiki pages packed at image build time
+  S:/data/research/<page>.md research notes
+  S:/data/help/<page>.txt    these help pages
+  S:/data/assets/            cursor.png, Montserrat.ttf
+  S:/data/fonts/             extra fonts (Montserrat-Bold.ttf)
+  S:/apps/<name>.hxersys     system app headers (locked, FS_SYS)
+  U:/apps/<name>.hxer        user app headers / app pack copies
+  U:/wallpapers/<name>.png   wallpaper pack (dxbg picks from here)
+  U:/home/                   user files
+
+Files ending in .hxersys are marked FS_SYS and cannot be overwritten or
+deleted. Everything else under U: is regular user content.

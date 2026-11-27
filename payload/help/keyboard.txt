@@ -1,0 +1,13 @@
+HYPEAI OS - HELP: KEYBOARD
+==========================
+
+The kernel decodes PS/2 set-1 scancodes through the keyring decoder.
+Events are buffered and surfaced to the session and window manager.
+
+  Typing          goes to the focused window / auth field
+  Arrow keys      move selection inside list widgets
+  Enter           confirms dialogs / launches the highlighted app
+  Esc             closes the active dialog or window
+
+The boot serial log prints "keyboard events=<n> decoder=ready" once the
+input stage has run.

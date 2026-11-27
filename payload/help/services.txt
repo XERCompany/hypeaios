@@ -1,0 +1,16 @@
+HYPEAI OS - HELP: SERVICES
+==========================
+
+Services are registered in the svc registry and autostarted at boot
+("svc autostart=<n>" in the serial log). Each maps to a kernel subsystem:
+
+  gfx      graphics primitives / benchmark path
+  font     TTF font engine (Montserrat) readiness
+  codecs   codec registry (image + audio decoders)
+  display  HGC display core / modeset path
+  vfs      in-memory HYPEFS disks S:/U:/T:
+  sqlite   embedded sqlite database
+  hda      Intel HDA audio output
+
+Restart policy: services flagged OnFail are re-run by the supervisor when
+their start check fails. The RevDBGService app lists live service state.

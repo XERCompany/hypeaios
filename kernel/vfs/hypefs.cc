@@ -133,6 +133,17 @@ namespace hype::vfs {
 
     hcpp::u32 fs_disk_count() noexcept { return disks_ready; }
 
+    hcpp::u32 fs_disk_file_count(char disk) noexcept {
+        hcpp::u32 count = 0;
+        for (hcpp::u32 i = 0; i < fs_max_entries; ++i) {
+            if (entries[i].in_use && entries[i].disk == disk &&
+                (entries[i].flags & FS_DIR) == 0) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
     bool fs_seed() noexcept {
         if (fs_mkdir("HYPEOS://S/apps") != FsStatus::Ok) return false;
         if (fs_mkdir("HYPEOS://S/sys") != FsStatus::Ok) return false;

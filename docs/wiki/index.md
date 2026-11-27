@@ -11,6 +11,7 @@ XX
 XX- [HypeAIFont + first UI](hypeai-font-ui.md) — spec #3; also holds program-level notes + index for #13/#23
 XX- [Hello auth + audio](hello-audio.md) — spec #13: sqlite-in-kernel, Hello enroll/auth, HDA driver + PCM playback, login UI
 XX- [CodecApps](codecapps.md) — spec #23: codec registry/arena, image+audio decoders, deferred-format policy
+- [Payload packs](payload-packs.md) — ticket #74/spec #71: HYPEDATA blob mount routing, wallpaper/docs/font/app packs
 XX
 XX## Research
 XX
