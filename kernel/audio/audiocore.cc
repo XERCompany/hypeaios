@@ -7,6 +7,7 @@
 #include "kernel/audio/audiobuf.h"
 #include "kernel/audio/audioclient.h"
 #include "kernel/audio/audiofudev.h"
+#include "kernel/audio/audiofx.h"
 #include "kernel/audio/audiohigh.h"
 #include "kernel/audio/audioparse.h"
 #include "kernel/audio/dvdeca.h"
@@ -17,7 +18,17 @@
 #include "kernel/serial.hpp"
 #include "kernel/vfs/hypefs.h"
 
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+
 extern "C" void hype_audio_pcm_copy(void *dst, const void *src, hcpp::u64 bytes) noexcept;
+extern "C" void hype_audio_buffer_clear(hcpp::i16 *dst, hcpp::u64 frames) noexcept;
+extern "C" void hype_audio_mix_s16(hcpp::i16 *dst, const hcpp::i16 *src,
+                                   hcpp::u64 frames) noexcept;
+extern "C" void hype_audio_pcm_mono_to_stereo_s16(hcpp::i16 *dst, const hcpp::i16 *src,
+                                                  hcpp::u64 frames) noexcept;
+extern "C" void hype_audio_pcm_swap_channels_s16(hcpp::i16 *stereo, hcpp::u64 frames) noexcept;
 
 namespace hype::audio {
     namespace {
@@ -36,6 +47,8 @@ namespace hype::audio {
             AudioFormat format;
             AudioRing ring;
             hcpp::u8 volume;
+            hcpp::u16 gain_q8;
+            AudioStreamState state;
             hcpp::u32 frames_written;
         };
 
@@ -169,6 +182,8 @@ namespace hype::audio {
                 streams[i].used = true;
                 streams[i].format = format;
                 streams[i].volume = 100;
+                streams[i].gain_q8 = audio_gain_unity_q8;
+                streams[i].state = AudioStreamState::Running;
                 streams[i].frames_written = 0;
                 audio_ring_init(streams[i].ring);
                 stream = i + 1;
@@ -202,13 +217,82 @@ namespace hype::audio {
             return false;
         }
         target->volume = percent;
+        target->gain_q8 = static_cast<hcpp::u16>(percent * audio_gain_unity_q8 / 100);
         return true;
+    }
+
+    bool audio_stream_set_gain(AudioStreamId stream, hcpp::u16 gain_q8) noexcept {
+        AudioStream *target = stream_by_id(stream);
+        if (target == nullptr) {
+            return false;
+        }
+        target->gain_q8 = gain_q8;
+        target->volume = static_cast<hcpp::u8>(
+            gain_q8 * 100 / audio_gain_unity_q8 > 100 ? 100
+                                                    : gain_q8 * 100 / audio_gain_unity_q8);
+        return true;
+    }
+
+    hcpp::u16 audio_stream_gain(AudioStreamId stream) noexcept {
+        const AudioStream *target = stream_by_id(stream);
+        return target != nullptr ? target->gain_q8 : 0;
+    }
+
+    bool audio_stream_set_state(AudioStreamId stream, AudioStreamState state) noexcept {
+        AudioStream *target = stream_by_id(stream);
+        if (target == nullptr || state == AudioStreamState::Idle) {
+            return false;
+        }
+        target->state = state;
+        return true;
+    }
+
+    bool audio_stream_info(AudioStreamId stream, AudioStreamInfo &info) noexcept {
+        const AudioStream *target = stream_by_id(stream);
+        if (target == nullptr) {
+            return false;
+        }
+        info.id = stream;
+        info.format = target->format;
+        info.gain_q8 = target->gain_q8;
+        info.state = target->state;
+        info.frames_queued = audio_ring_used_frames(
+            target->ring, audio_frame_bytes(target->format));
+        info.underruns = audio_ring_underruns(target->ring);
+        return true;
+    }
+
+    bool audio_stream_info_at(hcpp::u32 slot, AudioStreamInfo &info) noexcept {
+        if (slot >= max_streams) {
+            return false;
+        }
+        const AudioStream &entry = streams[slot];
+        info.id = slot + 1;
+        info.format = entry.format;
+        info.gain_q8 = entry.gain_q8;
+        info.state = entry.used ? entry.state : AudioStreamState::Idle;
+        info.frames_queued =
+            entry.used ? audio_ring_used_frames(entry.ring, audio_frame_bytes(entry.format))
+                       : 0;
+        info.underruns = entry.used ? audio_ring_underruns(entry.ring) : 0;
+        return true;
+    }
+
+    hcpp::u32 audio_stream_count() noexcept {
+        hcpp::u32 count = 0;
+        for (hcpp::u32 i = 0; i < max_streams; ++i) {
+            if (streams[i].used) {
+                ++count;
+            }
+        }
+        return count;
     }
 
     void audio_stream_close(AudioStreamId stream) noexcept {
         AudioStream *target = stream_by_id(stream);
         if (target != nullptr) {
             target->used = false;
+            target->state = AudioStreamState::Idle;
         }
     }
 
@@ -232,6 +316,35 @@ namespace hype::audio {
         return readable;
     }
 
+    hcpp::u32 audio_ring_push_frames(AudioRing &ring, hcpp::u32 frame_bytes, const void *frames,
+                                     hcpp::u32 frame_count) noexcept {
+        if (frames == nullptr || frame_bytes == 0) {
+            return 0;
+        }
+        const hcpp::u32 avail = audio_ring_space(ring) / frame_bytes;
+        const hcpp::u32 count = frame_count < avail ? frame_count : avail;
+        audio_ring_push(ring, frames, count * frame_bytes);
+        return count;
+    }
+
+    hcpp::u32 audio_ring_pop_frames(AudioRing &ring, hcpp::u32 frame_bytes, void *frames,
+                                    hcpp::u32 frame_count) noexcept {
+        if (frames == nullptr || frame_bytes == 0) {
+            return 0;
+        }
+        const hcpp::u32 avail = audio_ring_used(ring) / frame_bytes;
+        if (frame_count > avail) {
+            ++ring.underruns;
+        }
+        const hcpp::u32 count = frame_count < avail ? frame_count : avail;
+        audio_ring_pop(ring, frames, count * frame_bytes);
+        return count;
+    }
+
+    hcpp::u32 audio_ring_used_frames(const AudioRing &ring, hcpp::u32 frame_bytes) noexcept {
+        return frame_bytes == 0 ? 0 : audio_ring_used(ring) / frame_bytes;
+    }
+
     hcpp::u32 audio_client_open(const char *name) noexcept {
         if (client_count >= max_clients) {
             return 0;
@@ -241,6 +354,7 @@ namespace hype::audio {
         client.id = client_count + 1;
         client.active = true;
         client.stream = audio_stream_invalid;
+        client.gain_q8 = audio_gain_unity_q8;
         hcpp::u32 i = 0;
         while (name != nullptr && name[i] != '\0' && i + 1 < sizeof(client.name)) {
             client.name[i] = name[i];
@@ -254,6 +368,14 @@ namespace hype::audio {
             return false;
         }
         clients[client - 1].stream = stream;
+        return true;
+    }
+
+    bool audio_client_set_gain(hcpp::u32 client, hcpp::u16 gain_q8) noexcept {
+        if (client == 0 || client > client_count || !clients[client - 1].active) {
+            return false;
+        }
+        clients[client - 1].gain_q8 = gain_q8;
         return true;
     }
 
@@ -1078,6 +1200,280 @@ namespace hype::audio {
         return false;
     }
 
+    void mix_clear(hcpp::i16 *dst, hcpp::u32 frames) noexcept {
+        if (dst == nullptr || frames == 0) {
+            return;
+        }
+        hype_audio_buffer_clear(dst, frames);
+    }
+
+    void mix_add(hcpp::i16 *dst, const hcpp::i16 *src, hcpp::u32 frames,
+                 hcpp::u16 gain_q8) noexcept {
+        if (dst == nullptr || src == nullptr || frames == 0) {
+            return;
+        }
+        hcpp::u32 i = 0;
+#if defined(__SSE2__)
+        const __m128i vgain = _mm_set1_epi16(static_cast<short>(gain_q8));
+        if (gain_q8 == audio_gain_unity_q8) {
+            for (; i + 8 <= frames; i += 8) {
+                const __m128i vs =
+                    _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
+                const __m128i vd =
+                    _mm_loadu_si128(reinterpret_cast<const __m128i *>(dst + i));
+                _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i),
+                                 _mm_adds_epi16(vd, vs));
+            }
+        }
+        for (; i + 8 <= frames; i += 8) {
+            const __m128i vs =
+                _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
+            const __m128i vd =
+                _mm_loadu_si128(reinterpret_cast<const __m128i *>(dst + i));
+            const __m128i vsign = _mm_srai_epi16(vd, 15);
+            const __m128i d0 = _mm_unpacklo_epi16(vd, vsign);
+            const __m128i d1 = _mm_unpackhi_epi16(vd, vsign);
+            const __m128i lo = _mm_mullo_epi16(vs, vgain);
+            const __m128i hi = _mm_mulhi_epi16(vs, vgain);
+            const __m128i p0 = _mm_srai_epi32(_mm_unpacklo_epi16(lo, hi), 8);
+            const __m128i p1 = _mm_srai_epi32(_mm_unpackhi_epi16(lo, hi), 8);
+            const __m128i r0 = _mm_add_epi32(d0, p0);
+            const __m128i r1 = _mm_add_epi32(d1, p1);
+            _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i),
+                             _mm_packs_epi32(r0, r1));
+        }
+#endif
+        for (; i < frames; ++i) {
+            dst[i] = fx_clip(static_cast<hcpp::i32>(dst[i]) +
+                             ((static_cast<hcpp::i32>(src[i]) * gain_q8) >> 8));
+        }
+    }
+
+    MixClipStats mix_clip_stats(const hcpp::i16 *samples, hcpp::u32 frames) noexcept {
+        MixClipStats stats{0, 0};
+        if (samples == nullptr) {
+            return stats;
+        }
+        for (hcpp::u32 i = 0; i < frames; ++i) {
+            const hcpp::i32 value = samples[i];
+            const hcpp::u32 magnitude =
+                value < 0 ? static_cast<hcpp::u32>(-value) : static_cast<hcpp::u32>(value);
+            if (magnitude > stats.peak) {
+                stats.peak = magnitude;
+            }
+            if (value >= 32767 || value <= -32768) {
+                ++stats.clipped;
+            }
+        }
+        return stats;
+    }
+
+    void pcm_mono_to_stereo(hcpp::i16 *dst, const hcpp::i16 *src, hcpp::u32 frames) noexcept {
+        if (dst == nullptr || src == nullptr || frames == 0) {
+            return;
+        }
+        hype_audio_pcm_mono_to_stereo_s16(dst, src, frames);
+    }
+
+    void pcm_swap_channels(hcpp::i16 *stereo, hcpp::u32 frames) noexcept {
+        if (stereo == nullptr || frames == 0) {
+            return;
+        }
+        hype_audio_pcm_swap_channels_s16(stereo, frames);
+    }
+
+    hcpp::u32 src_output_frames(hcpp::u32 in_frames, hcpp::u32 in_rate,
+                                hcpp::u32 out_rate) noexcept {
+        if (in_rate == 0 || out_rate == 0) {
+            return 0;
+        }
+        return static_cast<hcpp::u32>(
+            (static_cast<hcpp::u64>(in_frames) * out_rate + in_rate - 1) / in_rate);
+    }
+
+    hcpp::u32 src_convert(const hcpp::i16 *in, hcpp::u32 in_frames, hcpp::u32 in_rate,
+                          hcpp::i16 *out, hcpp::u32 out_capacity, hcpp::u32 out_rate) noexcept {
+        if (in == nullptr || out == nullptr || in_frames == 0 || in_rate == 0 ||
+            out_rate == 0 || out_capacity == 0) {
+            return 0;
+        }
+        if (in_rate == out_rate) {
+            const hcpp::u32 count = in_frames < out_capacity ? in_frames : out_capacity;
+            hype_audio_pcm_copy(out, in, count * sizeof(hcpp::i16));
+            return count;
+        }
+        const hcpp::u32 wanted = src_output_frames(in_frames, in_rate, out_rate);
+        const hcpp::u32 count = wanted < out_capacity ? wanted : out_capacity;
+        const hcpp::u32 step_q16 = static_cast<hcpp::u32>(
+            (static_cast<hcpp::u64>(in_rate) << 16) / out_rate);
+        hcpp::u32 pos_q16 = 0;
+        for (hcpp::u32 i = 0; i < count; ++i) {
+            const hcpp::u32 index = pos_q16 >> 16;
+            const hcpp::u32 frac = pos_q16 & 0xFFFF;
+            const hcpp::i32 a = in[index];
+            const hcpp::i32 b = index + 1 < in_frames ? in[index + 1] : in[index];
+            out[i] = fx_clip(a + static_cast<hcpp::i32>(
+                                     (static_cast<hcpp::i64>(b - a) * frac) >> 16));
+            pos_q16 += step_q16;
+        }
+        return count;
+    }
+
+    bool src_selftest() noexcept {
+        hcpp::i16 in[441];
+        waveform_render_sine(in, 441, 220, 44100, 1);
+        hcpp::i16 out[512];
+        const hcpp::u32 expected = src_output_frames(441, 44100, 48000);
+        const hcpp::u32 produced = src_convert(in, 441, 44100, out, 512, 48000);
+        bool ok = expected == 480 && produced == 480 && out[0] == in[0];
+        hcpp::i16 peak = 0;
+        for (hcpp::u32 i = 0; i < 441; ++i) {
+            if (in[i] > peak || -in[i] > peak) {
+                peak = in[i] > 0 ? in[i] : static_cast<hcpp::i16>(-in[i]);
+            }
+        }
+        for (hcpp::u32 i = 1; i < produced; ++i) {
+            const hcpp::i32 step = static_cast<hcpp::i32>(out[i]) - out[i - 1];
+            const hcpp::i32 bound = static_cast<hcpp::i32>(peak) / 16 + 64;
+            if (step > bound || step < -bound || out[i] > peak + 16 ||
+                out[i] < -peak - 16) {
+                ok = false;
+            }
+        }
+        serial::write(ok ? "src conv=ok\r\n" : "src conv=fail\r\n");
+        return ok;
+    }
+
+    bool mix_selftest() noexcept {
+        bool ok = true;
+        bool mix_ok = true;
+        hcpp::i16 dst[16];
+        hcpp::i16 asm_dst[16];
+        hcpp::i16 src[16];
+        for (hcpp::u32 i = 0; i < 16; ++i) {
+            dst[i] = 0;
+            asm_dst[i] = 0;
+            src[i] = 20000;
+        }
+        mix_clear(dst, 16);
+        mix_add(dst, src, 16, audio_gain_unity_q8);
+        mix_add(dst, src, 16, audio_gain_unity_q8);
+        hype_audio_mix_s16(asm_dst, src, 16);
+        hype_audio_mix_s16(asm_dst, src, 16);
+        for (hcpp::u32 i = 0; i < 16; ++i) {
+            if (dst[i] != 32767 || asm_dst[i] != 32767) {
+                mix_ok = false;
+            }
+        }
+        const MixClipStats stats = mix_clip_stats(dst, 16);
+        hcpp::i16 gain_dst[8]{};
+        hcpp::i16 gain_src[8];
+        for (hcpp::u32 i = 0; i < 8; ++i) {
+            gain_src[i] = 1000;
+        }
+        mix_add(gain_dst, gain_src, 8, 128);
+        if (gain_dst[0] != 500 || gain_dst[7] != 500 || stats.clipped != 16 ||
+            stats.peak != 32767) {
+            mix_ok = false;
+        }
+        serial::write(mix_ok ? "mix sse=ok\r\n" : "mix sse=fail\r\n");
+        ok = ok && mix_ok;
+        bool fx_ok = true;
+        hcpp::i16 fade[16];
+        for (hcpp::u32 i = 0; i < 16; ++i) {
+            fade[i] = 4096;
+        }
+        fx_fade(fade, 16, 0, fx_gain_unity_q8);
+        fx_ok = fx_ok && fade[0] == 0 && fade[15] == 4096;
+        for (hcpp::u32 i = 1; i < 16; ++i) {
+            if (fade[i] < fade[i - 1]) {
+                fx_ok = false;
+            }
+        }
+        hcpp::i16 down[8];
+        for (hcpp::u32 i = 0; i < 8; ++i) {
+            down[i] = 4096;
+        }
+        fx_fade(down, 8, fx_gain_unity_q8, 0);
+        fx_ok = fx_ok && down[0] == 4096 && down[7] == 0;
+        for (hcpp::u32 i = 1; i < 8; ++i) {
+            if (down[i] > down[i - 1]) {
+                fx_ok = false;
+            }
+        }
+        hcpp::i16 scaled[4] = {1000, -1000, 2000, -2000};
+        fx_gain(scaled, 4, 128);
+        fx_ok = fx_ok && scaled[0] == 500 && scaled[1] == -500 && scaled[2] == 1000 &&
+                scaled[3] == -1000;
+        hcpp::i16 panned[4] = {1000, 1000, 1000, 1000};
+        fx_pan(panned, 2, fx_pan_right);
+        fx_ok = fx_ok && panned[0] == 0 && panned[1] == 1000 && panned[2] == 0 &&
+                panned[3] == 1000;
+        serial::write(fx_ok ? "fx fade=ok\r\n" : "fx fade=fail\r\n");
+        ok = ok && fx_ok;
+        ok = src_selftest() && ok;
+        bool ring_ok = true;
+        AudioRing ring;
+        audio_ring_init(ring);
+        static hcpp::u8 push_a[6000];
+        for (hcpp::u32 i = 0; i < 6000; ++i) {
+            push_a[i] = static_cast<hcpp::u8>(i);
+        }
+        ring_ok = ring_ok && audio_ring_push(ring, push_a, 6000) == 6000;
+        static hcpp::u8 popped[6000];
+        ring_ok = ring_ok && audio_ring_pop(ring, popped, 4000) == 4000;
+        for (hcpp::u32 i = 0; i < 4000; ++i) {
+            if (popped[i] != push_a[i]) {
+                ring_ok = false;
+            }
+        }
+        static hcpp::u8 push_b[4000];
+        for (hcpp::u32 i = 0; i < 4000; ++i) {
+            push_b[i] = 0xA5;
+        }
+        ring_ok = ring_ok && audio_ring_push(ring, push_b, 4000) == 4000;
+        ring_ok = ring_ok && ring.write_pos < ring.read_pos;
+        static hcpp::u8 rest[6200];
+        ring_ok = ring_ok && audio_ring_pop(ring, rest, 6200) == 6000;
+        for (hcpp::u32 i = 0; i < 2000; ++i) {
+            if (rest[i] != push_a[i + 4000]) {
+                ring_ok = false;
+            }
+        }
+        for (hcpp::u32 i = 2000; i < 6000; ++i) {
+            if (rest[i] != 0xA5) {
+                ring_ok = false;
+            }
+        }
+        AudioRing frames_ring;
+        audio_ring_init(frames_ring);
+        hcpp::u32 frames_in[8];
+        for (hcpp::u32 i = 0; i < 8; ++i) {
+            frames_in[i] = 0x1000 + i;
+        }
+        hcpp::u32 frames_out[16]{};
+        ring_ok = ring_ok &&
+                  audio_ring_push_frames(frames_ring, 4, frames_in, 8) == 8 &&
+                  audio_ring_used_frames(frames_ring, 4) == 8;
+        ring_ok = ring_ok && audio_ring_pop_frames(frames_ring, 4, frames_out, 16) == 8 &&
+                  audio_ring_underruns(frames_ring) == 1;
+        for (hcpp::u32 i = 0; i < 8; ++i) {
+            if (frames_out[i] != frames_in[i]) {
+                ring_ok = false;
+            }
+        }
+        serial::write(ring_ok ? "buf ring=ok\r\n" : "buf ring=fail\r\n");
+        ok = ok && ring_ok;
+        hcpp::i16 mono[4] = {7, 9, 11, 13};
+        hcpp::i16 stereo[8]{};
+        pcm_mono_to_stereo(stereo, mono, 4);
+        hcpp::i16 pair[4] = {1, 2, 3, 4};
+        pcm_swap_channels(pair, 2);
+        ok = ok && stereo[0] == 7 && stereo[1] == 7 && stereo[4] == 11 && stereo[6] == 13 &&
+             pair[0] == 2 && pair[1] == 1 && pair[2] == 4 && pair[3] == 3;
+        return ok;
+    }
+
     bool audio_format_selftest() noexcept {
         static const hcpp::u8 wav_blob[] = {
             'R', 'I', 'F', 'F', 0x38, 0x00, 0x00, 0x00, 'W', 'A', 'V', 'E',
@@ -1133,6 +1529,7 @@ namespace hype::audio {
         } else {
             serial::write("alac=unsupported\r\n");
         }
+        ok = mix_selftest() && ok;
         return ok;
     }
 

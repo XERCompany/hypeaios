@@ -40,11 +40,11 @@ hype_audio_mix_s16:
     ret
 
 hype_audio_apply_gain_s16:
-    test rdx, rdx
+    test rsi, rsi
     jz .done
 .loop:
     movsx eax, word [rdi]
-    imul eax, ecx
+    imul eax, edx
     sar eax, 8
     cmp eax, 32767
     jle .no_clip_high
@@ -56,7 +56,7 @@ hype_audio_apply_gain_s16:
 .no_clip_low:
     mov [rdi], ax
     add rdi, 2
-    dec rdx
+    dec rsi
     jnz .loop
 .done:
     ret

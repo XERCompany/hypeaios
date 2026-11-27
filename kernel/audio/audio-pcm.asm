@@ -24,7 +24,7 @@ hype_audio_pcm_mono_to_stereo_s16:
     ret
 
 hype_audio_pcm_swap_channels_s16:
-    test rdx, rdx
+    test rsi, rsi
     jz .done
 .loop:
     mov ax, [rdi]
@@ -32,7 +32,7 @@ hype_audio_pcm_swap_channels_s16:
     mov [rdi], cx
     mov [rdi + 2], ax
     add rdi, 4
-    dec rdx
+    dec rsi
     jnz .loop
 .done:
     ret
