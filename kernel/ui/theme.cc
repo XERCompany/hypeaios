@@ -1,5 +1,7 @@
 #include "kernel/ui/theme.h"
 
+#include "kernel/ui/canvas.h"
+
 namespace hype::ui {
 
     namespace {
@@ -28,6 +30,7 @@ namespace hype::ui {
             .border = 0x32363F,
             .ring = 0x4C8DFF,
             .accent = 0x4C8DFF,
+            .shadow = 0x000000,
             .chart = {0x4C8DFF, 0x3FB950, 0xD29922, 0xF85149, 0xB57EDC},
             .spacing_xs = 2,
             .spacing_sm = 4,
@@ -37,6 +40,7 @@ namespace hype::ui {
             .radius_md = 4,
             .radius_lg = 8,
             .font = nullptr,
+            .hard_shadow = false,
         };
         return theme;
     }
@@ -58,6 +62,7 @@ namespace hype::ui {
             .border = 0xC9CEDA,
             .ring = 0x2F6FED,
             .accent = 0x2F6FED,
+            .shadow = 0x000000,
             .chart = {0x2F6FED, 0x14804A, 0xB54708, 0xD92D20, 0x7A5AF8},
             .spacing_xs = 2,
             .spacing_sm = 4,
@@ -67,6 +72,7 @@ namespace hype::ui {
             .radius_md = 4,
             .radius_lg = 8,
             .font = nullptr,
+            .hard_shadow = false,
         };
         return theme;
     }
@@ -74,6 +80,24 @@ namespace hype::ui {
     void theme_set(Theme theme) noexcept { active_slot() = theme; }
 
     const Theme& theme_active() noexcept { return active_slot(); }
+
+    bool theme_hard_shadow() noexcept { return active_slot().hard_shadow; }
+
+    void theme_set_hard_shadow(bool enabled) noexcept {
+        active_slot().hard_shadow = enabled;
+    }
+
+    hcpp::i32 hard_shadow_offset() noexcept { return 4; }
+
+    void draw_hard_shadow(Canvas& canvas, const Rect& box, hcpp::u32 fill_rgb,
+                          hcpp::u32 border_rgb) noexcept {
+        const Theme& theme = theme_active();
+        const hcpp::i32 off = hard_shadow_offset();
+        canvas.fill_rect({box.x + off, box.y + off, box.w, box.h},
+                         canvas.color(theme.shadow));
+        canvas.fill_rect(box, canvas.color(fill_rgb));
+        canvas.stroke_rect(box, canvas.color(border_rgb), 2);
+    }
 
     const hcpp::fonts::FontFace* Theme::resolved_font() const noexcept {
         return font != nullptr ? font : hcpp::fonts::default_font();

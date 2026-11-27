@@ -2,7 +2,9 @@
 
 #include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/registry.h"
+#include "kernel/interrupts/idt.h"
 #include "kernel/serial.hpp"
+#include "kernel/ui/anim.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/demo_image_blob.h"
 #include "kernel/ui/flex.h"
@@ -94,6 +96,9 @@ namespace hype::ui {
         if (!data_selftest()) {
             return 0;
         }
+        if (!anim_selftest()) {
+            return 0;
+        }
         if (!framebuffer.valid()) {
             return 0;
         }
@@ -148,6 +153,7 @@ namespace hype::ui {
         const Rect window_rect = centered_window(screen, 560, 320);
 
         tree.layout_root(window_rect);
+        anim_poll(hype::interrupts::pit_ticks());
         tree.paint_tree(canvas);
         paint_codec_image(canvas, window_rect);
 

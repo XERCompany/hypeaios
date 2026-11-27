@@ -34,6 +34,12 @@ namespace hype::ui {
         }
     }
 
+    bool Switch::tick(hcpp::u32) noexcept {
+        const hcpp::u8 before = position_;
+        tick();
+        return position_ != before;
+    }
+
     hcpp::u8 Switch::position() const noexcept { return position_; }
 
     void Switch::set_font(const hcpp::fonts::FontFace* font) noexcept {

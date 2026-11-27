@@ -3,12 +3,13 @@
 #include "hcpp/fonts/font.hpp"
 #include "hcpp/string_view.hpp"
 #include "hcpp/types.hpp"
+#include "kernel/ui/anim.h"
 #include "kernel/ui/geometry.h"
 #include "kernel/ui/widget.h"
 
 namespace hype::ui {
 
-    class NumberTicker : public Widget {
+    class NumberTicker : public Widget, public Animatable {
     public:
         NumberTicker() noexcept = default;
         explicit NumberTicker(hcpp::i32 target) noexcept;
@@ -26,6 +27,7 @@ namespace hype::ui {
         void set_suffix(hcpp::StringView suffix) noexcept;
 
         bool tick() noexcept;
+        bool tick(hcpp::u32 frame) noexcept override;
         bool done() const noexcept;
 
         void set_font(const hcpp::fonts::FontFace* font) noexcept;

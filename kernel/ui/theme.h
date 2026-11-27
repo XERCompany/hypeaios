@@ -21,6 +21,7 @@ namespace hype::ui {
         hcpp::u32 border;
         hcpp::u32 ring;
         hcpp::u32 accent;
+        hcpp::u32 shadow;
 
         hcpp::u32 chart[5];
 
@@ -35,13 +36,24 @@ namespace hype::ui {
 
         const hcpp::fonts::FontFace* font;
 
+        bool hard_shadow;
+
         const hcpp::fonts::FontFace* resolved_font() const noexcept;
     };
+
+    class Canvas;
+    struct Rect;
 
     const Theme& theme_dark() noexcept;
     const Theme& theme_light() noexcept;
     void theme_set(Theme theme) noexcept;
     const Theme& theme_active() noexcept;
+
+    bool theme_hard_shadow() noexcept;
+    void theme_set_hard_shadow(bool enabled) noexcept;
+    hcpp::i32 hard_shadow_offset() noexcept;
+    void draw_hard_shadow(Canvas& canvas, const Rect& box, hcpp::u32 fill_rgb,
+                          hcpp::u32 border_rgb) noexcept;
 
     const hcpp::fonts::FontFace* resolve_font(
         const hcpp::fonts::FontFace* font) noexcept;

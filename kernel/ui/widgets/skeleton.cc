@@ -25,6 +25,15 @@ namespace hype::ui {
 
     hcpp::u8 Skeleton::phase() const noexcept { return phase_; }
 
+    bool Skeleton::tick(hcpp::u32 frame) noexcept {
+        const hcpp::u8 next = static_cast<hcpp::u8>((frame * 8) & 0xFF);
+        if (next == phase_) {
+            return false;
+        }
+        phase_ = next;
+        return true;
+    }
+
     void Skeleton::set_radius(hcpp::i32 radius) noexcept { radius_ = radius; }
 
     hcpp::i32 Skeleton::radius() const noexcept {

@@ -72,6 +72,8 @@ namespace hype::ui {
         return true;
     }
 
+    bool NumberTicker::tick(hcpp::u32) noexcept { return tick(); }
+
     bool NumberTicker::done() const noexcept { return value_ == target_; }
 
     void NumberTicker::set_font(const hcpp::fonts::FontFace* font) noexcept {
