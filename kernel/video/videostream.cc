@@ -15,6 +15,8 @@ namespace hype::video {
     }
     bool stream_stop(VideoStream& s) noexcept {
         s.streaming = false;
+        s.head = 0;
+        s.pending = 0;
         return true;
     }
     bool stream_queue(VideoStream& s, hcpp::u32 i, hcpp::size_t bytes) noexcept {
@@ -34,4 +36,23 @@ namespace hype::video {
             }
         return nullptr;
     }
+    bool stream_push(VideoStream& s, const VideoFrame& f) noexcept {
+        if (!s.streaming || !frame_valid(f)) return false;
+        if (s.pending == video_stream_max_buffers) {
+            s.head = (s.head + 1) % video_stream_max_buffers;
+            --s.pending;
+            ++s.dropped;
+        }
+        s.frames[(s.head + s.pending) % video_stream_max_buffers] = f;
+        ++s.pending;
+        return true;
+    }
+    bool stream_pop(VideoStream& s, VideoFrame& f) noexcept {
+        if (!s.streaming || s.pending == 0) return false;
+        f = s.frames[s.head];
+        s.head = (s.head + 1) % video_stream_max_buffers;
+        --s.pending;
+        return true;
+    }
+    hcpp::size_t stream_pending(const VideoStream& s) noexcept { return s.pending; }
 }  // namespace hype::video

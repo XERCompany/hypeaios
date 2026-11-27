@@ -1,5 +1,6 @@
 #include "kernel/ui/widgets/button.h"
 
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -48,13 +49,17 @@ namespace hype::ui {
         if (box.empty()) {
             return;
         }
-        const Theme& theme = Theme::dark();
-        const hcpp::u32 fill_rgb =
-            style_ == ButtonStyle::Accent ? theme.accent : theme.surface;
-        const hcpp::u32 text_rgb =
-            style_ == ButtonStyle::Accent ? theme.on_accent : theme.text_primary;
-        canvas.fill_rect(box, canvas.color(fill_rgb));
-        canvas.stroke_rect(box, canvas.color(theme.border));
+        const Theme& theme = theme_active();
+        hcpp::u32 fill_rgb = theme.secondary;
+        hcpp::u32 text_rgb = theme.fg;
+        if (style_ == ButtonStyle::Accent) {
+            fill_rgb = theme.primary;
+            text_rgb = theme.primary_fg;
+        } else if (style_ == ButtonStyle::Destructive) {
+            fill_rgb = theme.destructive;
+            text_rgb = theme.primary_fg;
+        }
+        rui_control_bg(canvas, box, fill_rgb, theme.border);
 
         const hcpp::fonts::FontFace* face = resolved_font();
         if (face == nullptr || label_.empty()) {

@@ -5,7 +5,18 @@
 
 namespace hype::audio {
 
-    enum class AudioCodecId : hcpp::u8 { Pcm, WavPcm, Alac, Mp2, Ac3 };
+    enum class AudioCodecId : hcpp::u8 {
+        Pcm,
+        WavPcm,
+        Alac,
+        Mp2,
+        Ac3,
+        Flac,
+        Vorbis,
+        Opus,
+        Aac,
+        Other
+    };
 
     struct AudioDecoderEntry {
         AudioCodecId codec;

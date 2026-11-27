@@ -9,29 +9,65 @@
 #include "hcpp/graphics/text.hpp"
 #include "hcpp/text_writer.hpp"
 #include "hcpp/types.hpp"
+#include "kernel/arch/x86/cpuid.h"
 #include "kernel/audio/audio-serivce.h"
+#include "kernel/audio/audioac97.h"
+#include "kernel/audio/audioes1370.h"
+#include "kernel/audio/hasio.h"
+#include "kernel/audio/pullmix.h"
+#include "kernel/boot/bootseq.h"
+#include "kernel/boot/bootsplash.h"
 #include "kernel/boot_info.hpp"
 #include "kernel/codecapps/audio/selftest.h"
 #include "kernel/codecapps/image/image.h"
 #include "kernel/codecapps/image/jpeg.h"
 #include "kernel/codecapps/image/png.h"
+#include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/registry.h"
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/db/hypedb.hpp"
+#include "kernel/db/hypevfs.h"
+#include "kernel/display/clientdisplay.h"
+#include "kernel/display/hgc.h"
+#include "kernel/display/idscreen.h"
+#include "kernel/display/selftest.h"
+#include "kernel/font/hypefont.h"
+#include "kernel/font/hypetext.h"
+#include "kernel/gdxf/gdxf.h"
+#include "kernel/gfx/gfxbench.h"
+#include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
+#include "kernel/hxrt/apps/builtins.h"
+#include "kernel/hxrt/apps/dxbg.h"
+#include "kernel/hxrt/hxrt.h"
+#include "kernel/input/hypeptr.h"
 #include "kernel/input/keyring.h"
+#include "kernel/input/msaux.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
+#include "kernel/klog.h"
+#include "kernel/panic.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
-#include "kernel/ui/demo.h"
-#include "kernel/ui/flowlogin.h"
+#include "kernel/session/session.h"
+#include "kernel/svc/revsvc.h"
+#include "kernel/time/rtc.h"
+#include "kernel/ui/selftest.h"
+#include "kernel/vfs/hypeblob.h"
+#include "kernel/vfs/hypefile.h"
+#include "kernel/vfs/hypefs.h"
+#include "kernel/video/videocoretest.h"
 #include "kernel/video/videov4lv.h"
+#include "kernel/win/deskman.h"
+#include "kernel/win/winman.h"
 
 using InitArrayFunction = void (*)();
 extern "C" InitArrayFunction __init_array_start[];
 extern "C" InitArrayFunction __init_array_end[];
+extern "C" hcpp::u8 __bss_start[];
+extern "C" hcpp::u8 __bss_end[];
+extern "C" void *memset(void *dest, int value, hcpp::size_t n) noexcept;
 
 namespace {
 
@@ -96,7 +132,7 @@ namespace {
     MonitorReport analyze_monitor(const BootInfo &boot_info) noexcept {
         MonitorReport report;
         if (boot_info.edid_blocks == 0 || boot_info.edid_physical == 0) {
-            serial::write_line("monitor EDID unavailable through VBE/DDC");
+            klog::warn("monitor", "monitor EDID unavailable through VBE/DDC");
             return report;
         }
 
@@ -115,12 +151,18 @@ namespace {
         serial::write_line(report.edid.checksum_ok ? "ok" : "bad");
 
         if (!report.edid_available) {
-            serial::write_line("monitor EDID header invalid");
+            klog::err("monitor", "monitor EDID header invalid");
             return report;
         }
 
         serial::write("monitor name=");
         serial::write_line(report.edid.monitor_name[0] != '\0' ? report.edid.monitor_name : "unknown");
+        const hype::display::OutputId output_id = hype::display::idscreen_register(edid_data, 0);
+        serial::write("output id=");
+        serial::write_hex64(output_id);
+        serial::write(" connector=0 outputs=");
+        serial::write_dec32(hype::display::idscreen_count());
+        serial::write("\r\n");
         serial::write("monitor manufacturer=");
         serial::write(report.edid.manufacturer);
         serial::write(" product=");
@@ -226,159 +268,561 @@ namespace {
         line.append(hcpp::display::hdr_eotf_hlg_supported(report.cta.hdr.eotf_flags) ? "YES" : "NO");
     }
 
-}  // namespace
+    bool boot_framebuffer_ready(const BootInfo *info) noexcept {
+        return info != nullptr && info->magic == HYPEBOOT_MAGIC && (info->flags & 1U) != 0 &&
+               info->framebuffer != 0 &&
+               (info->bits_per_pixel == 24 || info->bits_per_pixel == 32) &&
+               info->width >= 320 && info->height >= 200 && info->pitch != 0;
+    }
 
-extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
-    for (InitArrayFunction *fn = __init_array_start; fn != __init_array_end; ++fn) {
-        (*fn)();
+    BootInfo *boot_info_arg = nullptr;
+    hcpp::graphics::Framebuffer boot_fb;
+    hype::runtime::RuntimeInfo boot_runtime{};
+    bool codec_probe_ok = false;
+    bool image_selftest_ok = false;
+    bool jpeg_selftest_ok = false;
+    bool png_selftest_ok = false;
+    bool video_decode_selftest_ok = false;
+
+    void stage_boot_devices() noexcept {
+        boot_runtime = hype::runtime::boot(*boot_info_arg);
     }
-    serial::initialize();
-    hcpp::fonts::initialize_default_fonts();
-    const hype::runtime::RuntimeInfo runtime_info = hype::runtime::boot(*boot_info);
-    serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
-    serial::write("version=");
-    serial::write_line(HYPEAI_VERSION_FULL);
-    serial::write("core services running=");
-    serial::write_line(runtime_info.core_started ? "yes" : "no");
-    serial::write("core selftest=");
-    serial::write_line(runtime_info.core_selftest ? "passed" : "failed");
-    serial::write("pci devices=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.pci_devices));
-    serial::write(" runtime boot=");
-    serial::write_line(hype::runtime::booted() ? "yes" : "no");
-    serial::write("stages=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.stages_registered));
-    serial::write(" completed=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.stages_completed));
-    serial::write(" failed=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.stages_failed));
-    serial::write("\r\n");
-    const hype::pci::PciDevice *display_device = hype::pci::find_class(0x03);
-    if (display_device != nullptr) {
-        const hype::chips::ChipInfo display_chip = hype::chips::identify(*display_device);
-        serial::write("pci display=");
-        serial::write(display_chip.device_name);
-        serial::write(" vendor=");
-        serial::write_line(display_chip.vendor_name);
-    }
-    hype::audio::initialize();
-    serial::write("audio chips=");
-    serial::write_dec32(static_cast<hcpp::u32>(hype::audio::chip_count()));
-    serial::write("\r\n");
-    for (hcpp::size_t chip_index = 0; chip_index < hype::audio::chip_count(); ++chip_index) {
-        const hype::audio::AudioCard *card = hype::audio::chip(chip_index);
-        if (card == nullptr) {
-            continue;
-        }
-        serial::write("audio chip=");
-        serial::write(card->name);
-        serial::write(" ");
-        write_hex16(card->vendor_id);
-        serial::write_char(':');
-        write_hex16(card->device_id);
+
+    void stage_audio() noexcept {
+        serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
+        serial::write("version=");
+        serial::write_line(HYPEAI_VERSION_FULL);
+        serial::write("core services running=");
+        serial::write_line(boot_runtime.core_started ? "yes" : "no");
+        serial::write("core selftest=");
+        serial::write_line(boot_runtime.core_selftest ? "passed" : "failed");
+        serial::write("pci devices=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.pci_devices));
+        serial::write(" runtime boot=");
+        serial::write_line(hype::runtime::booted() ? "yes" : "no");
+        serial::write("stages=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.stages_registered));
+        serial::write(" completed=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.stages_completed));
+        serial::write(" failed=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.stages_failed));
         serial::write("\r\n");
-    }
-    const bool audio_format_ok = hype::audio::audio_format_selftest();
-    report("audio format selftest=", audio_format_ok);
-    hype::codec::codec_register_builtins();
-    serial::write("codecs=");
-    serial::write_dec32(static_cast<hcpp::u32>(hype::codec::codec_count()));
-    serial::write("\r\n");
-    hype::codec::codec_report();
-    const bool codec_probe_ok = hype::codec::codec_probe_selftest();
-    report("codec probe=", codec_probe_ok);
-    report("codec arena=", hype::codec::codec_arena_selftest());
-    const bool image_selftest_ok = hype::codec::image::image_simple_selftest();
-    report("image simple selftest=", image_selftest_ok);
-    const bool jpeg_selftest_ok = hype::codec::image::jpeg_selftest();
-    report("jpeg decode=", jpeg_selftest_ok);
-    const bool png_selftest_ok = hype::codec::image::png_selftest();
-    report("png selftest=", png_selftest_ok);
-    hype::codec::audio_codec_selftest();
-    serial::write("memory free=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_free_bytes / (1024 * 1024)));
-    serial::write("MB e820=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_e820_entries));
-    serial::write(" usable=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_usable_regions));
-    serial::write(" acpi=");
-    serial::write(runtime_info.acpi_present ? "yes" : "no");
-    serial::write(" tables=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.acpi_tables));
-    serial::write(" interrupts=");
-    serial::write_line(runtime_info.interrupts_ready ? "ready" : "failed");
-    serial::write("vmm=");
-    serial::write(runtime_info.vmm_selftest ? "ready" : "failed");
-    serial::write(" madt=");
-    serial::write(runtime_info.madt_present ? "yes" : "no");
-    serial::write(" cpus=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.apic_cpus));
-    serial::write(" ioapics=");
-    serial::write_dec32(static_cast<hcpp::u32>(runtime_info.ioapics));
-    serial::write(" apic=");
-    serial::write_line(runtime_info.apic_supported ? "enabled" : "unavailable");
-    serial::write("context switch=");
-    serial::write_line(runtime_info.context_switch_ready ? "ready" : "failed");
-    serial::write("video devices=");
-    serial::write_dec32(static_cast<hcpp::u32>(hype::video::v4lv_device_count()));
-    serial::write(" core=ready\r\n");
-    serial::write("kernel threads=");
-    serial::write_line(runtime_info.scheduler_ready ? "ready" : "failed");
-    serial::write("fonts=");
-    serial::write_dec32(static_cast<hcpp::u32>(hcpp::fonts::registered_font_count()));
-    serial::write(" default=");
-    serial::write(hcpp::fonts::default_font_name());
-    serial::write("\r\n");
-    serial::write("hpf selftest=");
-    serial::write_line(hcpp::fonts::hpf_selftest() ? "ok" : "failed");
-    serial::write("sha256=");
-    serial::write_line(hcpp::sha256_selftest() ? "ok" : "failed");
-    serial::write("pbkdf2=");
-    serial::write_line(hcpp::pbkdf2_selftest() ? "ok" : "failed");
-    serial::write("rng=");
-    serial::write(hcpp::rng_backend() == hcpp::RngBackend::Rdrand ? "rdrand" : "tsc");
-    serial::write(" selftest=");
-    serial::write_line(hcpp::rng_selftest() ? "ok" : "failed");
-    serial::write("ecdsa=");
-    serial::write_line(hcpp::ecdsa_selftest() ? "ok" : "failed");
-    if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
-        serial::write_line("sqlite=ok");
-        serial::write("db selftest=");
-        serial::write_line(hype::db::db_selftest() ? "ok" : "failed");
-        const bool hello_ok = hype::hello::hello_selftest();
-        report("hello selftest=", hello_ok);
-    } else {
-        serial::write("sqlite=fail ");
-        serial::write_line(db_error);
-        serial::write_line("hello selftest=skipped no-db");
-    }
-    const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
-    hcpp::u32 cyrillic_found = 0;
-    hcpp::u32 cyrillic_pixels = 0;
-    if (cyrillic_font != nullptr) {
-        for (hcpp::u32 cp = 0x0400; cp <= 0x045F; ++cp) {
-            const hcpp::fonts::FontGlyph glyph = cyrillic_font->glyph_for(cp);
-            if (!glyph.valid()) {
+        const hype::pci::PciDevice *display_device = hype::pci::find_class(0x03);
+        if (display_device != nullptr) {
+            const hype::chips::ChipInfo display_chip = hype::chips::identify(*display_device);
+            serial::write("pci display=");
+            serial::write(display_chip.device_name);
+            serial::write(" vendor=");
+            serial::write_line(display_chip.vendor_name);
+        }
+        hype::audio::initialize();
+        serial::write("audio chips=");
+        serial::write_dec32(static_cast<hcpp::u32>(hype::audio::chip_count()));
+        serial::write("\r\n");
+        for (hcpp::size_t chip_index = 0; chip_index < hype::audio::chip_count(); ++chip_index) {
+            const hype::audio::AudioCard *card = hype::audio::chip(chip_index);
+            if (card == nullptr) {
                 continue;
             }
-            ++cyrillic_found;
-            for (hcpp::u32 row = 0; row < glyph.height; ++row) {
-                for (hcpp::u32 column = 0; column < glyph.width; ++column) {
-                    if (glyph.pixel(column, row)) {
-                        ++cyrillic_pixels;
+            serial::write("audio chip=");
+            serial::write(card->name);
+            serial::write(" ");
+            write_hex16(card->vendor_id);
+            serial::write_char(':');
+            write_hex16(card->device_id);
+            serial::write("\r\n");
+        }
+        const bool audio_format_ok = hype::audio::audio_format_selftest();
+        report("audio format selftest=", audio_format_ok);
+    }
+
+    void stage_codecs() noexcept {
+        hype::codec::codec_register_builtins();
+        serial::write("codecs=");
+        serial::write_dec32(static_cast<hcpp::u32>(hype::codec::codec_count()));
+        serial::write("\r\n");
+        hype::codec::codec_report();
+        codec_probe_ok = hype::codec::codec_probe_selftest();
+        report("codec probe=", codec_probe_ok);
+        report("codec arena=", hype::codec::codec_arena_selftest());
+        image_selftest_ok = hype::codec::image::image_simple_selftest();
+        report("image simple selftest=", image_selftest_ok);
+        jpeg_selftest_ok = hype::codec::image::jpeg_selftest();
+        report("jpeg decode=", jpeg_selftest_ok);
+        png_selftest_ok = hype::codec::image::png_selftest();
+        report("png selftest=", png_selftest_ok);
+        report("video demux=", hype::video::video_demux_selftest());
+        hype::codec::audio_codec_selftest();
+        video_decode_selftest_ok = hype::video::video_decode_selftest();
+    }
+
+    void stage_memory() noexcept {
+        serial::write("memory free=");
+        serial::write_dec32(
+            static_cast<hcpp::u32>(boot_runtime.memory_free_bytes / (1024 * 1024)));
+        serial::write("MB e820=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.memory_e820_entries));
+        serial::write(" usable=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.memory_usable_regions));
+        serial::write(" acpi=");
+        serial::write(boot_runtime.acpi_present ? "yes" : "no");
+        serial::write(" tables=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.acpi_tables));
+        serial::write(" interrupts=");
+        serial::write_line(boot_runtime.interrupts_ready ? "ready" : "failed");
+        report("panic test=", hype::panic_selftest());
+    }
+
+    void stage_display() noexcept {
+        serial::write("vmm=");
+        serial::write(boot_runtime.vmm_selftest ? "ready" : "failed");
+        serial::write(" madt=");
+        serial::write(boot_runtime.madt_present ? "yes" : "no");
+        serial::write(" cpus=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.apic_cpus));
+        serial::write(" ioapics=");
+        serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.ioapics));
+        serial::write(" apic=");
+        serial::write_line(boot_runtime.apic_supported ? "enabled" : "unavailable");
+        serial::write("context switch=");
+        serial::write_line(boot_runtime.context_switch_ready ? "ready" : "failed");
+        serial::write("video devices=");
+        serial::write_dec32(static_cast<hcpp::u32>(hype::video::v4lv_device_count()));
+        serial::write(" core=ready\r\n");
+        serial::write("kernel threads=");
+        serial::write_line(boot_runtime.scheduler_ready ? "ready" : "failed");
+        serial::write("fonts=");
+        serial::write_dec32(static_cast<hcpp::u32>(hcpp::fonts::registered_font_count()));
+        serial::write(" default=");
+        serial::write(hcpp::fonts::default_font_name());
+        serial::write("\r\n");
+        serial::write("hpf selftest=");
+        serial::write_line(hcpp::fonts::hpf_selftest() ? "ok" : "failed");
+        const bool ttf_loaded = hype::font::font_init();
+        serial::write("font ttf=");
+        serial::write(ttf_loaded ? "ok" : "fail");
+        serial::write(" glyphs=");
+        serial::write_dec32(hype::font::font_glyph_count());
+        serial::write("\r\n");
+        serial::write("font cyr=");
+        serial::write_line(hype::font::font_glyph(0x041F).valid() ? "ok" : "missing");
+        serial::write("font measure=");
+        serial::write_dec32(static_cast<hcpp::u32>(
+            hype::font::text_measure("HypeAI", 24)));
+        serial::write("\r\n");
+        report("font selftest=", ttf_loaded && hype::font::font_selftest());
+        report("text selftest=", hype::font::text_selftest());
+        serial::write("sha256=");
+        serial::write_line(hcpp::sha256_selftest() ? "ok" : "failed");
+        serial::write("pbkdf2=");
+        serial::write_line(hcpp::pbkdf2_selftest() ? "ok" : "failed");
+        serial::write("rng=");
+        serial::write(hcpp::rng_backend() == hcpp::RngBackend::Rdrand ? "rdrand" : "tsc");
+        serial::write(" selftest=");
+        serial::write_line(hcpp::rng_selftest() ? "ok" : "failed");
+        serial::write("ecdsa=");
+        serial::write_line(hcpp::ecdsa_selftest() ? "ok" : "failed");
+        const bool display_core_ok = hype::display::display_selftest();
+        report("display core selftest=", display_core_ok);
+        const bool display2_ok = hype::display::display2_selftest();
+        report("display id/dpi/cta selftest=", display2_ok);
+        const bool display3_ok = hype::display::display3_selftest();
+        report("display modeset/dp selftest=", display3_ok);
+        const bool display4_ok = hype::display::display4_selftest();
+        report("display multi selftest=", display4_ok);
+        const bool gfx_ok = hype::gfx::gfx_selftest();
+        report("gfx engine selftest=", gfx_ok);
+        hype::gfx::gfx_bench();
+    }
+
+    struct Mp3FileSource {
+        const hcpp::i16 *pcm;
+        hcpp::u32 frames;
+        hcpp::u32 rate;
+        hcpp::u8 channels;
+        hcpp::u32 pos;
+    };
+
+    constexpr hcpp::size_t mp3_arena_pages = 1600;
+    constexpr hcpp::size_t mp3_pcm_bytes = 5 * 1024 * 1024;
+    Mp3FileSource mp3_file{};
+    bool mp3_file_decoded;
+    bool mp3_file_queued;
+
+    void mp3_file_fill(hcpp::i16 *dst, hcpp::u32 frames, void *ctx) noexcept {
+        auto *src = static_cast<Mp3FileSource *>(ctx);
+        for (hcpp::u32 f = 0; f < frames; ++f) {
+            const hcpp::u32 base =
+                (src->pos % src->frames) * src->channels;
+            for (hcpp::u8 c = 0; c < src->channels; ++c) {
+                dst[f * src->channels + c] = src->pcm[base + c];
+            }
+            ++src->pos;
+        }
+    }
+
+    void stage_vfs() noexcept {
+        hype::vfs::fs_init();
+        const bool vfs_seeded = hype::vfs::fs_seed();
+        serial::write("vfs disks=");
+        serial::write_dec32(hype::vfs::fs_disk_count());
+        serial::write(" seed=");
+        serial::write_line(vfs_seeded ? "ok" : "fail");
+        hcpp::u32 hxer_files = 0;
+        if (vfs_seeded) {
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::speedstart_app()) ? 1
+                                                                        : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::hxsettings_app()) ? 1
+                                                                        : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::hxabout_app()) ? 1 : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::revdbg_app()) ? 1 : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::dxbg_app()) ? 1 : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::gdxfdemo_app()) ? 1 : 0;
+        }
+        serial::write("vfs hxer=");
+        serial::write_dec32(hxer_files);
+        serial::write("\r\n");
+        const hype::vfs::BlobMount blob = hype::vfs::hypeblob_mount();
+        serial::write("blob ata=");
+        serial::write_line(blob.ata_ok ? "ok" : "fail");
+        serial::write("ata lba=");
+        serial::write_line(blob.lba_ok ? "ok" : "fail");
+        serial::write("blob files=");
+        serial::write_dec32(blob.files);
+        serial::write("\r\n");
+        serial::write("blob bytes=");
+        serial::write_dec32(static_cast<hcpp::u32>(blob.bytes));
+        serial::write("\r\n");
+        // Payload packs: wallpapers (U:/wallpapers), help docs
+        // (S:/data/help), fonts (S:/data/fonts) and the .hxer app pack
+        // (U:/apps).
+        const char* const pack_dirs[] = {
+            "HYPEOS://U/wallpapers", "HYPEOS://S/data/help",
+            "HYPEOS://S/data/fonts", "HYPEOS://U/apps"};
+        hcpp::u32 packs = 0;
+        for (hcpp::u32 i = 0; i < 4; ++i) {
+            if (hype::vfs::fs_list(pack_dirs[i], nullptr, 0) != 0) {
+                ++packs;
+            }
+        }
+        serial::write("payload packs=");
+        serial::write_dec32(packs);
+        serial::write("\r\n");
+        serial::write("fs ufiles=");
+        serial::write_dec32(hype::vfs::fs_disk_file_count('U'));
+        serial::write("\r\n");
+        hype::vfs::FsSelftest vfs_selftest{};
+        const bool vfs_ok = hype::vfs::fs_selftest(vfs_selftest);
+        serial::write("vfs path=");
+        serial::write_line(vfs_selftest.path_ok ? "ok" : "fail");
+        serial::write("vfs sys=");
+        serial::write_line(vfs_selftest.sys_locked ? "locked" : "fail");
+        serial::write("vfs io=");
+        serial::write_line(vfs_selftest.io_ok ? "ok" : "fail");
+        report("vfs selftest=", vfs_ok && vfs_seeded &&
+                                   hype::vfs::fs_disk_count() == 3);
+        report("audio api selftest=", hype::audio::audio_api_selftest());
+        if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
+            serial::write_line("sqlite=ok");
+            serial::write("db selftest=");
+            serial::write_line(hype::db::db_selftest() ? "ok" : "failed");
+            const bool hello_ok = hype::hello::hello_selftest();
+            report("hello selftest=", hello_ok);
+        } else {
+            serial::write("sqlite=fail ");
+            serial::write_line(db_error);
+            serial::write_line("hello selftest=skipped no-db");
+        }
+        // Persistence check: write a probe file, then serialize the whole
+        // persistable memfs (U:*, S:/data, T:*) back to the HYPEDATA blob.
+        // hypeblob_sync() re-reads every written sector and compares it
+        // before reporting success, so ok here means the disk holds it.
+        static const char sync_probe[] = "hypeblob sync probe\n";
+        hype::vfs::fs_write("HYPEOS://U/home/sync-probe.txt", sync_probe,
+                            sizeof(sync_probe));
+        const bool sync_ok = hype::vfs::hypeblob_sync();
+        serial::write("ata write=");
+        serial::write(sync_ok ? "ok" : "fail");
+        serial::write(" sync=");
+        serial::write_line(sync_ok ? "ok" : "fail");
+
+        // MP3 load+decode test: read the embedded payload track through vfs
+        // and decode it via the codec path into a PMM-backed PCM buffer.
+        static const char mp3_test_path[] = "HYPEOS://U/music/test.mp3";
+        hype::vfs::FsStat mp3_stat{};
+        if (hype::vfs::fs_stat(mp3_test_path, mp3_stat) ==
+            hype::vfs::FsStatus::Ok) {
+            hype::codec::Arena mp3_arena{};
+            if (hype::codec::arena_from_pmm(mp3_arena, mp3_arena_pages)) {
+                hcpp::u8 *mp3_data = static_cast<hcpp::u8 *>(
+                    hype::codec::arena_alloc(mp3_arena, mp3_stat.size, 8));
+                hcpp::u32 got = 0;
+                if (mp3_data != nullptr &&
+                    hype::vfs::fs_read(mp3_test_path, mp3_data, mp3_stat.size,
+                                       &got) == hype::vfs::FsStatus::Ok &&
+                    got == mp3_stat.size) {
+                    serial::write("mp3 load=ok bytes=");
+                    serial::write_dec32(mp3_stat.size);
+                    serial::write("\r\n");
+                    const hype::codec::CodecId mp3_id =
+                        hype::codec::codec_probe(mp3_data, got);
+                    hype::codec::PcmBuf mp3_buf{};
+                    mp3_buf.data = static_cast<hcpp::u8 *>(
+                        hype::codec::arena_alloc(mp3_arena, mp3_pcm_bytes, 8));
+                    mp3_buf.capacity = mp3_pcm_bytes;
+                    if (mp3_buf.data != nullptr &&
+                        hype::codec::codec_decode(mp3_id, mp3_data, got,
+                                                  &mp3_buf, mp3_arena) ==
+                            hype::codec::CodecStatus::Ok) {
+                        serial::write("mp3 dec=ok frames=");
+                        serial::write_dec32(mp3_buf.frames);
+                        serial::write(" rate=");
+                        serial::write_dec32(mp3_buf.format.sample_rate);
+                        serial::write(" ch=");
+                        serial::write_dec32(
+                            static_cast<hcpp::u32>(mp3_buf.format.channels));
+                        serial::write("\r\n");
+                        mp3_file.pcm = reinterpret_cast<const hcpp::i16 *>(
+                            mp3_buf.data);
+                        mp3_file.frames = mp3_buf.frames;
+                        mp3_file.channels = mp3_buf.format.channels;
+                        mp3_file.rate = mp3_buf.format.sample_rate;
+                        mp3_file.pos = 0;
+                        mp3_file_decoded = true;
+                    } else {
+                        serial::write_line("mp3 dec=fail");
+                    }
+                } else {
+                    serial::write_line("mp3 load=fail");
+                }
+            }
+        } else {
+            serial::write_line("mp3 load=absent");
+        }
+    }
+
+    bool svc_gfx_start() noexcept {
+        return hype::gfx::gfx_selftest();
+    }
+
+    bool svc_font_start() noexcept {
+        return hype::font::hypefont_ready();
+    }
+
+    bool svc_codecs_start() noexcept {
+        return hype::codec::codec_count() != 0;
+    }
+
+    bool svc_display_start() noexcept {
+        return hype::display::hgc_ready();
+    }
+
+    bool svc_vfs_start() noexcept {
+        return hypevfs_mem_methods() != nullptr;
+    }
+
+    bool svc_sqlite_start() noexcept {
+        return hype::db::db_handle() != nullptr;
+    }
+
+    bool svc_hda_start() noexcept {
+        return hype::audio::ready();
+    }
+
+    bool svc_hasio_start() noexcept {
+        return hype::audio::hasio_service_start();
+    }
+
+    bool svc_hasio_stop() noexcept {
+        return hype::audio::hasio_service_stop();
+    }
+
+    bool svc_ac97_start() noexcept {
+        return hype::audio::ac97::ac97_ready();
+    }
+
+    bool svc_es1370_start() noexcept {
+        return hype::audio::es1370::es1370_ready();
+    }
+
+    bool svc_video_start() noexcept {
+        return hype::video::v4lv_device_count() != 0;
+    }
+
+    void stage_svc() noexcept {
+        using hype::svc::SvcRestart;
+        hype::svc::svc_register("gfx", svc_gfx_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("font", svc_font_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("codecs", svc_codecs_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("display", svc_display_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("vfs", svc_vfs_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("sqlite", svc_sqlite_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("hda", svc_hda_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("hasio", svc_hasio_start, svc_hasio_stop, SvcRestart::OnFail,
+                                true);
+        hype::svc::svc_register("ac97", svc_ac97_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("es1370", svc_es1370_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("video", svc_video_start, nullptr, SvcRestart::OnFail, true);
+        const hcpp::u32 started = hype::svc::svc_autostart();
+        serial::write("svc autostart=");
+        serial::write_dec32(started);
+        serial::write("\r\n");
+        report("svc selftest=", hype::svc::svc_selftest());
+        report("revdbg selftest=", hype::hxrt::revdbg_selftest());
+    }
+
+    void stage_hxrt() noexcept {
+        hype::hxrt::hxrt_boot();
+        report("dxbg selftest=", hype::hxrt::dxbg_selftest());
+        serial::write("hxer sync=");
+        serial::write_dec32(hype::vfs::hypefile_sync());
+        serial::write("\r\n");
+        hype::vfs::HypefileSelftest hypefile_selftest{};
+        const bool hypefile_ok =
+            hype::vfs::hypefile_selftest(hypefile_selftest);
+        report("hypefile selftest=", hypefile_ok);
+    }
+
+    void stage_ui() noexcept {
+        const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
+        hcpp::u32 cyrillic_found = 0;
+        hcpp::u32 cyrillic_pixels = 0;
+        if (cyrillic_font != nullptr) {
+            for (hcpp::u32 cp = 0x0400; cp <= 0x045F; ++cp) {
+                const hcpp::fonts::FontGlyph glyph = cyrillic_font->glyph_for(cp);
+                if (!glyph.valid()) {
+                    continue;
+                }
+                ++cyrillic_found;
+                for (hcpp::u32 row = 0; row < glyph.height; ++row) {
+                    for (hcpp::u32 column = 0; column < glyph.width; ++column) {
+                        if (glyph.pixel(column, row)) {
+                            ++cyrillic_pixels;
+                        }
                     }
                 }
             }
         }
+        serial::write("cyrillic glyphs=");
+        serial::write_dec32(cyrillic_found);
+        serial::write("/66 pixels=");
+        serial::write_dec32(cyrillic_pixels);
+        serial::write("\r\n");
+        const bool kit_ok = hype::ui::selftest() &&
+                            hype::ui::canvas2_selftest() &&
+                            hype::ui::theme2_selftest() &&
+                            hype::ui::focus_selftest() &&
+                            hype::ui::overlay_selftest() &&
+                            hype::ui::feedback_selftest() &&
+                            hype::ui::data_selftest() &&
+                            hype::ui::anim_selftest() &&
+                            hype::ui::entry_selftest();
+        report("ui kit selftests=", kit_ok);
+        report("wm selftest=", hype::win::wm_selftest());
     }
-    serial::write("cyrillic glyphs=");
-    serial::write_dec32(cyrillic_found);
-    serial::write("/66 pixels=");
-    serial::write_dec32(cyrillic_pixels);
+
+    void stage_gdxf() noexcept {
+        if (boot_fb.valid()) {
+            hype::gdxf::gdxf_initialize(boot_fb);
+        } else {
+            serial::write_line("gdxf init=skipped nofb");
+        }
+        hype::gdxf::gdxf_selftest();
+    }
+
+    void stage_input() noexcept {
+        if (boot_fb.valid()) {
+            hype::input::cursor_init(boot_fb.width(), boot_fb.height());
+        } else {
+            hype::input::cursor_init(1024, 768);
+        }
+        serial::write("ptr init=");
+        serial::write_line(hype::input::cursor_ready() ? "ok" : "fail");
+        if (!hype::input::cursor_ready()) {
+            serial::write("ptr failstep=");
+            serial::write_dec32(hype::input::msaux_fail_step());
+            serial::write("\r\n");
+        }
+        report("input selftest=", hype::input::input_selftest(boot_fb));
+    }
+
+}  // namespace
+
+extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
+    const bool has_framebuffer = boot_framebuffer_ready(boot_info);
+    if (has_framebuffer) {
+        memset(reinterpret_cast<void *>(static_cast<hcpp::uintptr_t>(boot_info->framebuffer)), 0,
+               static_cast<hcpp::size_t>(boot_info->pitch) *
+                   static_cast<hcpp::size_t>(boot_info->height));
+    }
+    memset(__bss_start, 0,
+           static_cast<hcpp::size_t>(__bss_end - __bss_start));
+    for (InitArrayFunction *fn = __init_array_start; fn != __init_array_end; ++fn) {
+        (*fn)();
+    }
+    serial::initialize();
+    if (has_framebuffer) {
+        serial::write_line("boot fb=black");
+    }
+    hype::x86::cpuid_initialize();
+    serial::write("cpu vendor=");
+    serial::write(hype::x86::cpuid_features().vendor);
+    serial::write(" sse2=");
+    serial::write_char(hype::x86::cpuid_has(hype::x86::CpuFeature::Sse2) ? '1' : '0');
+    serial::write(" avx=");
+    serial::write_char(hype::x86::cpuid_has(hype::x86::CpuFeature::Avx) ? '1' : '0');
     serial::write("\r\n");
+    serial::write("cpu selftest=");
+    serial::write_line(hype::x86::cpuid_selftest() ? "ok" : "fail");
+    char rtc_text[20];
+    const bool rtc_ok = hype::time::rtc_format(rtc_text);
+    if (rtc_ok) {
+        serial::write("rtc ");
+        serial::write(rtc_text);
+        serial::write("\r\n");
+    }
+    serial::write("rtc=");
+    serial::write_line(rtc_ok ? "ok" : "fail");
+    hcpp::fonts::initialize_default_fonts();
+    hcpp::graphics::Framebuffer framebuffer;
+    if (has_framebuffer) {
+        framebuffer = hcpp::graphics::Framebuffer(
+            reinterpret_cast<volatile hcpp::u8 *>(
+                static_cast<hcpp::uintptr_t>(boot_info->framebuffer)),
+            boot_info->width, boot_info->height, boot_info->pitch, boot_info->bits_per_pixel,
+            boot_info->red_mask_size, boot_info->red_position, boot_info->green_mask_size,
+            boot_info->green_position, boot_info->blue_mask_size, boot_info->blue_position);
+        hype::display::display_bind_target(framebuffer);
+        boot_fb = framebuffer;
+        hype::panic_bind_framebuffer(framebuffer);
+        hype::boot::boot_splash_begin(framebuffer);
+        hype::boot::boot_splash_hold();
+    }
+
+    boot_info_arg = boot_info;
+    const hype::boot::BootStep boot_steps[] = {
+        {"boot devices", 14, stage_boot_devices},
+        {"audio", 28, stage_audio},
+        {"codecs", 42, stage_codecs},
+        {"memory", 56, stage_memory},
+        {"display", 70, stage_display},
+        {"vfs", 84, stage_vfs},
+        {"hxrt", 92, stage_hxrt},
+        {"ui", 95, stage_ui},
+        {"input", 96, stage_input},
+        {"svc", 98, stage_svc},
+        {"gdxf", 99, stage_gdxf},
+    };
+    hype::boot::bootseq_run(boot_steps, 11);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
-        serial::write_line("boot info missing or invalid");
+        klog::err("boot", "boot info missing or invalid");
         write_vga_text("HYPEAI OS BOOT INFO ERROR");
         halt_forever();
     }
@@ -386,25 +830,13 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     write_boot_info(*boot_info);
     const MonitorReport monitor = analyze_monitor(*boot_info);
 
-    const bool has_framebuffer = (boot_info->flags & 1U) != 0 && boot_info->framebuffer != 0 &&
-                                 (boot_info->bits_per_pixel == 24 || boot_info->bits_per_pixel == 32) &&
-                                 boot_info->width >= 320 && boot_info->height >= 200 && boot_info->pitch != 0;
-
     if (!has_framebuffer) {
-        serial::write_line("VBE framebuffer unavailable; VGA text fallback active");
+        klog::warn("display", "VBE framebuffer unavailable; VGA text fallback active");
         write_vga_text("HYPEAI OS BOOT OK - VGA TEXT MODE");
         halt_forever();
     }
 
-    auto *framebuffer_base =
-        reinterpret_cast<volatile hcpp::u8 *>(static_cast<hcpp::uintptr_t>(boot_info->framebuffer));
-
-    hcpp::graphics::Framebuffer framebuffer(
-        framebuffer_base, boot_info->width, boot_info->height, boot_info->pitch, boot_info->bits_per_pixel,
-        boot_info->red_mask_size, boot_info->red_position, boot_info->green_mask_size, boot_info->green_position,
-        boot_info->blue_mask_size, boot_info->blue_position);
-
-    framebuffer.draw_test_pattern();
+    hype::boot::boot_splash_end();
 
     const hcpp::u32 panel_color = framebuffer.encode_rgb(4, 10, 28);
     const hcpp::u32 title_color = framebuffer.encode_rgb(240, 250, 255);
@@ -448,31 +880,37 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
 
     serial::write("preferred colorspace=");
     serial::write_line(hcpp::display::color_space_name(hcpp::display::ColorSpace::Srgb));
-    serial::write_line(
-        "HDR colorspace activation is not possible through legacy "
-        "VBE; native GPU/HDMI/DisplayPort driver required");
+    klog::warn("display",
+               "HDR colorspace activation is not possible through legacy "
+               "VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
-    hype::ui::flowlogin::drive(framebuffer);
-    if (hype::ui::flowlogin::authenticated() ||
-        hype::ui::flowlogin::state() ==
-            hype::ui::flowlogin::State::Unavailable) {
-        const hcpp::u32 ui_widgets = hype::ui::demo(framebuffer);
-        if (ui_widgets > 0) {
-            serial::write("ui demo=painted widgets=");
-            serial::write_dec32(ui_widgets);
+    hype::session::session_begin(framebuffer);
+    hype::session::session_scripted_auth(framebuffer);
+    hype::input::cursor_poll();
+    hype::input::cursor_draw(framebuffer);
+    if (hype::session::session_logged_in()) {
+        hype::input::cursor_erase(framebuffer);
+        const hcpp::u32 shell_wins = hype::win::desk_paint(framebuffer);
+        if (shell_wins > 0) {
+            serial::write("ui shell=painted wins=");
+            serial::write_dec32(shell_wins);
             serial::write("\r\n");
+            const hcpp::u32 demo_win = hype::win::desk_open_app("GDXFDemo");
+            serial::write("gdxf demo win=");
+            serial::write_line(demo_win != 0 ? "ok" : "fail");
         } else {
-            serial::write_line("ui demo=failed");
+            serial::write_line("ui shell=failed");
         }
     } else {
-        serial::write_line("ui demo=blocked");
+        serial::write_line("ui shell=blocked");
     }
+    hype::input::cursor_poll();
+    hype::input::cursor_draw(framebuffer);
     const bool codec_integrated =
         hype::codec::codec_count() ==
             static_cast<hcpp::size_t>(hype::codec::CodecId::Count) - 1 -
                 hype::codec::codec_reserved_ids &&
-        codec_probe_ok && image_selftest_ok && jpeg_selftest_ok && png_selftest_ok &&
-        hype::ui::demo_codec_image_painted();
+        codec_probe_ok && image_selftest_ok && jpeg_selftest_ok && png_selftest_ok;
     report("codec integrated=", codec_integrated);
     serial::write_line("HypeAICode++ runtime active");
     const hcpp::u64 pit_start = hype::interrupts::pit_ticks();
@@ -486,5 +924,26 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write(" decoder=ready input=");
     if (hype::input::keyring_count() != 0) serial::write_char(hype::input::keyring_peek(0));
     serial::write("\r\n");
-    halt_forever();
+    serial::write_line("cursor poll=active");
+    for (;;) {
+        const bool ptr_dirty = hype::input::cursor_poll();
+        if (hype::session::session_logged_in() && hype::win::wm_dirty()) {
+            hype::input::cursor_erase(framebuffer);
+            hype::win::desk_paint(framebuffer);
+            hype::input::cursor_draw(framebuffer);
+        } else if (ptr_dirty) {
+            hype::input::cursor_draw(framebuffer);
+        }
+        if (mp3_file_decoded && !mp3_file_queued &&
+            hype::audio::hasio_ready()) {
+            const hcpp::u32 src = hype::audio::pullmix_add_source(
+                mp3_file_fill, &mp3_file, mp3_file.channels, mp3_file.rate);
+            if (src != hype::audio::pullmix_invalid_id) {
+                mp3_file_queued = true;
+                serial::write_line("mp3 play=queued");
+            }
+        }
+        hype::audio::hasio_pump_active();
+        hype::interrupts::pit_wait_ticks(1);
+    }
 }

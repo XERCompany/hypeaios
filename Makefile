@@ -38,7 +38,7 @@ KERNEL_HEADERS := $(shell find hcpp kernel third_party -name '*.hpp' -o -name '*
 PYTHON ?= python3
 FONT_ASSETS := $(BUILD)/fonts/hypeai-8x16_hpf.cc
 
-.PHONY: all clean run test
+.PHONY: all clean run test iso vdi usb
 
 all: $(BUILD)/hypeai-os.img $(FONT_ASSETS)
 
@@ -78,14 +78,20 @@ $(BUILD)/fonts/%.o: $(BUILD)/fonts/%.cc | $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/kernel.bin: $(KERNEL_OBJECTS) kernel/linker.ld
-	$(LD) -nostdlib -z noexecstack -T kernel/linker.ld -o $@ $(KERNEL_OBJECTS)
+	$(LD) -nostdlib -z noexecstack -T kernel/linker.ld -Wl,-Map,$(BUILD)/kernel.map -o $@ $(KERNEL_OBJECTS)
 
-$(BUILD)/hypeai-os.img: $(BUILD)/stage1.bin $(BUILD)/stage2.bin $(BUILD)/kernel.bin tools/mkimage.py
+PAYLOAD_FILES := $(wildcard docs/wiki/*.md docs/research/*.md) cursor.png tools/Montserrat.ttf \
+	$(wildcard payload/wallpapers/*.png payload/help/*.txt payload/fonts/* payload/music/*.mp3)
+
+$(BUILD)/hypeai-os.img: $(BUILD)/stage1.bin $(BUILD)/stage2.bin $(BUILD)/kernel.bin tools/mkimage.py $(PAYLOAD_FILES)
 	python3 tools/mkimage.py
 
 run: all
 	qemu-system-x86_64 -drive format=raw,file=$(BUILD)/hypeai-os.img \
 		-device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
+		-device sb16,audiodev=snd0 -device adlib,audiodev=snd0 \
+		-device AC97,audiodev=snd0 \
+		-device ES1370,audiodev=snd0 \
 		-serial stdio -display none -no-reboot
 
 $(BUILD)/hypeai-os.iso: $(BUILD)/hypeai-os.img tools/mkiso.py $(BUILD)/version_generated.h
@@ -93,8 +99,34 @@ $(BUILD)/hypeai-os.iso: $(BUILD)/hypeai-os.img tools/mkiso.py $(BUILD)/version_g
 
 iso: $(BUILD)/hypeai-os.iso
 
+$(BUILD)/hypeai-os.vdi: $(BUILD)/hypeai-os.img
+	@if command -v VBoxManage >/dev/null 2>&1; then \
+		VBoxManage convertfromraw --format VDI $(BUILD)/hypeai-os.img $(BUILD)/hypeai-os.vdi; \
+	elif [ -x "/c/Program Files/Oracle/VirtualBox/VBoxManage.exe" ]; then \
+		"/c/Program Files/Oracle/VirtualBox/VBoxManage.exe" convertfromraw --format VDI \
+			"`cygpath -w $(BUILD)/hypeai-os.img`" "`cygpath -w $(BUILD)/hypeai-os.vdi`"; \
+	else \
+		echo "VBoxManage not found - attach build/hypeai-os.img as raw disk or install VirtualBox"; \
+		exit 1; \
+	fi
+
+vdi: $(BUILD)/hypeai-os.vdi
+
+usb: all
+	@echo "Write build/hypeai-os.img to a USB stick (all data on it will be erased):"
+	@echo "  Windows: Rufus -> select image -> 'DD Image' mode -> START"
+	@echo "          or balenaEtcher -> Flash from file -> hypeai-os.img"
+	@echo "  Linux:   dd if=build/hypeai-os.img of=/dev/sdX bs=4M status=progress conv=fsync"
+	@echo "Boot the stick with BIOS/CSM (Legacy) mode enabled - UEFI-only is unsupported."
+
 test: all
 	./tools/test-qemu.sh
+
+embedfont:
+	$(PYTHON) tools/embed_ttf.py
+
+embedcursor:
+	$(PYTHON) tools/embed_cursor.py
 
 clean:
 	rm -rf $(BUILD)

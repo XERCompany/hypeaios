@@ -1,37 +1,62 @@
+#include "hcpp/memory.hpp"
 #include "kernel/audio/alacdecoder.h"
-#include "kernel/audio/alacencdoer.h"
+#include "kernel/audio/alacencoder.h"
 #include "kernel/audio/alsaau.h"
 #include "kernel/audio/audio-serivce.h"
 #include "kernel/audio/audioapi.h"
 #include "kernel/audio/audiobuf.h"
 #include "kernel/audio/audioclient.h"
 #include "kernel/audio/audiofudev.h"
+#include "kernel/audio/audiofx.h"
 #include "kernel/audio/audiohigh.h"
 #include "kernel/audio/audioparse.h"
 #include "kernel/audio/dvdeca.h"
+#include "kernel/audio/pullmix.h"
 #include "kernel/audio/waveform.h"
+#include "kernel/codecapps/arena.h"
+#include "kernel/codecapps/registry.h"
+#include "kernel/memory/pmm.h"
 #include "kernel/serial.hpp"
+#include "kernel/vfs/hypefs.h"
+
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 extern "C" void hype_audio_pcm_copy(void *dst, const void *src, hcpp::u64 bytes) noexcept;
+extern "C" void hype_audio_buffer_clear(hcpp::i16 *dst, hcpp::u64 frames) noexcept;
+extern "C" void hype_audio_mix_s16(hcpp::i16 *dst, const hcpp::i16 *src,
+                                   hcpp::u64 frames) noexcept;
+extern "C" void hype_audio_pcm_mono_to_stereo_s16(hcpp::i16 *dst, const hcpp::i16 *src,
+                                                  hcpp::u64 frames) noexcept;
+extern "C" void hype_audio_pcm_swap_channels_s16(hcpp::i16 *stereo, hcpp::u64 frames) noexcept;
 
 namespace hype::audio {
     namespace {
         constexpr hcpp::u32 max_streams = 4;
         constexpr hcpp::u32 max_clients = 8;
         constexpr hcpp::u32 stage_capacity = 16 * 1024;
+        constexpr hcpp::size_t max_decoders = 24;
+
+        struct DecoderSlot {
+            AudioDecoderEntry entry;
+            codec::CodecId bridged;
+        };
 
         struct AudioStream {
             bool used;
             AudioFormat format;
             AudioRing ring;
             hcpp::u8 volume;
+            hcpp::u16 gain_q8;
+            AudioStreamState state;
             hcpp::u32 frames_written;
         };
 
         AudioStream streams[max_streams];
         AudioClient clients[max_clients];
         hcpp::u32 client_count;
-        AudioDecoderEntry decoders[max_audio_cards];
+        DecoderSlot decoders[max_decoders];
         hcpp::size_t decoder_count;
         AudioFunctionNode function_nodes[max_audio_cards * audiofudev_max_nodes];
         hcpp::u8 function_node_counts[max_audio_cards];
@@ -56,6 +81,100 @@ namespace hype::audio {
             AlacConfig config{};
             return alac_parse_cookie(data, bytes, config);
         }
+
+        bool codec_audio_probe(const void *data, hcpp::u32 bytes) noexcept {
+            const codec::CodecDescriptor *descriptor =
+                codec::codec_info(codec::codec_probe(static_cast<const hcpp::u8 *>(data), bytes));
+            return descriptor != nullptr && descriptor->kind == codec::CodecKind::Audio;
+        }
+
+        codec::CodecId dvdeca_codec_id(AudioCodecId id) noexcept {
+            switch (id) {
+                case AudioCodecId::WavPcm:
+                    return codec::CodecId::Wav;
+                case AudioCodecId::Alac:
+                    return codec::CodecId::Alac;
+                case AudioCodecId::Mp2:
+                    return codec::CodecId::Mp3;
+                case AudioCodecId::Flac:
+                    return codec::CodecId::Flac;
+                case AudioCodecId::Vorbis:
+                    return codec::CodecId::Vorbis;
+                case AudioCodecId::Opus:
+                    return codec::CodecId::Opus;
+                case AudioCodecId::Aac:
+                    return codec::CodecId::Aac;
+                default:
+                    return codec::CodecId::Unknown;
+            }
+        }
+
+        AudioCodecId dvdeca_audio_id(codec::CodecId id) noexcept {
+            switch (id) {
+                case codec::CodecId::Wav:
+                case codec::CodecId::Adpcm:
+                    return AudioCodecId::WavPcm;
+                case codec::CodecId::Alac:
+                    return AudioCodecId::Alac;
+                case codec::CodecId::Mp3:
+                    return AudioCodecId::Mp2;
+                case codec::CodecId::Flac:
+                    return AudioCodecId::Flac;
+                case codec::CodecId::Vorbis:
+                    return AudioCodecId::Vorbis;
+                case codec::CodecId::Opus:
+                    return AudioCodecId::Opus;
+                case codec::CodecId::Aac:
+                    return AudioCodecId::Aac;
+                default:
+                    return AudioCodecId::Other;
+            }
+        }
+
+        void dvdeca_sync() noexcept {
+            const hcpp::size_t total = codec::codec_count();
+            for (hcpp::size_t i = 0; i < total; ++i) {
+                const codec::CodecDescriptor *descriptor = codec::codec_at(i);
+                if (descriptor == nullptr || descriptor->kind != codec::CodecKind::Audio) {
+                    continue;
+                }
+                bool seen = false;
+                for (hcpp::size_t j = 0; j < decoder_count; ++j) {
+                    if (decoders[j].bridged == descriptor->id) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (seen || decoder_count >= max_decoders) {
+                    continue;
+                }
+                DecoderSlot &slot = decoders[decoder_count++];
+                slot.entry = {dvdeca_audio_id(descriptor->id), descriptor->name,
+                              codec_audio_probe};
+                slot.bridged = descriptor->id;
+            }
+        }
+
+        bool mp2_probe(const void *data, hcpp::u32 bytes) noexcept {
+            const auto *b = static_cast<const hcpp::u8 *>(data);
+            if (b == nullptr || bytes < 4 || b[0] != 0xFF || (b[1] & 0xE0) != 0xE0) {
+                return false;
+            }
+            if (((b[1] >> 3) & 0x03) == 0x01 || ((b[1] >> 1) & 0x03) != 0x02) {
+                return false;
+            }
+            const hcpp::u8 bitrate = static_cast<hcpp::u8>((b[2] >> 4) & 0x0F);
+            const hcpp::u8 rate = static_cast<hcpp::u8>((b[2] >> 2) & 0x03);
+            return bitrate != 0 && bitrate != 0x0F && rate != 0x03;
+        }
+
+        bool ac3_probe(const void *data, hcpp::u32 bytes) noexcept {
+            const auto *b = static_cast<const hcpp::u8 *>(data);
+            if (b == nullptr || bytes < 6 || b[0] != 0x0B || b[1] != 0x77) {
+                return false;
+            }
+            return (b[4] >> 6) != 0x03 && (b[4] & 0x3F) <= 37 && (b[5] >> 3) <= 10;
+        }
     }
 
     bool audio_stream_open(const AudioFormat &format, AudioStreamId &stream) noexcept {
@@ -64,6 +183,8 @@ namespace hype::audio {
                 streams[i].used = true;
                 streams[i].format = format;
                 streams[i].volume = 100;
+                streams[i].gain_q8 = audio_gain_unity_q8;
+                streams[i].state = AudioStreamState::Running;
                 streams[i].frames_written = 0;
                 audio_ring_init(streams[i].ring);
                 stream = i + 1;
@@ -97,13 +218,82 @@ namespace hype::audio {
             return false;
         }
         target->volume = percent;
+        target->gain_q8 = static_cast<hcpp::u16>(percent * audio_gain_unity_q8 / 100);
         return true;
+    }
+
+    bool audio_stream_set_gain(AudioStreamId stream, hcpp::u16 gain_q8) noexcept {
+        AudioStream *target = stream_by_id(stream);
+        if (target == nullptr) {
+            return false;
+        }
+        target->gain_q8 = gain_q8;
+        target->volume = static_cast<hcpp::u8>(
+            gain_q8 * 100 / audio_gain_unity_q8 > 100 ? 100
+                                                    : gain_q8 * 100 / audio_gain_unity_q8);
+        return true;
+    }
+
+    hcpp::u16 audio_stream_gain(AudioStreamId stream) noexcept {
+        const AudioStream *target = stream_by_id(stream);
+        return target != nullptr ? target->gain_q8 : 0;
+    }
+
+    bool audio_stream_set_state(AudioStreamId stream, AudioStreamState state) noexcept {
+        AudioStream *target = stream_by_id(stream);
+        if (target == nullptr || state == AudioStreamState::Idle) {
+            return false;
+        }
+        target->state = state;
+        return true;
+    }
+
+    bool audio_stream_info(AudioStreamId stream, AudioStreamInfo &info) noexcept {
+        const AudioStream *target = stream_by_id(stream);
+        if (target == nullptr) {
+            return false;
+        }
+        info.id = stream;
+        info.format = target->format;
+        info.gain_q8 = target->gain_q8;
+        info.state = target->state;
+        info.frames_queued = audio_ring_used_frames(
+            target->ring, audio_frame_bytes(target->format));
+        info.underruns = audio_ring_underruns(target->ring);
+        return true;
+    }
+
+    bool audio_stream_info_at(hcpp::u32 slot, AudioStreamInfo &info) noexcept {
+        if (slot >= max_streams) {
+            return false;
+        }
+        const AudioStream &entry = streams[slot];
+        info.id = slot + 1;
+        info.format = entry.format;
+        info.gain_q8 = entry.gain_q8;
+        info.state = entry.used ? entry.state : AudioStreamState::Idle;
+        info.frames_queued =
+            entry.used ? audio_ring_used_frames(entry.ring, audio_frame_bytes(entry.format))
+                       : 0;
+        info.underruns = entry.used ? audio_ring_underruns(entry.ring) : 0;
+        return true;
+    }
+
+    hcpp::u32 audio_stream_count() noexcept {
+        hcpp::u32 count = 0;
+        for (hcpp::u32 i = 0; i < max_streams; ++i) {
+            if (streams[i].used) {
+                ++count;
+            }
+        }
+        return count;
     }
 
     void audio_stream_close(AudioStreamId stream) noexcept {
         AudioStream *target = stream_by_id(stream);
         if (target != nullptr) {
             target->used = false;
+            target->state = AudioStreamState::Idle;
         }
     }
 
@@ -127,6 +317,35 @@ namespace hype::audio {
         return readable;
     }
 
+    hcpp::u32 audio_ring_push_frames(AudioRing &ring, hcpp::u32 frame_bytes, const void *frames,
+                                     hcpp::u32 frame_count) noexcept {
+        if (frames == nullptr || frame_bytes == 0) {
+            return 0;
+        }
+        const hcpp::u32 avail = audio_ring_space(ring) / frame_bytes;
+        const hcpp::u32 count = frame_count < avail ? frame_count : avail;
+        audio_ring_push(ring, frames, count * frame_bytes);
+        return count;
+    }
+
+    hcpp::u32 audio_ring_pop_frames(AudioRing &ring, hcpp::u32 frame_bytes, void *frames,
+                                    hcpp::u32 frame_count) noexcept {
+        if (frames == nullptr || frame_bytes == 0) {
+            return 0;
+        }
+        const hcpp::u32 avail = audio_ring_used(ring) / frame_bytes;
+        if (frame_count > avail) {
+            ++ring.underruns;
+        }
+        const hcpp::u32 count = frame_count < avail ? frame_count : avail;
+        audio_ring_pop(ring, frames, count * frame_bytes);
+        return count;
+    }
+
+    hcpp::u32 audio_ring_used_frames(const AudioRing &ring, hcpp::u32 frame_bytes) noexcept {
+        return frame_bytes == 0 ? 0 : audio_ring_used(ring) / frame_bytes;
+    }
+
     hcpp::u32 audio_client_open(const char *name) noexcept {
         if (client_count >= max_clients) {
             return 0;
@@ -136,6 +355,7 @@ namespace hype::audio {
         client.id = client_count + 1;
         client.active = true;
         client.stream = audio_stream_invalid;
+        client.gain_q8 = audio_gain_unity_q8;
         hcpp::u32 i = 0;
         while (name != nullptr && name[i] != '\0' && i + 1 < sizeof(client.name)) {
             client.name[i] = name[i];
@@ -149,6 +369,14 @@ namespace hype::audio {
             return false;
         }
         clients[client - 1].stream = stream;
+        return true;
+    }
+
+    bool audio_client_set_gain(hcpp::u32 client, hcpp::u16 gain_q8) noexcept {
+        if (client == 0 || client > client_count || !clients[client - 1].active) {
+            return false;
+        }
+        clients[client - 1].gain_q8 = gain_q8;
         return true;
     }
 
@@ -170,6 +398,16 @@ namespace hype::audio {
 
     void audio_set_master_volume(hcpp::u8 percent) noexcept {
         master_volume = percent > 100 ? 100 : percent;
+    }
+
+    hcpp::u8 audio_volume_get() noexcept { return master_volume; }
+
+    bool audio_volume_set(hcpp::u8 percent) noexcept {
+        if (percent > 100) {
+            return false;
+        }
+        master_volume = percent;
+        return true;
     }
 
     hcpp::u32 waveform_render_sine(hcpp::i16 *dst, hcpp::u32 frames, hcpp::u32 freq_hz, hcpp::u32 rate,
@@ -226,31 +464,135 @@ namespace hype::audio {
         return ok;
     }
 
-    int alsa_pcm_open(const AlsaPcmConfig &config) noexcept {
+    bool audio_play_file(const char *path) noexcept {
+        vfs::FsStat stat{};
+        if (path == nullptr ||
+            vfs::fs_stat(path, stat) != vfs::FsStatus::Ok ||
+            (stat.flags & vfs::FS_DIR) != 0 || stat.size == 0) {
+            return false;
+        }
+        const hcpp::size_t pages =
+            (stat.size + memory::page_size - 1) / memory::page_size;
+        codec::Arena arena{};
+        if (pages == 0 || !codec::arena_from_pmm(arena, pages)) {
+            return false;
+        }
+        hcpp::u8 *data = static_cast<hcpp::u8 *>(codec::arena_alloc(arena, stat.size, 8));
+        hcpp::u32 got = 0;
+        bool ok = data != nullptr &&
+                  vfs::fs_read(path, data, stat.size, &got) == vfs::FsStatus::Ok &&
+                  got == stat.size;
+        if (ok) {
+            const codec::CodecId id = codec::codec_probe(data, got);
+            codec::PcmBuf pcm{};
+            ok = codec::codec_decode(id, data, got, &pcm, arena) == codec::CodecStatus::Ok &&
+                 pcm.data != nullptr && pcm.frames != 0 &&
+                 audio_play_buffer(pcm.format, pcm.data,
+                                   static_cast<hcpp::u32>(pcm.frames));
+        }
+        codec::arena_release_pmm(arena, pages);
+        return ok;
+    }
+
+    int snd_pcm_open(const AlsaPcmConfig &config) noexcept {
         AudioStreamId stream = audio_stream_invalid;
         if (!audio_stream_open(config.format, stream)) {
-            return alsa_error;
+            return snd_pcm_invalid;
         }
         return static_cast<int>(stream);
     }
 
-    int alsa_pcm_writei(int handle, const void *frames, hcpp::u32 frame_count) noexcept {
+    int snd_pcm_writei(SndPcmHandle handle, const void *frames, hcpp::u32 frame_count) noexcept {
         return audio_stream_write(static_cast<AudioStreamId>(handle), frames, frame_count)
                    ? static_cast<int>(frame_count)
                    : alsa_error;
     }
 
-    int alsa_pcm_prepare(int handle) noexcept {
+    int snd_pcm_prepare(SndPcmHandle handle) noexcept {
         return stream_by_id(static_cast<AudioStreamId>(handle)) != nullptr ? 0 : alsa_error;
     }
 
-    void alsa_pcm_close(int handle) noexcept {
+    int snd_pcm_drain(SndPcmHandle handle) noexcept {
+        AudioStream *target = stream_by_id(static_cast<AudioStreamId>(handle));
+        if (target == nullptr) {
+            return alsa_error;
+        }
+        target->ring.read_pos = target->ring.write_pos;
+        return 0;
+    }
+
+    int snd_pcm_close(SndPcmHandle handle) noexcept {
+        if (stream_by_id(static_cast<AudioStreamId>(handle)) == nullptr) {
+            return alsa_error;
+        }
         audio_stream_close(static_cast<AudioStreamId>(handle));
+        return 0;
+    }
+
+    int snd_card_count() noexcept { return static_cast<int>(chip_count()); }
+
+    int alsa_pcm_open(const AlsaPcmConfig &config) noexcept {
+        return snd_pcm_open(config);
+    }
+
+    int alsa_pcm_writei(int handle, const void *frames, hcpp::u32 frame_count) noexcept {
+        return snd_pcm_writei(handle, frames, frame_count);
+    }
+
+    int alsa_pcm_prepare(int handle) noexcept {
+        return snd_pcm_prepare(handle);
+    }
+
+    void alsa_pcm_close(int handle) noexcept {
+        snd_pcm_close(handle);
+    }
+
+    bool riff_walk_begin(RiffWalker &walker, const void *data, hcpp::u32 size) noexcept {
+        const auto *bytes = static_cast<const hcpp::u8 *>(data);
+        walker = {};
+        if (bytes == nullptr || size < 12) {
+            return false;
+        }
+        const auto read32 = [&](hcpp::u32 at) noexcept -> hcpp::u32 {
+            return static_cast<hcpp::u32>(bytes[at]) | (static_cast<hcpp::u32>(bytes[at + 1]) << 8) |
+                   (static_cast<hcpp::u32>(bytes[at + 2]) << 16) |
+                   (static_cast<hcpp::u32>(bytes[at + 3]) << 24);
+        };
+        if (read32(0) != audio_tag("RIFF")) {
+            return false;
+        }
+        const hcpp::u32 riff_end = 8 + read32(4);
+        walker.base = bytes;
+        walker.offset = 12;
+        walker.end = riff_end < size ? riff_end : size;
+        return true;
+    }
+
+    bool riff_next_chunk(RiffWalker &walker, RiffChunk &chunk) noexcept {
+        if (walker.base == nullptr || walker.offset + 8 > walker.end) {
+            return false;
+        }
+        const auto *bytes = walker.base;
+        const auto read32 = [&](hcpp::u32 at) noexcept -> hcpp::u32 {
+            return static_cast<hcpp::u32>(bytes[at]) | (static_cast<hcpp::u32>(bytes[at + 1]) << 8) |
+                   (static_cast<hcpp::u32>(bytes[at + 2]) << 16) |
+                   (static_cast<hcpp::u32>(bytes[at + 3]) << 24);
+        };
+        chunk.fourcc = read32(walker.offset);
+        chunk.size = read32(walker.offset + 4);
+        chunk.data_offset = walker.offset + 8;
+        if (chunk.size > walker.end || chunk.data_offset > walker.end - chunk.size) {
+            return false;
+        }
+        walker.offset = chunk.data_offset + chunk.size + (chunk.size & 1);
+        return true;
     }
 
     bool wav_parse(const void *buffer, hcpp::u32 size, WavInfo &info) noexcept {
         const auto *bytes = static_cast<const hcpp::u8 *>(buffer);
-        if (bytes == nullptr || size < 12) {
+        info = {};
+        RiffWalker walker{};
+        if (!riff_walk_begin(walker, buffer, size)) {
             return false;
         }
         const auto read32 = [&](hcpp::u32 at) noexcept -> hcpp::u32 {
@@ -261,60 +603,93 @@ namespace hype::audio {
         const auto read16 = [&](hcpp::u32 at) noexcept -> hcpp::u16 {
             return static_cast<hcpp::u16>(bytes[at] | (bytes[at + 1] << 8));
         };
-        if (read32(0) != audio_tag("RIFF") || read32(8) != audio_tag("WAVE")) {
+        if (read32(8) != audio_tag("WAVE")) {
             return false;
         }
-        hcpp::u32 offset = 12;
         bool fmt_seen = false;
-        while (offset + 8 <= size) {
-            const hcpp::u32 tag = read32(offset);
-            const hcpp::u32 chunk = read32(offset + 4);
-            if (chunk > size || offset + 8 + chunk > size) {
-                break;
-            }
-            if (tag == audio_tag("fmt ") && chunk >= 16) {
-                info.audio_format_tag = read16(offset + 8);
-                info.format.channels = static_cast<hcpp::u8>(read16(offset + 10));
-                info.format.sample_rate = read32(offset + 12);
-                info.bits_per_sample = read16(offset + 22);
+        RiffChunk chunk{};
+        while (riff_next_chunk(walker, chunk)) {
+            if (chunk.fourcc == audio_tag("fmt ") && chunk.size >= 16) {
+                info.audio_format_tag = read16(chunk.data_offset);
+                info.format.channels = static_cast<hcpp::u8>(read16(chunk.data_offset + 2));
+                info.format.sample_rate = read32(chunk.data_offset + 4);
+                info.bits_per_sample = read16(chunk.data_offset + 14);
                 info.format.sample_format = info.bits_per_sample == 16 ? AudioSampleFormat::S16Le
                                             : info.bits_per_sample == 8  ? AudioSampleFormat::U8
                                                                        : AudioSampleFormat::Float32;
                 fmt_seen = true;
-            } else if (tag == audio_tag("data") && fmt_seen) {
-                info.sample_data = bytes + offset + 8;
-                info.data_offset = offset + 8;
-                info.sample_bytes = chunk;
+            } else if (chunk.fourcc == audio_tag("LIST") && chunk.size >= 4 &&
+                       read32(chunk.data_offset) == audio_tag("INFO")) {
+                const hcpp::u32 list_end = chunk.data_offset + chunk.size;
+                hcpp::u32 sub = chunk.data_offset + 4;
+                while (sub + 8 <= list_end) {
+                    const hcpp::u32 sub_tag = read32(sub);
+                    const hcpp::u32 sub_size = read32(sub + 4);
+                    if (sub_size > list_end - sub - 8) {
+                        break;
+                    }
+                    ++info.tags.tag_count;
+                    char *dest = sub_tag == audio_tag("INAM")   ? info.tags.title
+                                 : sub_tag == audio_tag("IART") ? info.tags.artist
+                                 : sub_tag == audio_tag("ICMT") ? info.tags.comment
+                                                                : nullptr;
+                    if (dest != nullptr) {
+                        const hcpp::u32 limit = wav_tag_text_max - 1;
+                        const hcpp::u32 count = sub_size < limit ? sub_size : limit;
+                        for (hcpp::u32 i = 0; i < count; ++i) {
+                            dest[i] = static_cast<char>(bytes[sub + 8 + i]);
+                        }
+                        dest[count] = '\0';
+                    }
+                    sub += 8 + sub_size + (sub_size & 1);
+                }
+            } else if (chunk.fourcc == audio_tag("data") && fmt_seen) {
+                info.sample_data = bytes + chunk.data_offset;
+                info.data_offset = chunk.data_offset;
+                info.sample_bytes = chunk.size;
                 return true;
             }
-            offset += 8 + chunk + (chunk & 1);
         }
         return false;
     }
 
     bool dvdeca_register(const AudioDecoderEntry &entry) noexcept {
-        if (decoder_count >= max_audio_cards || entry.probe == nullptr) {
+        if (decoder_count >= max_decoders || entry.probe == nullptr) {
             return false;
         }
-        decoders[decoder_count++] = entry;
+        const codec::CodecId mapped = dvdeca_codec_id(entry.codec);
+        DecoderSlot &slot = decoders[decoder_count++];
+        slot.entry = entry;
+        slot.bridged = mapped;
+        if (mapped != codec::CodecId::Unknown && codec::codec_info(mapped) == nullptr) {
+            codec::codec_register({entry.name, codec::CodecKind::Audio, mapped,
+                                   codec::codec_flag_decode, nullptr,
+                                   codec::codec_stub_decode, codec::codec_stub_encode});
+        }
         return true;
     }
 
     const AudioDecoderEntry *dvdeca_find(AudioCodecId codec) noexcept {
+        dvdeca_sync();
         for (hcpp::size_t i = 0; i < decoder_count; ++i) {
-            if (decoders[i].codec == codec) {
-                return &decoders[i];
+            if (decoders[i].entry.codec == codec) {
+                return &decoders[i].entry;
             }
         }
         return nullptr;
     }
 
-    hcpp::size_t dvdeca_count() noexcept { return decoder_count; }
+    hcpp::size_t dvdeca_count() noexcept {
+        dvdeca_sync();
+        return decoder_count;
+    }
 
     void dvdeca_register_builtin() noexcept {
         dvdeca_register({AudioCodecId::WavPcm, "wav/pcm", wav_probe});
         dvdeca_register({AudioCodecId::Pcm, "pcm/s16le", wav_probe});
         dvdeca_register({AudioCodecId::Alac, "alac", alac_probe});
+        dvdeca_register({AudioCodecId::Mp2, "mp2", mp2_probe});
+        dvdeca_register({AudioCodecId::Ac3, "ac3", ac3_probe});
     }
 
     bool alac_parse_cookie(const void *data, hcpp::u32 size, AlacConfig &config) noexcept {
@@ -505,6 +880,32 @@ namespace hype::audio {
         }
     }  // namespace
 
+    hcpp::u32 alac_write_cookie(const AlacConfig &config, void *out, hcpp::u32 capacity) noexcept {
+        auto *bytes = static_cast<hcpp::u8 *>(out);
+        if (bytes == nullptr || capacity < alac_cookie_size || !alac_config_valid(config)) {
+            return 0;
+        }
+        const auto write_be32 = [&](hcpp::u32 at, hcpp::u32 value) noexcept {
+            bytes[at] = static_cast<hcpp::u8>(value >> 24);
+            bytes[at + 1] = static_cast<hcpp::u8>(value >> 16);
+            bytes[at + 2] = static_cast<hcpp::u8>(value >> 8);
+            bytes[at + 3] = static_cast<hcpp::u8>(value);
+        };
+        write_be32(0, config.frame_length);
+        bytes[4] = 0;
+        bytes[5] = config.bit_depth;
+        bytes[6] = config.history_multiplier;
+        bytes[7] = config.initial_history;
+        bytes[8] = config.rice_modifier;
+        bytes[9] = config.channels;
+        bytes[10] = 0;
+        bytes[11] = 0xFF;
+        write_be32(12, config.max_frame_bytes);
+        write_be32(16, config.avg_bit_rate);
+        write_be32(20, config.sample_rate);
+        return alac_cookie_size;
+    }
+
     hcpp::u32 alac_decoder_decode(AlacDecoderState &state, const void *packet, hcpp::u32 packet_bytes,
                                   hcpp::i16 *output, hcpp::u32 max_frames) noexcept {
         if (!state.initialized) {
@@ -669,16 +1070,79 @@ namespace hype::audio {
 
     void alac_encoder_reset(AlacEncoderState &state) noexcept { state.frames_encoded = 0; }
 
+    namespace {
+        struct AlacBitWriter {
+            hcpp::u8 *data;
+            hcpp::u32 capacity;
+            hcpp::u32 position;
+            bool overflow;
+        };
+
+        void alac_bits_put(AlacBitWriter &writer, hcpp::u32 value, hcpp::u8 count) noexcept {
+            for (hcpp::u8 i = 0; i < count; ++i) {
+                const hcpp::u32 byte_index = writer.position >> 3;
+                if (writer.data == nullptr || byte_index >= writer.capacity) {
+                    writer.overflow = true;
+                    return;
+                }
+                if ((writer.position & 7) == 0) {
+                    writer.data[byte_index] = 0;
+                }
+                const hcpp::u32 bit = (value >> (count - 1 - i)) & 1u;
+                writer.data[byte_index] |=
+                    static_cast<hcpp::u8>(bit << (7 - (writer.position & 7)));
+                ++writer.position;
+            }
+        }
+    }  // namespace
+
     hcpp::u32 alac_encoder_encode(AlacEncoderState &state, const hcpp::i16 *frames, hcpp::u32 frame_count,
                                   void *packet, hcpp::u32 packet_capacity) noexcept {
-        (void)frames;
-        (void)frame_count;
-        (void)packet;
-        (void)packet_capacity;
-        if (!state.initialized) {
+        if (!state.initialized || frames == nullptr || packet == nullptr || frame_count == 0) {
             return 0;
         }
-        return state.frames_encoded;
+        const hcpp::u8 channels = state.config.channels;
+        if (state.config.bit_depth != 16 || (channels != 1 && channels != 2)) {
+            return 0;
+        }
+        const hcpp::u32 element_count = (frame_count + alac_max_element_frames - 1) /
+                                        alac_max_element_frames;
+        const hcpp::u64 needed_bits =
+            static_cast<hcpp::u64>(element_count) * 55 +
+            static_cast<hcpp::u64>(frame_count) * channels * 16 + 10;
+        if (packet_capacity == 0 || needed_bits / 8 > packet_capacity) {
+            return 0;
+        }
+        AlacBitWriter writer{static_cast<hcpp::u8 *>(packet), packet_capacity, 0, false};
+        hcpp::u32 remaining = frame_count;
+        const hcpp::i16 *cursor = frames;
+        while (remaining != 0 && !writer.overflow) {
+            const hcpp::u32 chunk = remaining < alac_max_element_frames
+                                        ? remaining
+                                        : alac_max_element_frames;
+            alac_bits_put(writer, channels == 2 ? 1u : 0u, 3);
+            alac_bits_put(writer, 0, 4);
+            alac_bits_put(writer, 0, 12);
+            alac_bits_put(writer, 1, 1);
+            alac_bits_put(writer, 0, 2);
+            alac_bits_put(writer, 1, 1);
+            alac_bits_put(writer, chunk, 32);
+            for (hcpp::u32 i = 0; i < chunk; ++i) {
+                for (hcpp::u8 c = 0; c < channels; ++c) {
+                    alac_bits_put(
+                        writer,
+                        static_cast<hcpp::u16>(cursor[i * channels + c]), 16);
+                }
+            }
+            cursor += static_cast<hcpp::u64>(chunk) * channels;
+            remaining -= chunk;
+        }
+        alac_bits_put(writer, 7, 3);
+        if (writer.overflow) {
+            return 0;
+        }
+        state.frames_encoded += frame_count;
+        return (writer.position + 7) / 8;
     }
 
     bool audiofudev_probe(hcpp::u8 card_index, hcpp::u8 codec_address) noexcept {
@@ -688,10 +1152,10 @@ namespace hype::audio {
         if (function_node_counts[card_index] != 0) {
             return function_node_codecs[card_index] == codec_address;
         }
-        hda::IzauController controller{};
+        hda::HdaController controller{};
         hcpp::u32 vendor_id = 0;
-        if (!hda::izau_bind(card_index, controller) || !hda::izau_reset(controller) ||
-            !hda::izau_codec_verb(controller, codec_address, 0, hda::verb_get_parameter,
+        if (!hda::hda_bind(card_index, controller) || !hda::hda_reset(controller) ||
+            !hda::hda_codec_verb(controller, codec_address, 0, hda::verb_get_parameter,
                                   hda::param_vendor_id, vendor_id) ||
             vendor_id == 0 || vendor_id == 0xFFFFFFFF) {
             return false;
@@ -735,6 +1199,314 @@ namespace hype::audio {
             }
         }
         return false;
+    }
+
+    void mix_clear(hcpp::i16 *dst, hcpp::u32 frames) noexcept {
+        if (dst == nullptr || frames == 0) {
+            return;
+        }
+        hype_audio_buffer_clear(dst, frames);
+    }
+
+    void mix_add(hcpp::i16 *dst, const hcpp::i16 *src, hcpp::u32 frames,
+                 hcpp::u16 gain_q8) noexcept {
+        if (dst == nullptr || src == nullptr || frames == 0) {
+            return;
+        }
+        hcpp::u32 i = 0;
+#if defined(__SSE2__)
+        const __m128i vgain = _mm_set1_epi16(static_cast<short>(gain_q8));
+        if (gain_q8 == audio_gain_unity_q8) {
+            for (; i + 8 <= frames; i += 8) {
+                const __m128i vs =
+                    _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
+                const __m128i vd =
+                    _mm_loadu_si128(reinterpret_cast<const __m128i *>(dst + i));
+                _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i),
+                                 _mm_adds_epi16(vd, vs));
+            }
+        }
+        for (; i + 8 <= frames; i += 8) {
+            const __m128i vs =
+                _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
+            const __m128i vd =
+                _mm_loadu_si128(reinterpret_cast<const __m128i *>(dst + i));
+            const __m128i vsign = _mm_srai_epi16(vd, 15);
+            const __m128i d0 = _mm_unpacklo_epi16(vd, vsign);
+            const __m128i d1 = _mm_unpackhi_epi16(vd, vsign);
+            const __m128i lo = _mm_mullo_epi16(vs, vgain);
+            const __m128i hi = _mm_mulhi_epi16(vs, vgain);
+            const __m128i p0 = _mm_srai_epi32(_mm_unpacklo_epi16(lo, hi), 8);
+            const __m128i p1 = _mm_srai_epi32(_mm_unpackhi_epi16(lo, hi), 8);
+            const __m128i r0 = _mm_add_epi32(d0, p0);
+            const __m128i r1 = _mm_add_epi32(d1, p1);
+            _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i),
+                             _mm_packs_epi32(r0, r1));
+        }
+#endif
+        for (; i < frames; ++i) {
+            dst[i] = fx_clip(static_cast<hcpp::i32>(dst[i]) +
+                             ((static_cast<hcpp::i32>(src[i]) * gain_q8) >> 8));
+        }
+    }
+
+    MixClipStats mix_clip_stats(const hcpp::i16 *samples, hcpp::u32 frames) noexcept {
+        MixClipStats stats{0, 0};
+        if (samples == nullptr) {
+            return stats;
+        }
+        for (hcpp::u32 i = 0; i < frames; ++i) {
+            const hcpp::i32 value = samples[i];
+            const hcpp::u32 magnitude =
+                value < 0 ? static_cast<hcpp::u32>(-value) : static_cast<hcpp::u32>(value);
+            if (magnitude > stats.peak) {
+                stats.peak = magnitude;
+            }
+            if (value >= 32767 || value <= -32768) {
+                ++stats.clipped;
+            }
+        }
+        return stats;
+    }
+
+    void pcm_mono_to_stereo(hcpp::i16 *dst, const hcpp::i16 *src, hcpp::u32 frames) noexcept {
+        if (dst == nullptr || src == nullptr || frames == 0) {
+            return;
+        }
+        hype_audio_pcm_mono_to_stereo_s16(dst, src, frames);
+    }
+
+    void pcm_swap_channels(hcpp::i16 *stereo, hcpp::u32 frames) noexcept {
+        if (stereo == nullptr || frames == 0) {
+            return;
+        }
+        hype_audio_pcm_swap_channels_s16(stereo, frames);
+    }
+
+    void pcm_s16_to_s24(hcpp::u8 *dst, const hcpp::i16 *src, hcpp::u32 samples) noexcept {
+        if (dst == nullptr || src == nullptr || samples == 0) {
+            return;
+        }
+        for (hcpp::u32 i = 0; i < samples; ++i) {
+            const hcpp::u32 value = static_cast<hcpp::u32>(src[i]) << 8;
+            dst[i * 3] = static_cast<hcpp::u8>(value & 0xFF);
+            dst[i * 3 + 1] = static_cast<hcpp::u8>((value >> 8) & 0xFF);
+            dst[i * 3 + 2] = static_cast<hcpp::u8>((value >> 16) & 0xFF);
+        }
+    }
+
+    void pcm_s16_to_s32(hcpp::i32 *dst, const hcpp::i16 *src, hcpp::u32 samples) noexcept {
+        if (dst == nullptr || src == nullptr || samples == 0) {
+            return;
+        }
+        for (hcpp::u32 i = 0; i < samples; ++i) {
+            dst[i] = static_cast<hcpp::i32>(src[i]) << 16;
+        }
+    }
+
+    hcpp::u32 src_output_frames(hcpp::u32 in_frames, hcpp::u32 in_rate,
+                                hcpp::u32 out_rate) noexcept {
+        if (in_rate == 0 || out_rate == 0) {
+            return 0;
+        }
+        return static_cast<hcpp::u32>(
+            (static_cast<hcpp::u64>(in_frames) * out_rate + in_rate - 1) / in_rate);
+    }
+
+    hcpp::u32 src_convert(const hcpp::i16 *in, hcpp::u32 in_frames, hcpp::u32 in_rate,
+                          hcpp::i16 *out, hcpp::u32 out_capacity, hcpp::u32 out_rate) noexcept {
+        if (in == nullptr || out == nullptr || in_frames == 0 || in_rate == 0 ||
+            out_rate == 0 || out_capacity == 0) {
+            return 0;
+        }
+        if (in_rate == out_rate) {
+            const hcpp::u32 count = in_frames < out_capacity ? in_frames : out_capacity;
+            hype_audio_pcm_copy(out, in, count * sizeof(hcpp::i16));
+            return count;
+        }
+        const hcpp::u32 wanted = src_output_frames(in_frames, in_rate, out_rate);
+        const hcpp::u32 count = wanted < out_capacity ? wanted : out_capacity;
+        const hcpp::u32 step_q16 = static_cast<hcpp::u32>(
+            (static_cast<hcpp::u64>(in_rate) << 16) / out_rate);
+        hcpp::u32 pos_q16 = 0;
+        for (hcpp::u32 i = 0; i < count; ++i) {
+            const hcpp::u32 index = pos_q16 >> 16;
+            const hcpp::u32 frac = pos_q16 & 0xFFFF;
+            const hcpp::i32 a = in[index];
+            const hcpp::i32 b = index + 1 < in_frames ? in[index + 1] : in[index];
+            out[i] = fx_clip(a + static_cast<hcpp::i32>(
+                                     (static_cast<hcpp::i64>(b - a) * frac) >> 16));
+            pos_q16 += step_q16;
+        }
+        return count;
+    }
+
+    bool src_selftest() noexcept {
+        hcpp::i16 in[441];
+        waveform_render_sine(in, 441, 220, 44100, 1);
+        hcpp::i16 out[512];
+        const hcpp::u32 expected = src_output_frames(441, 44100, 48000);
+        const hcpp::u32 produced = src_convert(in, 441, 44100, out, 512, 48000);
+        bool ok = expected == 480 && produced == 480 && out[0] == in[0];
+        hcpp::i16 peak = 0;
+        for (hcpp::u32 i = 0; i < 441; ++i) {
+            if (in[i] > peak || -in[i] > peak) {
+                peak = in[i] > 0 ? in[i] : static_cast<hcpp::i16>(-in[i]);
+            }
+        }
+        for (hcpp::u32 i = 1; i < produced; ++i) {
+            const hcpp::i32 step = static_cast<hcpp::i32>(out[i]) - out[i - 1];
+            const hcpp::i32 bound = static_cast<hcpp::i32>(peak) / 16 + 64;
+            if (step > bound || step < -bound || out[i] > peak + 16 ||
+                out[i] < -peak - 16) {
+                ok = false;
+            }
+        }
+        serial::write(ok ? "src conv=ok\r\n" : "src conv=fail\r\n");
+        return ok;
+    }
+
+    bool mix_selftest() noexcept {
+        bool ok = true;
+        bool mix_ok = true;
+        hcpp::i16 dst[16];
+        hcpp::i16 asm_dst[16];
+        hcpp::i16 src[16];
+        for (hcpp::u32 i = 0; i < 16; ++i) {
+            dst[i] = 0;
+            asm_dst[i] = 0;
+            src[i] = 20000;
+        }
+        mix_clear(dst, 16);
+        mix_add(dst, src, 16, audio_gain_unity_q8);
+        mix_add(dst, src, 16, audio_gain_unity_q8);
+        hype_audio_mix_s16(asm_dst, src, 16);
+        hype_audio_mix_s16(asm_dst, src, 16);
+        for (hcpp::u32 i = 0; i < 16; ++i) {
+            if (dst[i] != 32767 || asm_dst[i] != 32767) {
+                mix_ok = false;
+            }
+        }
+        const MixClipStats stats = mix_clip_stats(dst, 16);
+        hcpp::i16 gain_dst[8]{};
+        hcpp::i16 gain_src[8];
+        for (hcpp::u32 i = 0; i < 8; ++i) {
+            gain_src[i] = 1000;
+        }
+        mix_add(gain_dst, gain_src, 8, 128);
+        if (gain_dst[0] != 500 || gain_dst[7] != 500 || stats.clipped != 16 ||
+            stats.peak != 32767) {
+            mix_ok = false;
+        }
+        serial::write(mix_ok ? "mix sse=ok\r\n" : "mix sse=fail\r\n");
+        ok = ok && mix_ok;
+        bool fx_ok = true;
+        hcpp::i16 fade[16];
+        for (hcpp::u32 i = 0; i < 16; ++i) {
+            fade[i] = 4096;
+        }
+        fx_fade(fade, 16, 0, fx_gain_unity_q8);
+        fx_ok = fx_ok && fade[0] == 0 && fade[15] == 4096;
+        for (hcpp::u32 i = 1; i < 16; ++i) {
+            if (fade[i] < fade[i - 1]) {
+                fx_ok = false;
+            }
+        }
+        hcpp::i16 down[8];
+        for (hcpp::u32 i = 0; i < 8; ++i) {
+            down[i] = 4096;
+        }
+        fx_fade(down, 8, fx_gain_unity_q8, 0);
+        fx_ok = fx_ok && down[0] == 4096 && down[7] == 0;
+        for (hcpp::u32 i = 1; i < 8; ++i) {
+            if (down[i] > down[i - 1]) {
+                fx_ok = false;
+            }
+        }
+        hcpp::i16 scaled[4] = {1000, -1000, 2000, -2000};
+        fx_gain(scaled, 4, 128);
+        fx_ok = fx_ok && scaled[0] == 500 && scaled[1] == -500 && scaled[2] == 1000 &&
+                scaled[3] == -1000;
+        hcpp::i16 panned[4] = {1000, 1000, 1000, 1000};
+        fx_pan(panned, 2, fx_pan_right);
+        fx_ok = fx_ok && panned[0] == 0 && panned[1] == 1000 && panned[2] == 0 &&
+                panned[3] == 1000;
+        serial::write(fx_ok ? "fx fade=ok\r\n" : "fx fade=fail\r\n");
+        ok = ok && fx_ok;
+        ok = src_selftest() && ok;
+        bool ring_ok = true;
+        AudioRing ring;
+        audio_ring_init(ring);
+        static hcpp::u8 push_a[6000];
+        for (hcpp::u32 i = 0; i < 6000; ++i) {
+            push_a[i] = static_cast<hcpp::u8>(i);
+        }
+        ring_ok = ring_ok && audio_ring_push(ring, push_a, 6000) == 6000;
+        static hcpp::u8 popped[6000];
+        ring_ok = ring_ok && audio_ring_pop(ring, popped, 4000) == 4000;
+        for (hcpp::u32 i = 0; i < 4000; ++i) {
+            if (popped[i] != push_a[i]) {
+                ring_ok = false;
+            }
+        }
+        static hcpp::u8 push_b[4000];
+        for (hcpp::u32 i = 0; i < 4000; ++i) {
+            push_b[i] = 0xA5;
+        }
+        ring_ok = ring_ok && audio_ring_push(ring, push_b, 4000) == 4000;
+        ring_ok = ring_ok && ring.write_pos < ring.read_pos;
+        static hcpp::u8 rest[6200];
+        ring_ok = ring_ok && audio_ring_pop(ring, rest, 6200) == 6000;
+        for (hcpp::u32 i = 0; i < 2000; ++i) {
+            if (rest[i] != push_a[i + 4000]) {
+                ring_ok = false;
+            }
+        }
+        for (hcpp::u32 i = 2000; i < 6000; ++i) {
+            if (rest[i] != 0xA5) {
+                ring_ok = false;
+            }
+        }
+        AudioRing frames_ring;
+        audio_ring_init(frames_ring);
+        hcpp::u32 frames_in[8];
+        for (hcpp::u32 i = 0; i < 8; ++i) {
+            frames_in[i] = 0x1000 + i;
+        }
+        hcpp::u32 frames_out[16]{};
+        ring_ok = ring_ok &&
+                  audio_ring_push_frames(frames_ring, 4, frames_in, 8) == 8 &&
+                  audio_ring_used_frames(frames_ring, 4) == 8;
+        ring_ok = ring_ok && audio_ring_pop_frames(frames_ring, 4, frames_out, 16) == 8 &&
+                  audio_ring_underruns(frames_ring) == 1;
+        for (hcpp::u32 i = 0; i < 8; ++i) {
+            if (frames_out[i] != frames_in[i]) {
+                ring_ok = false;
+            }
+        }
+        serial::write(ring_ok ? "buf ring=ok\r\n" : "buf ring=fail\r\n");
+        ok = ok && ring_ok;
+        hcpp::i16 mono[4] = {7, 9, 11, 13};
+        hcpp::i16 stereo[8]{};
+        pcm_mono_to_stereo(stereo, mono, 4);
+        hcpp::i16 pair[4] = {1, 2, 3, 4};
+        pcm_swap_channels(pair, 2);
+        ok = ok && stereo[0] == 7 && stereo[1] == 7 && stereo[4] == 11 && stereo[6] == 13 &&
+             pair[0] == 2 && pair[1] == 1 && pair[2] == 4 && pair[3] == 3;
+        const hcpp::i16 expand_in[2] = {-1, 32767};
+        hcpp::u8 expand24[6]{};
+        hcpp::i32 expand32[2]{};
+        pcm_s16_to_s24(expand24, expand_in, 2);
+        pcm_s16_to_s32(expand32, expand_in, 2);
+        const bool s24_ok = expand24[0] == 0x00 && expand24[1] == 0xFF &&
+                            expand24[2] == 0xFF && expand24[3] == 0x00 &&
+                            expand24[4] == 0xFF && expand24[5] == 0x7F;
+        serial::write(s24_ok ? "pcm s24=ok\r\n" : "pcm s24=fail\r\n");
+        const bool s32_ok = expand32[0] == static_cast<hcpp::i32>(0xFFFF0000) &&
+                            expand32[1] == 0x7FFF0000;
+        serial::write(s32_ok ? "pcm s32=ok\r\n" : "pcm s32=fail\r\n");
+        ok = ok && s24_ok && s32_ok;
+        return ok;
     }
 
     bool audio_format_selftest() noexcept {
@@ -792,6 +1564,66 @@ namespace hype::audio {
         } else {
             serial::write("alac=unsupported\r\n");
         }
+        ok = mix_selftest() && ok;
+        ok = pullmix_selftest() && ok;
+        return ok;
+    }
+
+    bool audio_api_selftest() noexcept {
+        static const hcpp::u8 tagged_wav[] = {
+            'R', 'I', 'F', 'F', 0x5E, 0x00, 0x00, 0x00, 'W', 'A', 'V', 'E',
+            'f', 'm', 't', ' ', 0x10, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x01, 0x00, 0x40, 0x1F, 0x00, 0x00,
+            0x80, 0x3E, 0x00, 0x00, 0x02, 0x00, 0x10, 0x00,
+            'L', 'I', 'S', 'T', 0x2A, 0x00, 0x00, 0x00, 'I', 'N', 'F', 'O',
+            'I', 'N', 'A', 'M', 0x04, 0x00, 0x00, 0x00, 'P', '1', '1', 0x00,
+            'I', 'A', 'R', 'T', 0x06, 0x00, 0x00, 0x00, 'D', 'e', 'v', 'i', 'n', 0x00,
+            'I', 'C', 'M', 'T', 0x04, 0x00, 0x00, 0x00, 'O', 'k', '!', 0x00,
+            'd', 'a', 't', 'a', 0x08, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xFF, 0x7F, 0x00, 0x80, 0x34, 0x12
+        };
+        bool ok = true;
+        WavInfo tagged{};
+        const bool parsed = wav_parse(tagged_wav, sizeof(tagged_wav), tagged);
+        const hcpp::u32 tag_count = parsed ? tagged.tags.tag_count : 0;
+        serial::write("riff tags=");
+        serial::write_dec32(tag_count);
+        serial::write("\r\n");
+        if (!parsed || tag_count != 3 || tagged.tags.title[0] != 'P' ||
+            tagged.tags.artist[0] != 'D' || tagged.tags.comment[0] != 'O' ||
+            tagged.format.channels != 1 || tagged.format.sample_rate != 8000 ||
+            tagged.sample_bytes != 8) {
+            ok = false;
+        }
+        const char *test_path = "HYPEOS://U/home/apitest.wav";
+        bool api_ok =
+            vfs::fs_write(test_path, tagged_wav, sizeof(tagged_wav)) == vfs::FsStatus::Ok &&
+            audio_play_file(test_path);
+        serial::write("audio api=");
+        serial::write_line(api_ok ? "ok" : "fail");
+        ok = ok && api_ok;
+        const AlsaPcmConfig pcm_config{{audio_default_rate, 2, AudioSampleFormat::S16Le}, 256, 4};
+        const int pcm = snd_pcm_open(pcm_config);
+        hcpp::i16 silence[256 * 2]{};
+        const bool abi_ok = pcm >= 0 && snd_pcm_prepare(pcm) == 0 &&
+                            snd_pcm_writei(pcm, silence, 256) == 256 &&
+                            snd_pcm_drain(pcm) == 0 && snd_pcm_close(pcm) == 0 &&
+                            snd_card_count() > 0;
+        serial::write("alsa abi=");
+        serial::write_line(abi_ok ? "ok" : "fail");
+        ok = ok && abi_ok;
+        const hcpp::u8 before = audio_volume_get();
+        ok = ok && audio_volume_set(55) && audio_volume_get() == 55 &&
+             !audio_volume_set(200);
+        audio_volume_set(before);
+        dvdeca_register_builtin();
+        const hcpp::size_t decoders_registered = dvdeca_count();
+        serial::write("dvdeca reg=");
+        serial::write_dec32(static_cast<hcpp::u32>(decoders_registered));
+        serial::write("\r\n");
+        ok = ok && decoders_registered >= 3 &&
+             dvdeca_find(AudioCodecId::WavPcm) != nullptr &&
+             dvdeca_find(AudioCodecId::Alac) != nullptr;
         return ok;
     }
 

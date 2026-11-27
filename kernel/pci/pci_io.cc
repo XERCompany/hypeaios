@@ -27,4 +27,24 @@ namespace hype::pci {
         asm volatile("inl %1,%0" : "=a"(v) : "Nd"(port));
         return v;
     }
+    hcpp::u32 pci_bar_size(const PciDevice& device, hcpp::u8 index) noexcept {
+        if (index >= 6) return 0;
+        const hcpp::u8 offset = static_cast<hcpp::u8>(0x10 + index * 4);
+        const hcpp::u32 original = config_read32(device.bus, device.slot, device.function, offset);
+        if (original == 0) return 0;
+        config_write32(device.bus, device.slot, device.function, offset, 0xFFFFFFFFu);
+        const hcpp::u32 probed = config_read32(device.bus, device.slot, device.function, offset);
+        config_write32(device.bus, device.slot, device.function, offset, original);
+        if (probed == 0 || probed == 0xFFFFFFFFu) return 0;
+        const hcpp::u32 mask = bar_is_io(original) ? (probed & ~0x3u) : (probed & ~0xFu);
+        return mask == 0 ? 0 : (~mask + 1u);
+    }
+    void pci_set_command(const PciDevice& device, hcpp::u16 bits) noexcept {
+        const hcpp::u16 command = config_read16(device.bus, device.slot, device.function, 0x04);
+        config_write16(device.bus, device.slot, device.function, 0x04,
+                       static_cast<hcpp::u16>(command | bits));
+    }
+    void pci_enable_busmaster(const PciDevice& device) noexcept { pci_set_command(device, command_bus_master); }
+    void pci_enable_mem(const PciDevice& device) noexcept { pci_set_command(device, command_memory); }
+    void pci_enable_io(const PciDevice& device) noexcept { pci_set_command(device, command_io); }
 }  // namespace hype::pci

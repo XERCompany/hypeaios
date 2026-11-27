@@ -18,6 +18,7 @@ namespace hype::interrupts {
     void pic_send_eoi(hcpp::u8 irq) noexcept;
     void pit_initialize(hcpp::u32 frequency) noexcept;
     void keyboard_initialize() noexcept;
+    void mouse_initialize() noexcept;
     hcpp::u64 pit_ticks() noexcept;
     void pit_wait_ticks(hcpp::u64 ticks) noexcept;
     bool interrupts_initialized() noexcept;

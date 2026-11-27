@@ -8,7 +8,7 @@ namespace hype::codec {
             "unknown", "bmp", "pnm",  "tga",    "qoi",  "png",  "gif", "jpeg", "ico",
             "tiff",    "psd", "webp", "jp2",    "avif", "heic", "exif", "yuv",
             "wav",     "adpcm", "flac", "mp3",  "vorbis", "opus", "alac", "aac",
-            "ogg",     "mp4",
+            "ogg",     "mp4", "mp2", "ac3", "mjpeg", "mpeg2", "h264", "avi", "ts", "mkv",
         };
     }  // namespace
 
@@ -20,6 +20,8 @@ namespace hype::codec {
                 return "audio";
             case CodecKind::Container:
                 return "container";
+            case CodecKind::Video:
+                return "video";
         }
         return "unknown";
     }

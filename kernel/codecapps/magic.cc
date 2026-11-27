@@ -18,6 +18,7 @@
 #include "kernel/codecapps/image/qoi.h"
 #include "kernel/codecapps/image/tga.h"
 #include "kernel/codecapps/registry.h"
+#include "kernel/video/videodecoder.h"
 
 namespace hype::codec {
 
@@ -152,7 +153,25 @@ namespace hype::codec {
 
         bool probe_mp3(const hcpp::u8 *b, hcpp::size_t n) noexcept {
             if (str_eq_at(b, n, 0, "ID3")) return true;
-            return n >= 2 && b[0] == 0xFF && (b[1] & 0xE0) == 0xE0 && (b[1] & 0x06) != 0;
+            return n >= 2 && b[0] == 0xFF && (b[1] & 0xE0) == 0xE0 && (b[1] & 0x06) == 0x02;
+        }
+
+        bool probe_mp2(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            if (n < 4 || b[0] != 0xFF || (b[1] & 0xE0) != 0xE0) return false;
+            const hcpp::u8 version = static_cast<hcpp::u8>((b[1] >> 3) & 0x03);
+            const hcpp::u8 layer = static_cast<hcpp::u8>((b[1] >> 1) & 0x03);
+            if (version == 0x01 || layer != 0x02) return false;
+            const hcpp::u8 bitrate = static_cast<hcpp::u8>((b[2] >> 4) & 0x0F);
+            const hcpp::u8 sample_rate = static_cast<hcpp::u8>((b[2] >> 2) & 0x03);
+            return bitrate != 0 && bitrate != 0x0F && sample_rate != 0x03;
+        }
+
+        bool probe_ac3(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            if (n < 6 || b[0] != 0x0B || b[1] != 0x77) return false;
+            const hcpp::u8 fscod = static_cast<hcpp::u8>(b[4] >> 6);
+            const hcpp::u8 frmsizecod = static_cast<hcpp::u8>(b[4] & 0x3F);
+            const hcpp::u8 bsid = static_cast<hcpp::u8>(b[5] >> 3);
+            return fscod != 0x03 && frmsizecod <= 37 && bsid <= 10;
         }
 
         bool probe_aac(const hcpp::u8 *b, hcpp::size_t n) noexcept {
@@ -174,6 +193,40 @@ namespace hype::codec {
 
         bool probe_mp4(const hcpp::u8 *b, hcpp::size_t n) noexcept {
             return str_eq_at(b, n, 4, "ftyp");
+        }
+
+        bool probe_mjpeg(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return bytes_eq(b, n, 0, "\xFF\xD8\xFF", 3);
+        }
+
+        bool probe_mpeg2v(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            const hcpp::size_t scan = n < 256 ? n : 256;
+            for (hcpp::size_t i = 0; i + 3 < scan; ++i)
+                if (b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1 && b[i + 3] == 0xB3)
+                    return true;
+            return false;
+        }
+
+        bool probe_h264(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            if (n >= 5 && b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 1 &&
+                (b[4] & 0x1F) == 7)
+                return true;
+            return n >= 5 && b[0] == 0 && b[1] == 0 && b[2] == 1 && (b[3] & 0x1F) == 7;
+        }
+
+        bool probe_avi(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return str_eq_at(b, n, 0, "RIFF") && str_eq_at(b, n, 8, "AVI ");
+        }
+
+        bool probe_ts(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            if (n < 188 || b[0] != 0x47) return false;
+            if (n >= 376 && b[188] != 0x47) return false;
+            if (n >= 564 && b[376] != 0x47) return false;
+            return true;
+        }
+
+        bool probe_mkv(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return bytes_eq(b, n, 0, "\x1A\x45\xDF\xA3", 4);
         }
 
         const CodecDescriptor builtin_descriptors[] = {
@@ -210,8 +263,9 @@ namespace hype::codec {
              codec_stub_encode},
             {"heic", CodecKind::Image, CodecId::Heic, 0, probe_heic, codec_stub_decode,
              codec_stub_encode},
-            {"alac", CodecKind::Audio, CodecId::Alac, codec_flag_decode, probe_alac,
-             audio_alac_decode, codec_stub_encode},
+            {"alac", CodecKind::Audio, CodecId::Alac,
+             codec_flag_decode | codec_flag_encode, probe_alac, audio_alac_decode,
+             audio_alac_encode},
             {"exif", CodecKind::Image, CodecId::Exif, codec_flag_decode, probe_exif,
              image::exif_decode, codec_stub_encode},
             {"adpcm", CodecKind::Audio, CodecId::Adpcm, codec_flag_decode, probe_adpcm,
@@ -226,11 +280,27 @@ namespace hype::codec {
              audio_flac_decode, codec_stub_encode},
             {"mp3", CodecKind::Audio, CodecId::Mp3, codec_flag_decode, probe_mp3,
              audio_mp3_decode, codec_stub_encode},
+            {"mp2", CodecKind::Audio, CodecId::Mp2, 0, probe_mp2, codec_stub_decode,
+             codec_stub_encode},
+            {"ac3", CodecKind::Audio, CodecId::Ac3, 0, probe_ac3, codec_stub_decode,
+             codec_stub_encode},
             {"aac", CodecKind::Audio, CodecId::Aac, 0, probe_aac, codec_stub_decode,
              codec_stub_encode},
             {"ogg", CodecKind::Container, CodecId::Ogg, codec_flag_decode, probe_ogg,
              audio_ogg_decode, codec_stub_encode},
             {"mp4", CodecKind::Container, CodecId::Mp4, 0, probe_mp4, codec_stub_decode,
+             codec_stub_encode},
+            {"mjpeg", CodecKind::Video, CodecId::Mjpeg, codec_flag_decode, probe_mjpeg,
+             video::video_mjpeg_decode, codec_stub_encode},
+            {"mpeg2", CodecKind::Video, CodecId::Mpeg2, 0, probe_mpeg2v,
+             video::video_mpeg2_decode, codec_stub_encode},
+            {"h264", CodecKind::Video, CodecId::H264, 0, probe_h264, codec_stub_decode,
+             codec_stub_encode},
+            {"avi", CodecKind::Container, CodecId::Avi, 0, probe_avi, codec_stub_decode,
+             codec_stub_encode},
+            {"ts", CodecKind::Container, CodecId::Ts, 0, probe_ts, codec_stub_decode,
+             codec_stub_encode},
+            {"mkv", CodecKind::Container, CodecId::Mkv, 0, probe_mkv, codec_stub_decode,
              codec_stub_encode},
         };
 
@@ -274,6 +344,8 @@ namespace hype::codec {
             {CodecId::Flac, {'f', 'L', 'a', 'C'}, 4},
             {CodecId::Mp3, {0xFF, 0xFB, 0x90, 0x00}, 4},
             {CodecId::Mp3, {'I', 'D', '3', 0x04}, 4},
+            {CodecId::Mp2, {0xFF, 0xFD, 0x90, 0x00}, 4},
+            {CodecId::Ac3, {0x0B, 0x77, 0x00, 0x00, 0x45, 0x40}, 6},
             {CodecId::Aac, {0xFF, 0xF1, 0x50, 0x80}, 4},
             {CodecId::Vorbis,
              {'O', 'g', 'g', 'S', 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -289,6 +361,14 @@ namespace hype::codec {
             {CodecId::Mp4,
              {0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'},
              12},
+            {CodecId::Mpeg2,
+             {0x00, 0x00, 0x01, 0xB3, 0x0A, 0x00, 0x78, 0x23, 0xFF, 0xFF, 0xFF, 0xF8},
+             12},
+            {CodecId::H264, {0x00, 0x00, 0x00, 0x01, 0x67}, 5},
+            {CodecId::Avi,
+             {'R', 'I', 'F', 'F', 0x10, 0x00, 0x00, 0x00, 'A', 'V', 'I', ' '},
+             12},
+            {CodecId::Mkv, {0x1A, 0x45, 0xDF, 0xA3}, 4},
         };
 
         const hcpp::u8 unknown_blob[] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};

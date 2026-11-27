@@ -1,0 +1,341 @@
+boot fb=black
+boot font=ttf
+boot splash=shown
+boot seq=10 stages
+boot splash stage=1
+HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode
+version=0.1.97+345add0
+core services running=yes
+core selftest=passed
+pci devices=6 runtime boot=yes
+stages=7 completed=7 failed=0
+pci display=QEMU Standard VGA vendor=QEMU
+audio service=ready probed=0
+audio chips=0
+wav parse=ok
+alac cookie=ok
+alac decode=ok
+audio format selftest=ok
+boot splash stage=2
+codecs=25
+codec report=bmp,pnm,tga,qoi,png,gif,jpeg,ico,tiff,psd,webp,jp2,avif,heic,alac,exif,adpcm,wav,vorbis,opus,flac,mp3,aac,ogg,mp4
+codec bmp kind=image dec=yes enc=yes
+codec pnm kind=image dec=yes enc=yes
+codec tga kind=image dec=yes enc=yes
+codec qoi kind=image dec=yes enc=yes
+codec png kind=image dec=yes enc=yes
+codec gif kind=image dec=yes enc=stub
+codec jpeg kind=image dec=yes enc=stub
+codec ico kind=image dec=yes enc=stub
+codec tiff kind=image dec=yes enc=stub
+codec psd kind=image dec=stub enc=stub
+codec webp kind=image dec=stub enc=stub
+codec jp2 kind=image dec=stub enc=stub
+codec avif kind=image dec=stub enc=stub
+codec heic kind=image dec=stub enc=stub
+codec alac kind=audio dec=yes enc=stub
+codec exif kind=image dec=yes enc=stub
+codec adpcm kind=audio dec=yes enc=stub
+codec wav kind=audio dec=yes enc=stub
+codec vorbis kind=audio dec=yes enc=stub
+codec opus kind=audio dec=stub enc=stub
+codec flac kind=audio dec=yes enc=stub
+codec mp3 kind=audio dec=yes enc=stub
+codec aac kind=audio dec=stub enc=stub
+codec ogg kind=container dec=yes enc=stub
+codec mp4 kind=container dec=stub enc=stub
+codec deferred=psd
+codec deferred=webp
+codec deferred=jp2
+codec deferred=avif
+codec deferred=heic
+codec deferred=opus
+codec deferred=aac
+codec deferred=mp4
+codec probe=ok
+codec arena=ok
+image decode=bmp ok
+image encode=bmp ok
+image decode=pnm ok
+image encode=pnm ok
+image decode=tga ok
+image encode=tga ok
+image decode=qoi ok
+image encode=qoi ok
+gif decode=ok
+ico decode=ok
+exif tags=4
+tiff decode=ok
+image simple selftest=ok
+jpeg decode=ok
+inflate=ok
+png decode=ok
+png encode=ok
+png selftest=ok
+audio decode=adpcm ok
+audio decode=g711 ok
+audio decode=mp3 ok
+audio decode=flac ok
+ogg demux=ok
+vorbis decode=ok
+alac decode=ok
+boot splash stage=3
+memory free=121MB e820=7 usable=2 acpi=yes tables=4 interrupts=ready
+boot splash stage=4
+vmm=ready madt=yes cpus=1 ioapics=1 apic=enabled
+context switch=ready
+video devices=1 core=ready
+kernel threads=ready
+fonts=2 default=hypeai-8x16
+hpf selftest=ok
+font ttf=ok glyphs=2747
+font cyr=ok
+font measure=83
+font selftest=ok
+text ttf=ok
+text wrap=ok
+text cyr=ok
+text selftest=ok
+sha256=ok
+pbkdf2=ok
+rng=tsc selftest=ok
+ecdsa=ok
+disp modes=24
+disp scale=bilinear ok
+disp writeframe=ok
+disp pal=ok
+disp uhd modes=10
+disp hdr=ok
+disp tables ok
+disp record=ok
+disp frames=3
+disp tiers=2
+disp core ok
+display core selftest=ok
+disp outputs=2
+disp cta=ok
+disp dpi=ok
+disp id ok
+display id/dpi/cta selftest=ok
+disp dispi=0xb0c5
+disp modeset=ok
+disp dp state=idle
+disp client=ok
+disp sess ok
+display modeset/dp selftest=ok
+disp multi=2
+disp mirror=ok
+disp span=ok
+disp swich=ok
+disp mst=stub
+disp multi ok
+display multi selftest=ok
+gfx shadow=ok
+gfx grad=ok
+gfx elev=ok
+gfx glow=ok
+gfx engine selftest=ok
+gfx bench ticks=1 iters=8
+boot splash stage=5
+vfs disks=3 seed=ok
+vfs hxer=3
+vfs path=ok
+vfs sys=locked
+vfs io=ok
+vfs selftest=ok
+sqlite=ok
+db selftest=ok
+hello user=hello-selftest uid=1
+hello enroll=password ok
+hello auth=password ok
+hello auth=password fail
+hello enroll=pincode ok
+hello auth=pincode ok
+hello auth=pincode fail
+hello lockout=pincode ok
+hello enroll=key ok
+hello auth=key ok
+hello auth=key fail
+face=camera-missing
+users=1 credentials=3
+hello selftest=ok
+boot splash stage=6
+hxrt reg=SpeedStart,HxSettings,HxAbout,RevDBGService,DXBackgroundDesktop
+hxrt apps=5
+hxrt exec=ok
+hxrt sys=ok
+hxrt dup=ok
+hxrt selftest=ok
+dxbg walls=3
+dxbg apply=ok
+desk bg=image
+dxbg pixel=ok
+dxbg selftest=ok
+hxer sync=3
+hxer pack=ok
+hxer file=ok
+hxer guard=ok
+hypefile selftest=ok
+boot splash stage=7
+cyrillic glyphs=66/66 pixels=3184
+ui2 lines=6
+ui2 alpha=1
+ui2 rrect=1
+ui2 circle=1
+ui2 primitives ok
+ui2 theme tokens=20 variants=2
+ui2 theme ok
+ui2 focus order=4
+ui2 tabs sel=1
+ui2 sel ok
+ui2 overlay open=1
+ui2 overlay close=1
+ui2 overlay alert=1
+ui2 overlay ok
+ui2 alert=4
+ui2 badge=4
+ui2 progress=1
+ui2 separator=1
+ui2 skeleton=1
+ui2 feedback ok
+ui2 table rows=3
+ui2 chart bars=5
+ui2 ticker value=10
+ui2 data ok
+ui2 anim tick=6
+ui2 spin=1
+ui2 marquee=1
+ui2 shadow=1
+ui2 anim ok
+ui2 otp=6
+ui2 tags=3
+ui2 list sel=1
+ui2 entry ok
+ui kit selftests=ok
+wm wins=2
+wm close=ok
+wm z=ok
+wm menu=ok
+wm selftest=ok
+boot splash stage=8
+ptr init=ok
+ptr pkt=ok
+ptr pos=512,384
+cursor draw=ok
+input selftest=ok
+boot splash stage=9
+svc:gfx starting
+gfx shadow=ok
+gfx grad=ok
+gfx elev=ok
+gfx glow=ok
+svc:gfx running
+svc:font starting
+svc:font running
+svc:codecs starting
+svc:codecs running
+svc:display starting
+svc:display running
+svc:vfs starting
+svc:vfs running
+svc:sqlite starting
+svc:sqlite running
+svc:hda starting
+svc:hda running
+svc autostart=7
+svc total=9
+svc:svctst starting
+svc:svctst running
+svc run=ok
+svc:svctst w00
+svc:svctst w01
+svc:svctst w02
+svc:svctst w03
+svc:svctst w04
+svc:svctst w05
+svc:svctst w06
+svc:svctst w07
+svc:svctst w08
+svc:svctst w09
+svc:svctst w10
+svc:svctst w11
+svc:svctst w12
+svc:svctst w13
+svc:svctst w14
+svc:svctst w15
+svc:svctst w16
+svc:svctst w17
+svc:svctst w18
+svc:svctst w19
+svc:svctst w20
+svc:svctst w21
+svc:svctst w22
+svc:svctst w23
+svc:svctst w24
+svc:svctst w25
+svc:svctst w26
+svc:svctst w27
+svc:svctst w28
+svc:svctst w29
+svc:svctst w30
+svc:svctst w31
+svc:svctst w32
+svc:svctst w33
+svc:svctst w34
+svc:svctst w35
+svc:svctst w36
+svc log=ok
+svc:svctst stopping
+svc:svctst stopped
+svc:svctst starting
+svc:svctst running
+svc restart=ok
+svc:svcbad starting
+svc:svcbad start failed
+svc fail=ok
+svc selftest=ok
+revdbg open=ok
+revdbg list=9
+svc:svctst stopping
+svc:svctst stopped
+svc:svctst starting
+svc:svctst running
+svc:svctst stopping
+svc:svctst stopped
+svc:svctst starting
+svc:svctst running
+revdbg ctl=ok
+revdbg log=ok
+revdbg selftest=ok
+boot splash stage=10
+boot framebuffer=0x00000000FD000000 width=1024 height=768 pitch=3072 bpp=24
+edid blocks=2 extensions=1 checksum=ok
+monitor name=QEMU Monitor
+output id=0x097E3965041CAD88 connector=0 outputs=5
+monitor manufacturer=RHT product=0x0000000000001234 serial=0x0000000000000000
+monitor date week=42 year=2014 edid=1.4 size_cm=32x20 gamma=2.20
+ddc capabilities=0x0000000000000003 dpms supported=yes states=0x000000000000000F
+hdr static metadata not present in readable EDID blocks
+CTA colorimetry block not present
+boot splash=done
+preferred colorspace=sRGB
+HDR colorspace activation is not possible through legacy VBE; native GPU/HDMI/DisplayPort driver required
+VBE framebuffer active; graphics primitives initialized
+session state=greeter
+session services=8
+ui login=shown
+session reg=ok
+session users=2
+hello auth=pincode fail
+ui login fail=toast
+hello auth=pincode ok
+ui login=ok
+session auth=ok
+ss tiles=7
+ss launch=ok
+ui shell=painted wins=1
+codec integrated=ok
+HypeAICode++ runtime active
+pit ticks after 100ms=10 interrupts active=yes
+keyboard events=1 decoder=ready input=
+cursor poll=active

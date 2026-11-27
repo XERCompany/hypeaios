@@ -9,11 +9,13 @@ SECTIONS
     .text : {
         *(.text.entry)
         *(.text*)
+        *(.ltext*)
     }
 
     . = ALIGN(8);
     .rodata : {
         *(.rodata*)
+        *(.lrodata*)
     }
 
     . = ALIGN(8);
@@ -29,12 +31,16 @@ SECTIONS
     . = ALIGN(8);
     .data : {
         *(.data*)
+        *(.ldata*)
     }
 
     . = ALIGN(8);
     .bss : {
+        __bss_start = .;
         *(.bss*)
+        *(.lbss*)
         *(COMMON)
+        __bss_end = .;
     }
 
     /DISCARD/ : {

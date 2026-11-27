@@ -76,8 +76,13 @@ namespace hype::runtime {
             interrupts::pic_initialize();
             interrupts::pit_initialize(100);
             interrupts::keyboard_initialize();
+            interrupts::mouse_initialize();
             interrupts::pic_unmask(0);
             interrupts::pic_unmask(1);
+            // IRQ12 lives on the slave PIC; the cascade line (master
+            // IRQ2) must be unmasked for slave IRQs to be delivered.
+            interrupts::pic_unmask(2);
+            interrupts::pic_unmask(12);
             interrupts::interrupts_enable();
             current.interrupts_ready = interrupts::interrupts_initialized();
             return current.interrupts_ready;

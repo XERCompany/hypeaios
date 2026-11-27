@@ -36,6 +36,26 @@ namespace hcpp::graphics {
                (scale_channel(blue, blue_mask_size_) << blue_position_);
     }
 
+    void Framebuffer::decode_rgb(u32 color, u8& red, u8& green, u8& blue) const noexcept {
+        red = unscale_channel(color, red_position_, red_mask_size_);
+        green = unscale_channel(color, green_position_, green_mask_size_);
+        blue = unscale_channel(color, blue_position_, blue_mask_size_);
+    }
+
+    u32 Framebuffer::get_pixel(u32 x, u32 y) const noexcept {
+        if (!valid() || x >= width_ || y >= height_) {
+            return 0;
+        }
+
+        volatile u8* row = base_ + static_cast<size_t>(y) * pitch_;
+        volatile u8* pixel = row + static_cast<size_t>(x) * bytes_per_pixel();
+        if (bits_per_pixel_ == 32) {
+            return *reinterpret_cast<volatile const u32*>(pixel);
+        }
+        return static_cast<u32>(pixel[0]) | (static_cast<u32>(pixel[1]) << 8) |
+               (static_cast<u32>(pixel[2]) << 16);
+    }
+
     void Framebuffer::put_pixel(u32 x, u32 y, u32 color) const noexcept {
         if (!valid() || x >= width_ || y >= height_) {
             return;
@@ -96,6 +116,18 @@ namespace hcpp::graphics {
         }
         const u32 maximum = (1U << bits) - 1U;
         return (static_cast<u32>(value) * maximum) / 255U;
+    }
+
+    u8 Framebuffer::unscale_channel(u32 color, u8 position, u8 bits) noexcept {
+        if (bits == 0) {
+            return 0;
+        }
+        const u32 maximum = (1U << bits) - 1U;
+        const u32 raw = (color >> position) & maximum;
+        if (bits == 8) {
+            return static_cast<u8>(raw);
+        }
+        return static_cast<u8>((raw * 255U) / maximum);
     }
 
     u32 Framebuffer::bytes_per_pixel() const noexcept { return bits_per_pixel_ / 8; }

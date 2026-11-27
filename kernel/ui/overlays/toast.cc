@@ -1,5 +1,7 @@
 #include "kernel/ui/overlays/toast.h"
 
+#include "kernel/gfx/hypegfx.h"
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -9,14 +11,14 @@ namespace hype::ui {
         hcpp::u32 kind_rgb(ToastKind kind, const Theme& theme) noexcept {
             switch (kind) {
                 case ToastKind::Success:
-                    return 0x3FB950;
+                    return theme.success;
                 case ToastKind::Warning:
-                    return 0xD29922;
+                    return theme.warning;
                 case ToastKind::Error:
-                    return 0xF85149;
+                    return theme.destructive;
                 case ToastKind::Info:
                 default:
-                    return theme.accent;
+                    return theme.primary;
             }
         }
 
@@ -68,7 +70,7 @@ namespace hype::ui {
             return;
         }
 
-        const Theme& theme = Theme::dark();
+        const Theme& theme = theme_active();
         const hcpp::fonts::FontFace* face = theme.resolved_font();
         const hcpp::i32 margin = static_cast<hcpp::i32>(theme.spacing_lg);
         const hcpp::i32 pad = static_cast<hcpp::i32>(theme.spacing_md);
@@ -94,9 +96,17 @@ namespace hype::ui {
             const Rect card{screen.right() - margin - card_w, cursor_y, card_w,
                             card_h};
 
-            canvas.fill_rect(card, canvas.color(theme.surface));
-            canvas.stroke_rect(card, canvas.color(theme.border));
-            canvas.fill_rect({card.x, card.y, 4, card.h},
+            rui_card(canvas, card);
+            if (rui_dark_surface()) {
+                hype::gfx::gfx_inner_glow_edge(
+                    canvas, card.inset(Insets::uniform(1)),
+                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
+            }
+            const hcpp::i32 bar_inset =
+                theme.hard_shadow ? 0
+                                  : static_cast<hcpp::i32>(theme.radius_lg) / 2;
+            canvas.fill_rect({card.x, card.y + bar_inset, 4,
+                              card.h - 2 * bar_inset},
                              canvas.color(kind_rgb(toast.kind, theme)));
 
             if (face == nullptr) {
@@ -107,11 +117,11 @@ namespace hype::ui {
             hcpp::i32 baseline = card.y + pad + face->baseline;
             if (titled) {
                 canvas.draw_text(text_x, baseline, toast.title,
-                                 canvas.color(theme.text_primary), *face);
+                                 canvas.color(theme.card_fg), *face);
                 baseline += line + gap;
             }
             canvas.draw_text(text_x, baseline, toast.message,
-                             canvas.color(theme.text_muted), *face);
+                             canvas.color(theme.muted_fg), *face);
             cursor_y -= gap;
         }
     }

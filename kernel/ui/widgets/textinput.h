@@ -2,12 +2,13 @@
 
 #include "hcpp/string_view.hpp"
 #include "hcpp/types.hpp"
+#include "kernel/ui/focus.h"
 #include "kernel/ui/geometry.h"
 #include "kernel/ui/widget.h"
 
 namespace hype::ui {
 
-    class TextInput : public Widget {
+    class TextInput : public Widget, public Focusable {
     public:
         static constexpr hcpp::size_t capacity = 48;
 
@@ -20,8 +21,10 @@ namespace hype::ui {
         void set_placeholder(hcpp::StringView placeholder) noexcept;
         hcpp::StringView placeholder() const noexcept;
 
-        void set_focused(bool focused) noexcept;
-        bool focused() const noexcept;
+        void set_focused(bool focused) noexcept override;
+        bool focused() const noexcept override;
+        bool on_key(char key) noexcept override;
+        Rect focus_ring_rect() const noexcept override;
 
         void set_padding(Insets padding) noexcept;
         Insets padding() const noexcept;

@@ -6,6 +6,11 @@ namespace hype::input {
 
     enum class InputEventType : hcpp::u16 { Sync = 0, Key = 1, Relative = 2, Absolute = 3 };
 
+    // evdev-style relative axis codes used with InputEventType::Relative.
+    constexpr hcpp::u16 rel_x_code = 0x00;
+    constexpr hcpp::u16 rel_y_code = 0x01;
+    constexpr hcpp::u16 rel_wheel_code = 0x08;
+
     struct InputEvent {
         InputEventType type;
         hcpp::u16 code;

@@ -106,6 +106,43 @@ namespace hype::codec {
             return pass;
         }
 
+        bool alac_roundtrip_selftest(Arena &arena, bool &enc_ok) noexcept {
+            static const hcpp::i16 pcm_in[] = {0,     0,     1000,  -1000, 2000,  -2000,
+                                               32767, -32768, 12345, -23456, -1,    1,
+                                               4000,  -4000, 777,   -777};
+            enc_ok = false;
+            PcmBuf src{};
+            src.data = const_cast<hcpp::u8 *>(reinterpret_cast<const hcpp::u8 *>(pcm_in));
+            src.capacity = sizeof(pcm_in);
+            src.frames = 8;
+            src.format.channels = 2;
+            src.format.sample_rate = 44100;
+            src.format.sample_format = audio::AudioSampleFormat::S16Le;
+            static hcpp::u8 encoded[8192];
+            hcpp::size_t written = 0;
+            if (codec_encode(CodecId::Alac, &src, encoded, sizeof(encoded), written,
+                             arena) != CodecStatus::Ok ||
+                written <= 40)
+                return false;
+            enc_ok = true;
+            PcmBuf out{};
+            out.data = static_cast<hcpp::u8 *>(arena_alloc(arena, pcm_capacity, 8));
+            out.capacity = pcm_capacity;
+            if (out.data == nullptr) return false;
+            if (codec_decode(CodecId::Alac, encoded, written, &out, arena) != CodecStatus::Ok)
+                return false;
+            return pcm_eq(out, pcm_in, 8);
+        }
+
+        bool probe_stub_selftest() noexcept {
+            static const hcpp::u8 mp2_header[] = {0xFF, 0xFD, 0x90, 0x00};
+            static const hcpp::u8 ac3_header[] = {0x0B, 0x77, 0x00, 0x00, 0x45, 0x40};
+            static const hcpp::u8 aac_header[] = {0xFF, 0xF1, 0x50, 0x80};
+            return codec_probe(mp2_header, sizeof(mp2_header)) == CodecId::Mp2 &&
+                   codec_probe(ac3_header, sizeof(ac3_header)) == CodecId::Ac3 &&
+                   codec_probe(aac_header, sizeof(aac_header)) == CodecId::Aac;
+        }
+
         bool vorbis_sniff_selftest(Arena &arena) noexcept {
             OggPackets packets{};
             packets.payload = static_cast<hcpp::u8 *>(
@@ -165,6 +202,16 @@ namespace hype::codec {
         pass = run_clip(CodecId::Alac, clip_alac, sizeof(clip_alac), clip_alac_pcm,
                         sizeof(clip_alac_pcm) / sizeof(clip_alac_pcm[0]) / 2, 2, arena);
         mark_named("alac decode", pass);
+        ok = ok && pass;
+        arena_reset(arena);
+        bool enc_ok = false;
+        pass = alac_roundtrip_selftest(arena, enc_ok);
+        mark_named("alac enc", enc_ok);
+        mark_named("alac rt", pass);
+        ok = ok && pass && enc_ok;
+        arena_reset(arena);
+        pass = probe_stub_selftest();
+        mark_named("probe mp2/ac3/aac", pass);
         ok = ok && pass;
         return ok;
     }

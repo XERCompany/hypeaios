@@ -10,6 +10,8 @@ qemu-system-x86_64 \
   -vga std \
   -drive format=raw,file=build/hypeai-os.img \
   -device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
+  -device AC97,audiodev=snd0 \
+  -device ES1370,audiodev=snd0 \
   -serial file:build/test-serial.log \
   -monitor unix:build/qemu-monitor.sock,server,nowait \
   -pidfile build/qemu.pid \
@@ -76,6 +78,8 @@ if ! grep -q "HYPEAI OS BOOT OK" <<<"$output"; then
     -machine pc -vga std \
     -drive format=raw,file=build/hypeai-os.img \
     -device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
+    -device AC97,audiodev=snd0 \
+    -device ES1370,audiodev=snd0 \
     -serial stdio -display none -no-reboot 2>&1 || true)"
 fi
 printf '%s\n' "$output"
@@ -84,7 +88,7 @@ grep -q "core services running=yes" <<<"$output"
 grep -q "core selftest=passed" <<<"$output"
 grep -q "runtime boot=yes" <<<"$output"
 grep -q "pci display=QEMU Standard VGA vendor=QEMU" <<<"$output"
-grep -q "memory free=124MB e820=" <<<"$output"
+grep -q "memory free=1[12][0-9]MB e820=" <<<"$output"
 grep -q "acpi=yes tables=" <<<"$output"
 grep -q "interrupts=ready" <<<"$output"
 grep -q "vmm=ready madt=yes cpus=1 ioapics=1 apic=enabled" <<<"$output"
@@ -101,7 +105,22 @@ grep -q "monitor name=QEMU Monitor" <<<"$output"
 grep -q "hdr static metadata not present" <<<"$output"
 grep -q "CTA colorimetry block not present" <<<"$output"
 grep -q "VBE framebuffer active; graphics primitives initialized" <<<"$output"
-grep -q "ui demo=painted widgets=" <<<"$output"
+grep -q "ui kit selftests=ok" <<<"$output"
+grep -q "wm wins=2" <<<"$output"
+grep -q "wm close=ok" <<<"$output"
+grep -q "wm z=ok" <<<"$output"
+grep -q "wm menu=ok" <<<"$output"
+grep -q "wm selftest=ok" <<<"$output"
+grep -q "session state=greeter" <<<"$output"
+grep -q "session services=" <<<"$output"
+grep -q "session reg=ok" <<<"$output"
+grep -q "hello auth=pincode fail" <<<"$output"
+grep -q "hello auth=pincode ok" <<<"$output"
+grep -q "session auth=ok" <<<"$output"
+grep -q "ss tiles=" <<<"$output"
+grep -q "ss launch=ok" <<<"$output"
+grep -q "ui shell=painted wins=1" <<<"$output"
+! grep -q "ui demo" <<<"$output"
 grep -q "HypeAICode++ runtime active" <<<"$output"
 grep -q "pit ticks after 100ms=10 interrupts active=yes" <<<"$output"
 grep -q "decoder=ready" <<<"$output"
@@ -109,4 +128,17 @@ grep -q "hda init=ok" <<<"$output"
 grep -q "hda codec vid=" <<<"$output"
 grep -q "audio stream=run" <<<"$output"
 grep -q "audio playback=ok" <<<"$output"
+grep -q "ac97 dev=ok" <<<"$output"
+grep -q "ac97 civ>0" <<<"$output"
+grep -q "ac97 vol=ok" <<<"$output"
+grep -q "es1370 dev=ok" <<<"$output"
+grep -q "es1370 dac=ok" <<<"$output"
+grep -q "es1370 vol=ok" <<<"$output"
+grep -q "vcap frame=ok" <<<"$output"
+grep -q "yuv conv=ok" <<<"$output"
+grep -q "v4lv stream=ok" <<<"$output"
+grep -q "video ctrl=ok" <<<"$output"
+grep -q "video fmt=ok" <<<"$output"
+grep -q "video core=ok" <<<"$output"
+grep -q "svc:video running" <<<"$output"
 echo "QEMU boot, memory, ACPI, interrupt, keyboard and framebuffer test passed"

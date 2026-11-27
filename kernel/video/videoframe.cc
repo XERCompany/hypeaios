@@ -4,6 +4,7 @@ namespace hype::video {
         if (f == PixelFormat::RGB24) return hcpp::size_t(w) * h * 3;
         if (f == PixelFormat::RGB32) return hcpp::size_t(w) * h * 4;
         if (f == PixelFormat::YUV420 || f == PixelFormat::NV12) return hcpp::size_t(w) * h * 3 / 2;
+        if (f == PixelFormat::YUY2) return hcpp::size_t(w) * h * 2;
         return 0;
     }
     bool frame_valid(const VideoFrame& f) noexcept {

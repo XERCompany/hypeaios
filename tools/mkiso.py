@@ -3,8 +3,11 @@ import pathlib, subprocess
 root=pathlib.Path(__file__).resolve().parent.parent
 build=root/'build'
 iso=build/'hypeai-os.iso'
+img=build/'hypeai-os.img'
 readme=build/'ISO-README.txt'
 version=(build/'version.txt').read_text().strip() if (build/'version.txt').exists() else 'HypeAI OS'
-readme.write_text(version+'\nBoot the raw image hypeai-os.img with QEMU or write it to a test disk.\nThe image is included in this ISO artifact.\n')
+size=img.stat().st_size
+print(f"img size={size} ({size} bytes)")
+readme.write_text(version+'\nBoot the raw image hypeai-os.img with QEMU or write it to a test disk.\nThe image is included in this ISO artifact.\nThe image carries a HYPEDATA payload region at fixed LBA 4129.\n')
 subprocess.check_call(['xorriso','-as','mkisofs','-o','hypeai-os.iso','-V','HYPEAIOS','-J','-R','hypeai-os.img','version.txt','ISO-README.txt'],cwd=build)
 print(iso)

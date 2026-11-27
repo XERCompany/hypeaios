@@ -5,7 +5,7 @@
 
 namespace hype::codec {
 
-    constexpr hcpp::size_t codec_max_descriptors = 32;
+    constexpr hcpp::size_t codec_max_descriptors = 40;
 
     bool codec_register(const CodecDescriptor &descriptor) noexcept;
     hcpp::size_t codec_count() noexcept;

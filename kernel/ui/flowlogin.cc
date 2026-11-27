@@ -6,27 +6,25 @@
 #include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
-#include "kernel/ui/overlays/toast.h"
+#include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
 #include "kernel/ui/widgets/button.h"
+#include "kernel/ui/widgets/inputotp.h"
 #include "kernel/ui/widgets/label.h"
 #include "kernel/ui/widgets/panel.h"
-#include "kernel/ui/widgets/textinput.h"
 #include "kernel/userservice.h"
 
 namespace hype::ui::flowlogin {
 
     namespace {
 
-        constexpr char demo_user_name[] = "demo";
-        constexpr char demo_pin[] = "2468";
-        constexpr char wrong_pin[] = "9999";
-
         State screen_state = State::Hidden;
         hello::HelloResult last_submit = hello::HelloResult::NotEnrolled;
         hcpp::u32 user_uid = 0;
         hcpp::u32 session_uid = 0;
+        char session_name[32] = {};
+        char user_label_text[64] = "user: -";
         hello::HelloMethod method = hello::HelloMethod::PinCode;
         hcpp::graphics::Framebuffer* screen_fb = nullptr;
         bool keys_hooked = false;
@@ -35,9 +33,9 @@ namespace hype::ui::flowlogin {
         Flex column{FlexDirection::Column};
         Label user_label;
         Label method_label;
-        TextInput secret;
+        InputOTP secret{4};
         Button sign_in;
-        ToastHost toasts;
+        OverlayHost overlays;
         WidgetTree tree;
         bool built = false;
 
@@ -45,7 +43,7 @@ namespace hype::ui::flowlogin {
             if (built) {
                 return;
             }
-            const Theme& theme = Theme::dark();
+            const Theme& theme = theme_active();
             window.set_title("Sign in to HypeAI OS");
 
             column.set_padding(Insets::uniform(
@@ -53,14 +51,12 @@ namespace hype::ui::flowlogin {
             column.set_spacing(static_cast<hcpp::i32>(theme.spacing_md));
             column.set_cross_align(CrossAlign::Stretch);
 
-            user_label.set_text("user: demo");
+            user_label.set_text(user_label_text);
             method_label.set_text("method: PIN \xE2\x80\x94 enter code, "
                                   "press Enter");
             method_label.set_color(LabelColor::Muted);
 
-            secret.set_masked(true);
             secret.set_focused(true);
-            secret.set_placeholder("pin");
 
             sign_in.set_label("Sign In");
             sign_in.set_style(ButtonStyle::Accent);
@@ -84,41 +80,58 @@ namespace hype::ui::flowlogin {
 
     }  // namespace
 
-    bool ensure_demo_user() noexcept {
-        if (session_uid == 0) {
-            session_uid = users::users_create(
-                demo_user_name,
-                security::capability_read | security::capability_write |
-                    security::capability_execute);
-        }
-        user_uid = hello::hello_find_user(demo_user_name);
-        if (user_uid == 0) {
-            user_uid = hello::hello_register_user(demo_user_name);
-        }
-        if (user_uid == 0) {
+    bool set_user(hcpp::u32 uid, hcpp::StringView name) noexcept {
+        if (name.empty()) {
             return false;
         }
-        const hcpp::u32 pin_bit =
-            1U << static_cast<hcpp::u8>(hello::HelloMethod::PinCode);
-        if ((hello::hello_methods(user_uid) & pin_bit) != 0) {
-            hello::hello_reset_failures(user_uid, hello::HelloMethod::PinCode);
-            return true;
+        user_uid = uid;
+        hcpp::size_t pos = 0;
+        const char prefix[] = "user: ";
+        for (hcpp::size_t i = 0; prefix[i] != '\0' && pos + 1 < sizeof(user_label_text);
+             ++i) {
+            user_label_text[pos++] = prefix[i];
         }
-        return hello::hello_enroll(user_uid, hello::HelloMethod::PinCode,
-                                   demo_pin, sizeof(demo_pin) - 1);
+        for (hcpp::size_t i = 0; i < name.size() && pos + 1 < sizeof(user_label_text);
+             ++i) {
+            user_label_text[pos++] = name[i];
+        }
+        user_label_text[pos] = '\0';
+        user_label.set_text(user_label_text);
+        bool same = name.size() + 1 < sizeof(session_name);
+        if (same) {
+            for (hcpp::size_t i = 0; i < name.size(); ++i) {
+                if (session_name[i] != name[i]) {
+                    same = false;
+                    break;
+                }
+            }
+            same = same && session_name[name.size()] == '\0';
+        }
+        if (session_uid == 0 || !same) {
+            session_uid = users::users_create(
+                name,
+                security::capability_read | security::capability_write |
+                    security::capability_execute);
+            hcpp::size_t j = 0;
+            for (; j < name.size() && j + 1 < sizeof(session_name); ++j) {
+                session_name[j] = name[j];
+            }
+            session_name[j] = '\0';
+        }
+        return true;
     }
 
     void repaint(hcpp::graphics::Framebuffer& framebuffer) noexcept {
         Canvas canvas(framebuffer);
-        const Theme& theme = Theme::dark();
+        const Theme& theme = theme_active();
         const Rect screen{0, 0, static_cast<hcpp::i32>(framebuffer.width()),
                           static_cast<hcpp::i32>(framebuffer.height())};
-        canvas.fill_rect(screen, canvas.color(theme.background));
+        canvas.fill_rect(screen, canvas.color(theme.bg));
 
         const Rect window_rect = centered_window(screen, 440, 300);
         tree.layout_root(window_rect);
         tree.paint_tree(canvas);
-        toasts.paint(canvas, screen);
+        overlays.paint_overlays(canvas, screen);
     }
 
     hcpp::u32 show(hcpp::graphics::Framebuffer& framebuffer) noexcept {
@@ -133,7 +146,8 @@ namespace hype::ui::flowlogin {
         screen_state = State::Shown;
         secret.clear();
         secret.set_focused(true);
-        toasts.clear();
+        overlays.close();
+        overlays.toasts().clear();
         users::login_reset();
         if (session_uid != 0) {
             users::login_begin(session_uid);
@@ -146,6 +160,12 @@ namespace hype::ui::flowlogin {
     bool handle_char(char ascii) noexcept {
         if (screen_state != State::Shown) {
             return false;
+        }
+        if (overlays.handle_key(ascii)) {
+            if (screen_fb != nullptr && screen_state == State::Shown) {
+                repaint(*screen_fb);
+            }
+            return true;
         }
         bool consumed = true;
         if (ascii == '\n' || ascii == '\r') {
@@ -183,27 +203,27 @@ namespace hype::ui::flowlogin {
                 break;
             case hello::HelloResult::LockedOut:
                 secret.clear();
-                toasts.show("locked out", ToastKind::Error, "sign in");
+                overlays.toasts().show("locked out", ToastKind::Error, "sign in");
                 users::login_denied();
                 serial::write_line("ui login fail=locked");
                 break;
             case hello::HelloResult::BadSecret:
                 secret.clear();
-                toasts.show("wrong pin \xE2\x80\x94 try again",
+                overlays.toasts().show("wrong pin \xE2\x80\x94 try again",
                             ToastKind::Error, "sign in");
                 users::login_denied();
                 serial::write_line("ui login fail=toast");
                 break;
             case hello::HelloResult::NotEnrolled:
                 secret.clear();
-                toasts.show("credential not enrolled", ToastKind::Warning,
+                overlays.toasts().show("credential not enrolled", ToastKind::Warning,
                             "sign in");
                 users::login_denied();
                 serial::write_line("ui login fail=toast");
                 break;
             case hello::HelloResult::NoCamera:
                 secret.clear();
-                toasts.show("no camera present", ToastKind::Warning,
+                overlays.toasts().show("no camera present", ToastKind::Warning,
                             "sign in");
                 users::login_denied();
                 serial::write_line("ui login fail=toast");
@@ -222,30 +242,5 @@ namespace hype::ui::flowlogin {
     }
 
     hello::HelloResult last_result() noexcept { return last_submit; }
-
-    hcpp::u32 drive(hcpp::graphics::Framebuffer& framebuffer) noexcept {
-        if (!ensure_demo_user()) {
-            screen_state = State::Unavailable;
-            serial::write_line("ui login=unavailable");
-            return 0;
-        }
-        if (show(framebuffer) == 0) {
-            screen_state = State::Unavailable;
-            serial::write_line("ui login=failed");
-            return 0;
-        }
-        for (hcpp::size_t i = 0; wrong_pin[i] != '\0'; ++i) {
-            handle_char(wrong_pin[i]);
-        }
-        handle_char('\n');
-        if (screen_fb != nullptr && screen_state == State::Shown) {
-            repaint(*screen_fb);
-        }
-        for (hcpp::size_t i = 0; demo_pin[i] != '\0'; ++i) {
-            handle_char(demo_pin[i]);
-        }
-        handle_char('\n');
-        return authenticated() ? 1 : 0;
-    }
 
 }  // namespace hype::ui::flowlogin
