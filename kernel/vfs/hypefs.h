@@ -7,7 +7,7 @@ namespace hype::vfs {
 
     constexpr hcpp::u32 fs_name_size = 32;
     constexpr hcpp::u32 fs_max_entries = 192;
-    constexpr hcpp::u32 fs_disk_s_bytes = 256u * 1024u;
+    constexpr hcpp::u32 fs_disk_s_bytes = 2u * 1024u * 1024u;
     constexpr hcpp::u32 fs_disk_u_bytes = 384u * 1024u;
     constexpr hcpp::u32 fs_disk_t_bytes = 128u * 1024u;
 
