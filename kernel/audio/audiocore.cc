@@ -688,10 +688,10 @@ namespace hype::audio {
         if (function_node_counts[card_index] != 0) {
             return function_node_codecs[card_index] == codec_address;
         }
-        hda::IzauController controller{};
+        hda::HdaController controller{};
         hcpp::u32 vendor_id = 0;
-        if (!hda::izau_bind(card_index, controller) || !hda::izau_reset(controller) ||
-            !hda::izau_codec_verb(controller, codec_address, 0, hda::verb_get_parameter,
+        if (!hda::hda_bind(card_index, controller) || !hda::hda_reset(controller) ||
+            !hda::hda_codec_verb(controller, codec_address, 0, hda::verb_get_parameter,
                                   hda::param_vendor_id, vendor_id) ||
             vendor_id == 0 || vendor_id == 0xFFFFFFFF) {
             return false;
