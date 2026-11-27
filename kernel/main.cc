@@ -31,6 +31,7 @@
 #include "kernel/gfx/gfxbench.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
+#include "kernel/hxrt/hxrt.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
@@ -39,6 +40,7 @@
 #include "kernel/svc/revsvc.h"
 #include "kernel/ui/demo.h"
 #include "kernel/ui/flowlogin.h"
+#include "kernel/vfs/hypefs.h"
 #include "kernel/video/videov4lv.h"
 
 using InitArrayFunction = void (*)();
@@ -410,6 +412,22 @@ namespace {
     }
 
     void stage_vfs() noexcept {
+        hype::vfs::fs_init();
+        const bool vfs_seeded = hype::vfs::fs_seed();
+        serial::write("vfs disks=");
+        serial::write_dec32(hype::vfs::fs_disk_count());
+        serial::write(" seed=");
+        serial::write_line(vfs_seeded ? "ok" : "fail");
+        hype::vfs::FsSelftest vfs_selftest{};
+        const bool vfs_ok = hype::vfs::fs_selftest(vfs_selftest);
+        serial::write("vfs path=");
+        serial::write_line(vfs_selftest.path_ok ? "ok" : "fail");
+        serial::write("vfs sys=");
+        serial::write_line(vfs_selftest.sys_locked ? "locked" : "fail");
+        serial::write("vfs io=");
+        serial::write_line(vfs_selftest.io_ok ? "ok" : "fail");
+        report("vfs selftest=", vfs_ok && vfs_seeded &&
+                                   hype::vfs::fs_disk_count() == 3);
         if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
             serial::write_line("sqlite=ok");
             serial::write("db selftest=");
@@ -465,6 +483,10 @@ namespace {
         serial::write_dec32(started);
         serial::write("\r\n");
         report("svc selftest=", hype::svc::svc_selftest());
+    }
+
+    void stage_hxrt() noexcept {
+        hype::hxrt::hxrt_boot();
     }
 
     void stage_ui() noexcept {
@@ -534,10 +556,11 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"memory", 56, stage_memory},
         {"display", 70, stage_display},
         {"vfs", 84, stage_vfs},
+        {"hxrt", 92, stage_hxrt},
         {"ui", 95, stage_ui},
         {"svc", 98, stage_svc},
     };
-    hype::boot::bootseq_run(boot_steps, 8);
+    hype::boot::bootseq_run(boot_steps, 9);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         serial::write_line("boot info missing or invalid");
