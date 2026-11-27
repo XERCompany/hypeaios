@@ -75,3 +75,17 @@ SMP/AP startup (MP spec), CPUID topology, perf counters, CPU/MEM accounting, thr
 ## Program P7 — UI design language v3
 
 From user references (2026-11-27): soft drop shadows (low opacity, negative spread), layered inner shadows for depth, **dark mode = elevation via surface luminosity not shadow**, cosmic/dark visual system. Lands on top of UI v2 primitives (alpha + rrect already exist).
+
+## P8 — Boot & Type (splash + font engine + pretty UI)
+
+User request (2026-01-16): Windows-style boot sequence; text currently pixel-ugly — build own HypeAIFont / HypeAITextRender / HypeAIEngineGraphics / HypeAIRenderUI; reference typeface Montserrat (SIL OFL — font data is an asset, rasterizer is ours).
+
+| # | Ticket | Depends |
+|---|--------|---------|
+| T1 | `tools/genfont.py` — Montserrat TTF → SDF atlas (EDT) + metrics/kerning → embedded `.hfnt`; `kernel/font/` HypeAIFont loader | — |
+| T2 | HypeAITextRender — SDF glyph blit (crisp any size), wrap/align/measure, UTF-8 incl. Cyrillic | T1 |
+| T3 | HypeAIEngineGraphics — soft shadows (box-blur alpha), gradients, inner shadow, glow, elevation surfaces | — |
+| T4 | HypeAIRenderUI — restyle widgets on T2+T3 (rounded, soft-shadow, Montserrat everywhere) | T2, T3 |
+| T5 | `bootsplash` — logo + spinner + progress bar, driven from main.cc init stages | — |
+| T6 | Polish pass + screenshot verification | T4, T5 |
+
