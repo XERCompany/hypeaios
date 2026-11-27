@@ -47,6 +47,7 @@
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/klog.h"
+#include "kernel/net/net.h"
 #include "kernel/panic.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
@@ -736,6 +737,12 @@ namespace {
         hype::gdxf::gdxf_selftest();
     }
 
+    void stage_net() noexcept {
+        // Probe is graceful: prints "virtio-net dev=absent" and returns
+        // without touching PMM queues or DHCP when no NIC is present.
+        hype::net::net_initialize();
+    }
+
     void stage_input() noexcept {
         if (boot_fb.valid()) {
             hype::input::cursor_init(boot_fb.width(), boot_fb.height());
@@ -816,10 +823,11 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"hxrt", 92, stage_hxrt},
         {"ui", 95, stage_ui},
         {"input", 96, stage_input},
+        {"net", 97, stage_net},
         {"svc", 98, stage_svc},
         {"gdxf", 99, stage_gdxf},
     };
-    hype::boot::bootseq_run(boot_steps, 11);
+    hype::boot::bootseq_run(boot_steps, 12);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         klog::err("boot", "boot info missing or invalid");
@@ -944,6 +952,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
             }
         }
         hype::audio::hasio_pump_active();
+        hype::net::net_poll();
         hype::interrupts::pit_wait_ticks(1);
     }
 }
