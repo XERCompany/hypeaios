@@ -94,6 +94,9 @@ namespace hype::ui {
         if (!data_selftest()) {
             return 0;
         }
+        if (!entry_selftest()) {
+            return 0;
+        }
         if (!framebuffer.valid()) {
             return 0;
         }
