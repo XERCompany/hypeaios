@@ -1,5 +1,6 @@
 #include "kernel/interrupts/idt.h"
 
+#include "kernel/arch/x86/apic.h"
 #include "kernel/arch/x86/cpu.h"
 #include "kernel/arch/x86/io.h"
 #include "kernel/functionemitkeys.h"
@@ -39,7 +40,9 @@ namespace hype::interrupts {
                                      InterruptRegisters* regs) noexcept {
         if (vector >= 32 && vector < 48) {
             kernel::irq_dispatch(static_cast<hcpp::u8>(vector - 32));
-            pic_send_eoi(static_cast<hcpp::u8>(vector - 32));
+            // EOI goes to the LAPIC when the APIC path is live and to
+            // the 8259 pair otherwise; handlers stay agnostic.
+            x86::apic_send_eoi(static_cast<hcpp::u8>(vector - 32));
         } else if (vector < 32) {
             // CPU faults re-execute the faulting instruction on iret,
             // so returning here would re-fault forever. Route every
@@ -84,6 +87,17 @@ namespace hype::interrupts {
     void pic_send_eoi(hcpp::u8 irq) noexcept {
         if (irq >= 8) hype_port_out8(0xA0, 0x20);
         hype_port_out8(0x20, 0x20);
+    }
+    void irq_enable(hcpp::u8 irq) noexcept {
+        // Once the LAPIC+IOAPIC path is live, opening an IRQ line means
+        // clearing the IOAPIC redirection mask; before that it is a
+        // plain 8259 unmask. Either way the vector->irq mapping and the
+        // registered handlers are identical.
+        if (x86::apic_active()) {
+            x86::apic_unmask_irq(irq);
+        } else {
+            pic_unmask(irq);
+        }
     }
     void pit_initialize(hcpp::u32 frequency) noexcept {
         if (frequency == 0) frequency = 100;

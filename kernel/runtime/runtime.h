@@ -35,6 +35,7 @@ namespace hype::runtime {
         hcpp::size_t ioapics;
         bool apic_supported;
         hcpp::uintptr_t apic_base;
+        bool apic_active;
         bool interrupts_ready;
         bool hires_time_ready;      // TSC or HPET source active (PIT always works)
         hcpp::u8 time_source;       // 0=pit, 1=hpet, 2=tsc
