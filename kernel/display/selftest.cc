@@ -14,6 +14,7 @@
 #include "kernel/display/scaleuhd.h"
 #include "kernel/display/uhdtv2.h"
 #include "kernel/display/uhdtv2-vision.h"
+#include "kernel/display/urecordscr.h"
 #include "kernel/display/writeframe.h"
 #include "kernel/serial.hpp"
 
@@ -353,6 +354,9 @@ namespace hype::display {
             return false;
         }
         serial::write_line("disp tables ok");
+        if (!record_selftest()) {
+            return false;
+        }
         serial::write_line("disp core ok");
         return true;
     }
