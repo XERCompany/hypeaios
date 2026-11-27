@@ -1,5 +1,6 @@
 #include "kernel/ui/widgets/button.h"
 
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -58,9 +59,7 @@ namespace hype::ui {
             fill_rgb = theme.destructive;
             text_rgb = theme.primary_fg;
         }
-        const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_md);
-        canvas.fill_rounded_rect(box, radius, canvas.color(fill_rgb));
-        canvas.stroke_rounded_rect(box, radius, canvas.color(theme.border));
+        rui_control_bg(canvas, box, fill_rgb, theme.border);
 
         const hcpp::fonts::FontFace* face = resolved_font();
         if (face == nullptr || label_.empty()) {

@@ -1,5 +1,6 @@
 #include "kernel/ui/widgets/dialog.h"
 
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -171,14 +172,7 @@ namespace hype::ui {
         if (box.empty()) {
             return;
         }
-        const Theme& theme = theme_active();
-        if (theme.hard_shadow) {
-            draw_hard_shadow(canvas, box, theme.card, theme.border);
-            return;
-        }
-        const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_lg);
-        canvas.fill_rounded_rect(box, radius, canvas.color(theme.card));
-        canvas.stroke_rounded_rect(box, radius, canvas.color(theme.border));
+        rui_panel(canvas, box, rui_elev_panel);
     }
 
     AlertDialog::AlertDialog() noexcept : Dialog() {

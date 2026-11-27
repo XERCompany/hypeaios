@@ -7,6 +7,7 @@
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
 #include "kernel/ui/focus.h"
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
@@ -582,8 +583,8 @@ namespace hype::ui {
                     alert_tones[i] &&
                 target.get_pixel(static_cast<hcpp::u32>(b.x + b.w / 2),
                                  static_cast<hcpp::u32>(b.y)) == c_border &&
-                target.get_pixel(static_cast<hcpp::u32>(b.x + b.w - 4),
-                                 static_cast<hcpp::u32>(b.y + b.h / 2)) ==
+                target.get_pixel(static_cast<hcpp::u32>(b.x + b.w - 10),
+                                 static_cast<hcpp::u32>(b.y + b.h - 6)) ==
                     c_card) {
                 ++alert_count;
             }
@@ -689,7 +690,8 @@ namespace hype::ui {
         table.paint(canvas);
         const hcpp::i32 line_h = table.row_height();
         const hcpp::i32 row1_y = 5 + 2 * line_h;
-        if (target.get_pixel(135, 10) != canvas.color(theme.muted) ||
+        if (target.get_pixel(135, 10) !=
+                canvas.color(rui_lift(theme.muted, 1)) ||
             target.get_pixel(135, row1_y + 4) != canvas.color(theme.primary) ||
             target.get_pixel(135, 5 + line_h + 4) != canvas.color(theme.card) ||
             table.column_x(1) != 60 || table.row_count() != 3) {
@@ -959,9 +961,13 @@ namespace hype::ui {
         theme_set_hard_shadow(false);
         canvas.fill_rect(Rect{0, 0, 160, 120}, bg);
         panel.paint(canvas);
+        const hcpp::u32 soft_px = target.get_pixel(
+            static_cast<hcpp::u32>(pb.x + pb.w / 2),
+            static_cast<hcpp::u32>(pb.bottom() + 2));
         const bool shadow_off =
             target.get_pixel(static_cast<hcpp::u32>(pb.right() + 2),
-                             static_cast<hcpp::u32>(pb.bottom() + 2)) == bg;
+                             static_cast<hcpp::u32>(pb.bottom() + 2)) != bg &&
+            soft_px != bg && soft_px < bg;
         const bool shadow_ok =
             theme.hard_shadow == false && shadow_on && shadow_off;
         serial::write("ui2 shadow=");

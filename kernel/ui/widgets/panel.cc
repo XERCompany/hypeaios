@@ -1,5 +1,6 @@
 #include "kernel/ui/widgets/panel.h"
 
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -98,19 +99,30 @@ namespace hype::ui {
             return;
         }
         const Theme& theme = theme_active();
-        if (theme.hard_shadow) {
-            draw_hard_shadow(canvas, box, theme.card, theme.border);
-        } else {
-            canvas.fill_rect(box, canvas.color(theme.card));
-            canvas.stroke_rect(box, canvas.color(theme.border));
-        }
+        rui_panel(canvas, box, rui_elev_window);
 
         const hcpp::i32 strip_h = title_bar_height();
         const Rect strip{box.x + 1, box.y + 1, box.w - 2, strip_h};
         if (!strip.empty()) {
-            canvas.fill_rect(strip, canvas.color(theme.border));
-            canvas.fill_rect({strip.x, strip.bottom() - 1, strip.w, 1},
-                             canvas.color(theme.primary));
+            if (theme.hard_shadow) {
+                canvas.fill_rect(strip, canvas.color(theme.border));
+                canvas.fill_rect({strip.x, strip.bottom() - 1, strip.w, 1},
+                                 canvas.color(theme.primary));
+            } else {
+                const hcpp::i32 radius =
+                    static_cast<hcpp::i32>(theme.radius_lg);
+                hcpp::i32 band_h = strip.h + radius;
+                const hcpp::i32 max_h = box.bottom() - 1 - strip.y;
+                if (band_h > max_h) {
+                    band_h = max_h;
+                }
+                rui_rounded_gradient(
+                    canvas, Rect{strip.x, strip.y, strip.w, band_h}, radius,
+                    rui_lift(theme.muted, 1), theme.muted);
+                canvas.fill_rounded_rect(
+                    Rect{strip.x + 4, strip.bottom() - 1, strip.w - 8, 2}, 1,
+                    canvas.color(theme.primary));
+            }
         }
 
         const hcpp::fonts::FontFace* face = resolved_font();

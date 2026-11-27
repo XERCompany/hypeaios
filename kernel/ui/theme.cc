@@ -39,6 +39,7 @@ namespace hype::ui {
             .radius_sm = 2,
             .radius_md = 4,
             .radius_lg = 8,
+            .text_size = 13,
             .font = nullptr,
             .hard_shadow = false,
         };
@@ -71,6 +72,7 @@ namespace hype::ui {
             .radius_sm = 2,
             .radius_md = 4,
             .radius_lg = 8,
+            .text_size = 13,
             .font = nullptr,
             .hard_shadow = false,
         };

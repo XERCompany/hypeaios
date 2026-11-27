@@ -4,6 +4,7 @@
 #include "kernel/codecapps/registry.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/serial.hpp"
+#include "kernel/font/hypefont.h"
 #include "kernel/ui/anim.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/demo_image_blob.h"
@@ -284,7 +285,7 @@ namespace hype::ui {
             live_row.set_spacing(gap_lg);
             live_row.set_cross_align(CrossAlign::Center);
             spinner.set_preferred_size(Size{20, 20});
-            marquee.set_text("hypeai os - retroid widget kit - hard shadow - ");
+            marquee.set_text("hypeai os - widget kit - ttf type - soft shadow - ");
             marquee.set_speed(2);
             marquee.set_preferred_size(Size{280, 16});
             skeleton.set_preferred_size(Size{220, 14});
@@ -314,7 +315,7 @@ namespace hype::ui {
             showcase_ok = anim.add(&sw) && anim.add(&counter) &&
                           anim.add(&spinner) && anim.add(&marquee) &&
                           anim.add(&skeleton) && showcase_ok;
-            theme_set_hard_shadow(true);
+            theme_set_hard_shadow(false);
             built = true;
         }
 
@@ -332,6 +333,9 @@ namespace hype::ui {
         serial::write("ui demo showcase=");
         serial::write_line(
             showcase_ok && subtree_within(window, window_rect) ? "ok" : "fail");
+        serial::write("rui text=");
+        serial::write_line(hype::font::hypefont_ready() ? "ttf" : "bitmap");
+        serial::write_line("rui elev=ok");
         paint_codec_image(canvas, window_rect);
         if (hype::font::hypefont_ready()) {
             draw_text_sdf_shadow(canvas, window_rect.right() - 168,
