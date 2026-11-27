@@ -48,6 +48,7 @@
 #include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefile.h"
 #include "kernel/vfs/hypefs.h"
+#include "kernel/video/videocoretest.h"
 #include "kernel/video/videov4lv.h"
 #include "kernel/win/deskman.h"
 #include "kernel/win/winman.h"
@@ -272,6 +273,7 @@ namespace {
     bool image_selftest_ok = false;
     bool jpeg_selftest_ok = false;
     bool png_selftest_ok = false;
+    bool video_decode_selftest_ok = false;
 
     void stage_boot_devices() noexcept {
         boot_runtime = hype::runtime::boot(*boot_info_arg);
@@ -341,6 +343,7 @@ namespace {
         png_selftest_ok = hype::codec::image::png_selftest();
         report("png selftest=", png_selftest_ok);
         hype::codec::audio_codec_selftest();
+        video_decode_selftest_ok = hype::video::video_decode_selftest();
     }
 
     void stage_memory() noexcept {

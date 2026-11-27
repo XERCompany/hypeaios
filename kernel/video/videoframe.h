@@ -1,7 +1,7 @@
 #pragma once
 #include "hcpp/types.hpp"
 namespace hype::video {
-    enum class PixelFormat : hcpp::u8 { Unknown, RGB24, RGB32, YUV420, NV12, Compressed };
+    enum class PixelFormat : hcpp::u8 { Unknown, RGB24, RGB32, YUV420, NV12, YUY2, Compressed };
     struct VideoFrame {
         hcpp::u32 width, height, pitch;
         PixelFormat format;
