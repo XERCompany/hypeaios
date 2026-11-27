@@ -1,14 +1,19 @@
 #include "kernel/display/selftest.h"
 
+#include "hcpp/display/hdr.hpp"
 #include "hcpp/graphics/framebuffer.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/display/display_huxga.h"
 #include "kernel/display/display_qxga.h"
 #include "kernel/display/display_wvga.h"
+#include "kernel/display/displayhda.h"
 #include "kernel/display/displaysize.h"
 #include "kernel/display/hgc.h"
+#include "kernel/display/pal.h"
 #include "kernel/display/scaler.h"
 #include "kernel/display/scaleuhd.h"
+#include "kernel/display/uhdtv2.h"
+#include "kernel/display/uhdtv2-vision.h"
 #include "kernel/display/writeframe.h"
 #include "kernel/serial.hpp"
 
@@ -208,6 +213,103 @@ namespace hype::display {
             return true;
         }
 
+        bool pal_selftest() noexcept {
+            if (!pal_sane()) {
+                return false;
+            }
+            if (pal_timing()->vactive != pal_active_lines ||
+                pal_timing_block.hfront + pal_timing_block.hsync + pal_timing_block.hback !=
+                    pal_total_samples - pal_active_samples) {
+                return false;
+            }
+            if (pal_pixel_clock_khz() != pal_clock_khz ||
+                pal_clock_khz * 1000 != pal_line_rate_hz * pal_total_samples) {
+                return false;
+            }
+            return true;
+        }
+
+        bool uhd_selftest(hcpp::u32& count_out) noexcept {
+            count_out = uhd2_mode_count();
+            if (count_out < 10 || uhd2_mode_at(count_out) != nullptr) {
+                return false;
+            }
+            for (hcpp::u32 i = 0; i < count_out; ++i) {
+                const Uhd2Mode* mode = uhd2_mode_at(i);
+                if (mode == nullptr || !uhd2_is_uhd(mode->width, mode->height) ||
+                    mode->hz == 0 || uhd_find_vic(mode->vic) != mode) {
+                    return false;
+                }
+            }
+            if (uhd_find(3840, 2160, 60) == nullptr ||
+                uhd_find(3840, 2160, 60)->vic != vic_uhd4k_60 ||
+                uhd_find(7680, 4320, 30) == nullptr ||
+                uhd_find(7680, 4320, 30)->vic != vic_uhd8k_30 ||
+                uhd_find(3840, 2160, 24) == nullptr ||
+                uhd_find(3840, 2160, 24)->vic != vic_uhd4k_24) {
+                return false;
+            }
+            if (uhd_find(1920, 1080, 60) != nullptr || uhd_find(3840, 2160, 120) != nullptr ||
+                uhd_find_vic(1) != nullptr) {
+                return false;
+            }
+            return true;
+        }
+
+        bool hdr_selftest() noexcept {
+            if (!uhd_primaries_equal(bt2020_primaries,
+                                     UhdPrimaries{35400, 14600, 8500, 39850, 6550, 2300,
+                                                  15635, 16450})) {
+                return false;
+            }
+            if (static_cast<hcpp::u8>(UhdTransfer::Pq) != 16 ||
+                static_cast<hcpp::u8>(UhdTransfer::Hlg) != 18) {
+                return false;
+            }
+            if (!hcpp::display::hdr_eotf_pq_supported(1u << 2) ||
+                hcpp::display::hdr_eotf_pq_supported(1u << 3) ||
+                !hcpp::display::hdr_eotf_hlg_supported(1u << 3)) {
+                return false;
+            }
+            const UhdHdr10Meta meta = uhd_hdr10_default();
+            hcpp::u8 packed[uhd_hdr10_block_size];
+            if (uhd_hdr10_pack(meta, packed, uhd_hdr10_block_size - 1) ||
+                !uhd_hdr10_pack(meta, packed, sizeof(packed))) {
+                return false;
+            }
+            UhdHdr10Meta parsed{};
+            if (!uhd_hdr10_parse(packed, sizeof(packed), parsed) ||
+                uhd_hdr10_parse(packed, 8, parsed) || !uhd_hdr10_equal(meta, parsed)) {
+                return false;
+            }
+            return true;
+        }
+
+        bool audio_bridge_selftest() noexcept {
+            if (!displayhda_bind_widget(0, 2) || displayhda_widget_count() == 0) {
+                return false;
+            }
+            if (!displayhda_route(0, 1) || displayhda_route_count() == 0) {
+                return false;
+            }
+            const DisplayAudioRoute* route = displayhda_route_at(0);
+            if (route == nullptr || route->output_id != 0 || route->stream_id != 1 ||
+                !route->active) {
+                return false;
+            }
+            if (!displayhda_route(0, 3)) {
+                return false;
+            }
+            if (!displayhda_unroute(0) || displayhda_find_route(0) != nullptr) {
+                return false;
+            }
+            audio::hda::IzauController empty{};
+            if (displayhda_route(empty, *route)) {
+                return false;
+            }
+            return true;
+        }
+
     }  // namespace
 
     bool display_selftest() noexcept {
@@ -228,6 +330,29 @@ namespace hype::display {
             return false;
         }
         serial::write_line("disp writeframe=ok");
+        if (!pal_selftest()) {
+            serial::write_line("disp pal=fail");
+            return false;
+        }
+        serial::write_line("disp pal=ok");
+        hcpp::u32 uhd_modes = 0;
+        if (!uhd_selftest(uhd_modes)) {
+            serial::write_line("disp uhd=fail");
+            return false;
+        }
+        serial::write("disp uhd modes=");
+        serial::write_dec32(uhd_modes);
+        serial::write("\r\n");
+        if (!hdr_selftest()) {
+            serial::write_line("disp hdr=fail");
+            return false;
+        }
+        serial::write_line("disp hdr=ok");
+        if (!audio_bridge_selftest()) {
+            serial::write_line("disp audio=fail");
+            return false;
+        }
+        serial::write_line("disp tables ok");
         serial::write_line("disp core ok");
         return true;
     }
