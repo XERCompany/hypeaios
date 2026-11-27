@@ -82,6 +82,9 @@ namespace hype::ui {
         if (!theme2_selftest()) {
             return 0;
         }
+        if (!focus_selftest()) {
+            return 0;
+        }
         if (!framebuffer.valid()) {
             return 0;
         }
