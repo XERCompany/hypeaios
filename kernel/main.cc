@@ -361,6 +361,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     report("display id/dpi/cta selftest=", display2_ok);
     const bool display3_ok = hype::display::display3_selftest();
     report("display modeset/dp selftest=", display3_ok);
+    const bool display4_ok = hype::display::display4_selftest();
+    report("display multi selftest=", display4_ok);
     if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
         serial::write_line("sqlite=ok");
         serial::write("db selftest=");
