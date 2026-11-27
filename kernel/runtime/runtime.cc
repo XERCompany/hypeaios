@@ -5,11 +5,13 @@
 #include "kernel/acpi/madt.h"
 #include "kernel/core_services.h"
 #include "kernel/interrupts/idt.h"
+#include "kernel/klog.h"
 #include "kernel/memory/pmm.h"
 #include "kernel/memory/vmm.h"
 #include "kernel/pci/pci.h"
 #include "kernel/sched/context.h"
 #include "kernel/sched/scheduler.h"
+#include "kernel/time/timer.h"
 #include "kernel/video/videoclient.h"
 #include "kernel/video/videocoretest.h"
 #include "kernel/video/videovirtual.h"
@@ -87,6 +89,17 @@ namespace hype::runtime {
             current.interrupts_ready = interrupts::interrupts_initialized();
             return current.interrupts_ready;
         }
+        bool timer_enter(void*) noexcept {
+            // Runs after acpi.discover (needs the HPET table) and after
+            // interrupts.foundation (enables the PIT-tick calibration
+            // fallback). Never fails the boot: the PIT tick path remains
+            // usable for sleep/idle even with no HPET and no TSC.
+            const bool hires = time::timer_initialize();
+            current.hires_time_ready = hires;
+            current.time_source = static_cast<hcpp::u8>(time::time_source());
+            klog::set_timestamps(true);
+            return true;
+        }
 
         RuntimeStage core_stage{"core.services", 10, core_enter, nullptr, StageState::Pending};
         RuntimeStage pci_stage{"pci.scan", 20, pci_enter, nullptr, StageState::Pending};
@@ -94,6 +107,7 @@ namespace hype::runtime {
         RuntimeStage vmm_stage{"memory.vmm", 35, vmm_enter, nullptr, StageState::Pending};
         RuntimeStage acpi_stage{"acpi.discover", 40, acpi_enter, nullptr, StageState::Pending};
         RuntimeStage interrupt_stage{"interrupts.foundation", 50, interrupt_enter, nullptr, StageState::Pending};
+        RuntimeStage timer_stage{"time.timer", 55, timer_enter, nullptr, StageState::Pending};
         RuntimeStage context_stage{"sched.context", 60, context_enter, nullptr, StageState::Pending};
     }  // namespace
 
@@ -108,6 +122,7 @@ namespace hype::runtime {
         register_stage(vmm_stage);
         register_stage(acpi_stage);
         register_stage(interrupt_stage);
+        register_stage(timer_stage);
         register_stage(context_stage);
         current.stages_registered = stage_count;
     }
