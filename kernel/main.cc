@@ -9,6 +9,7 @@
 #include "hcpp/graphics/text.hpp"
 #include "hcpp/text_writer.hpp"
 #include "hcpp/types.hpp"
+#include "kernel/arch/x86/cpuid.h"
 #include "kernel/audio/audio-serivce.h"
 #include "kernel/audio/audioac97.h"
 #include "kernel/audio/audioes1370.h"
@@ -46,6 +47,7 @@
 #include "kernel/serial.hpp"
 #include "kernel/session/session.h"
 #include "kernel/svc/revsvc.h"
+#include "kernel/time/rtc.h"
 #include "kernel/ui/selftest.h"
 #include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefile.h"
@@ -659,6 +661,25 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     if (has_framebuffer) {
         serial::write_line("boot fb=black");
     }
+    hype::x86::cpuid_initialize();
+    serial::write("cpu vendor=");
+    serial::write(hype::x86::cpuid_features().vendor);
+    serial::write(" sse2=");
+    serial::write_char(hype::x86::cpuid_has(hype::x86::CpuFeature::Sse2) ? '1' : '0');
+    serial::write(" avx=");
+    serial::write_char(hype::x86::cpuid_has(hype::x86::CpuFeature::Avx) ? '1' : '0');
+    serial::write("\r\n");
+    serial::write("cpu selftest=");
+    serial::write_line(hype::x86::cpuid_selftest() ? "ok" : "fail");
+    char rtc_text[20];
+    const bool rtc_ok = hype::time::rtc_format(rtc_text);
+    if (rtc_ok) {
+        serial::write("rtc ");
+        serial::write(rtc_text);
+        serial::write("\r\n");
+    }
+    serial::write("rtc=");
+    serial::write_line(rtc_ok ? "ok" : "fail");
     hcpp::fonts::initialize_default_fonts();
     hcpp::graphics::Framebuffer framebuffer;
     if (has_framebuffer) {
