@@ -3,6 +3,7 @@
 #include "hcpp/string_view.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/serial.hpp"
+#include "kernel/time/timer.h"
 
 // Leveled kernel logging over the serial port. Header-only, no heap.
 // klog::info("pci", "scan done") prints "[pci] scan done".
@@ -18,9 +19,23 @@ namespace klog {
     inline void set_min_level(Level level) noexcept { min_level_ref() = level; }
     inline Level min_level() noexcept { return min_level_ref(); }
 
+    // Optional "T+<ms>ms " uptime prefix on every klog line. Disabled by
+    // default; enable once a time source is initialized.
+    inline bool& timestamps_ref() noexcept {
+        static bool enabled = false;
+        return enabled;
+    }
+
+    inline void set_timestamps(bool enabled) noexcept { timestamps_ref() = enabled; }
+
     inline void log(Level level, hcpp::StringView tag, hcpp::StringView message) noexcept {
         if (static_cast<hcpp::u8>(level) < static_cast<hcpp::u8>(min_level_ref())) {
             return;
+        }
+        if (timestamps_ref()) {
+            serial::write("T+");
+            serial::write_dec32(static_cast<hcpp::u32>(hype::time::uptime_ms()));
+            serial::write("ms ");
         }
         serial::write_char('[');
         serial::write(tag);
