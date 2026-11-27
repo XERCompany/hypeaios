@@ -8,9 +8,12 @@ STAGE2_SECTORS = 32
 KERNEL_SECTORS = 4096
 DATA_LBA = 1 + STAGE2_SECTORS + KERNEL_SECTORS  # 4129
 
-# Compact image by default: stage1 + stage2 + kernel + HYPEDATA blob only.
-# Set HYPEAI_IMG_SECTORS to pad the image out to a fixed sector count.
+# Compact image by default: stage1 + stage2 + kernel + HYPEDATA blob.
+# The blob region still gets headroom so runtime files can grow and
+# hypeblob_sync() can write back within the on-disk area (kernel cap 4 MiB).
+# Set HYPEAI_IMG_SECTORS to pad the whole image out to a fixed sector count.
 TARGET_SECTORS = int(os.environ.get("HYPEAI_IMG_SECTORS", 0))
+BLOB_REGION_BYTES = 4 << 20
 
 BLOB_MAGIC = b"HYPEDATA"
 BLOB_NAME_LEN = 64
@@ -110,6 +113,9 @@ def collect_payload(root: Path, build: Path):
     # wallpaper pack -> U:/wallpapers (dxbg lists this dir)
     for path in sorted((root / "payload" / "wallpapers").glob("*.png")):
         files.append((f"u/wallpapers/{path.name}", path, None))
+    # music pack -> U:/music (mp3 load/decode test input)
+    for path in sorted((root / "payload" / "music").glob("*.mp3")):
+        files.append((f"u/music/{path.name}", path, None))
     # font pack: second embedded font for later parser work
     for path in sorted((root / "payload" / "fonts").glob("*")):
         if path.is_file():
@@ -177,7 +183,8 @@ kernel_offset = kernel_lba * SECTOR_SIZE
 image[kernel_offset:kernel_offset + len(kernel)] = kernel
 
 blob = build_blob(root, build)
-content_bytes = len(image) + len(blob)
+region_bytes = max(len(blob), BLOB_REGION_BYTES)
+content_bytes = len(image) + region_bytes
 if TARGET_SECTORS and content_bytes > TARGET_SECTORS * SECTOR_SIZE:
     raise SystemExit("payload exceeds configured image size")
 
@@ -185,6 +192,7 @@ out = build / "hypeai-os.img"
 with out.open("wb") as handle:
     handle.write(image)
     handle.write(blob)
+    handle.write(b"\0" * (region_bytes - len(blob)))
     if TARGET_SECTORS:
         handle.truncate(TARGET_SECTORS * SECTOR_SIZE)
 

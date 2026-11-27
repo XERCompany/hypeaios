@@ -14,6 +14,7 @@
 #include "kernel/audio/audioac97.h"
 #include "kernel/audio/audioes1370.h"
 #include "kernel/audio/hasio.h"
+#include "kernel/audio/pullmix.h"
 #include "kernel/boot/bootseq.h"
 #include "kernel/boot/bootsplash.h"
 #include "kernel/boot_info.hpp"
@@ -21,6 +22,7 @@
 #include "kernel/codecapps/image/image.h"
 #include "kernel/codecapps/image/jpeg.h"
 #include "kernel/codecapps/image/png.h"
+#include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/registry.h"
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
@@ -433,6 +435,32 @@ namespace {
         hype::gfx::gfx_bench();
     }
 
+    struct Mp3FileSource {
+        const hcpp::i16 *pcm;
+        hcpp::u32 frames;
+        hcpp::u32 rate;
+        hcpp::u8 channels;
+        hcpp::u32 pos;
+    };
+
+    constexpr hcpp::size_t mp3_arena_pages = 1600;
+    constexpr hcpp::size_t mp3_pcm_bytes = 5 * 1024 * 1024;
+    Mp3FileSource mp3_file{};
+    bool mp3_file_decoded;
+    bool mp3_file_queued;
+
+    void mp3_file_fill(hcpp::i16 *dst, hcpp::u32 frames, void *ctx) noexcept {
+        auto *src = static_cast<Mp3FileSource *>(ctx);
+        for (hcpp::u32 f = 0; f < frames; ++f) {
+            const hcpp::u32 base =
+                (src->pos % src->frames) * src->channels;
+            for (hcpp::u8 c = 0; c < src->channels; ++c) {
+                dst[f * src->channels + c] = src->pcm[base + c];
+            }
+            ++src->pos;
+        }
+    }
+
     void stage_vfs() noexcept {
         hype::vfs::fs_init();
         const bool vfs_seeded = hype::vfs::fs_seed();
@@ -523,6 +551,60 @@ namespace {
         serial::write(sync_ok ? "ok" : "fail");
         serial::write(" sync=");
         serial::write_line(sync_ok ? "ok" : "fail");
+
+        // MP3 load+decode test: read the embedded payload track through vfs
+        // and decode it via the codec path into a PMM-backed PCM buffer.
+        static const char mp3_test_path[] = "HYPEOS://U/music/test.mp3";
+        hype::vfs::FsStat mp3_stat{};
+        if (hype::vfs::fs_stat(mp3_test_path, mp3_stat) ==
+            hype::vfs::FsStatus::Ok) {
+            hype::codec::Arena mp3_arena{};
+            if (hype::codec::arena_from_pmm(mp3_arena, mp3_arena_pages)) {
+                hcpp::u8 *mp3_data = static_cast<hcpp::u8 *>(
+                    hype::codec::arena_alloc(mp3_arena, mp3_stat.size, 8));
+                hcpp::u32 got = 0;
+                if (mp3_data != nullptr &&
+                    hype::vfs::fs_read(mp3_test_path, mp3_data, mp3_stat.size,
+                                       &got) == hype::vfs::FsStatus::Ok &&
+                    got == mp3_stat.size) {
+                    serial::write("mp3 load=ok bytes=");
+                    serial::write_dec32(mp3_stat.size);
+                    serial::write("\r\n");
+                    const hype::codec::CodecId mp3_id =
+                        hype::codec::codec_probe(mp3_data, got);
+                    hype::codec::PcmBuf mp3_buf{};
+                    mp3_buf.data = static_cast<hcpp::u8 *>(
+                        hype::codec::arena_alloc(mp3_arena, mp3_pcm_bytes, 8));
+                    mp3_buf.capacity = mp3_pcm_bytes;
+                    if (mp3_buf.data != nullptr &&
+                        hype::codec::codec_decode(mp3_id, mp3_data, got,
+                                                  &mp3_buf, mp3_arena) ==
+                            hype::codec::CodecStatus::Ok) {
+                        serial::write("mp3 dec=ok frames=");
+                        serial::write_dec32(mp3_buf.frames);
+                        serial::write(" rate=");
+                        serial::write_dec32(mp3_buf.format.sample_rate);
+                        serial::write(" ch=");
+                        serial::write_dec32(
+                            static_cast<hcpp::u32>(mp3_buf.format.channels));
+                        serial::write("\r\n");
+                        mp3_file.pcm = reinterpret_cast<const hcpp::i16 *>(
+                            mp3_buf.data);
+                        mp3_file.frames = mp3_buf.frames;
+                        mp3_file.channels = mp3_buf.format.channels;
+                        mp3_file.rate = mp3_buf.format.sample_rate;
+                        mp3_file.pos = 0;
+                        mp3_file_decoded = true;
+                    } else {
+                        serial::write_line("mp3 dec=fail");
+                    }
+                } else {
+                    serial::write_line("mp3 load=fail");
+                }
+            }
+        } else {
+            serial::write_line("mp3 load=absent");
+        }
     }
 
     bool svc_gfx_start() noexcept {
@@ -851,6 +933,15 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
             hype::input::cursor_draw(framebuffer);
         } else if (ptr_dirty) {
             hype::input::cursor_draw(framebuffer);
+        }
+        if (mp3_file_decoded && !mp3_file_queued &&
+            hype::audio::hasio_ready()) {
+            const hcpp::u32 src = hype::audio::pullmix_add_source(
+                mp3_file_fill, &mp3_file, mp3_file.channels, mp3_file.rate);
+            if (src != hype::audio::pullmix_invalid_id) {
+                mp3_file_queued = true;
+                serial::write_line("mp3 play=queued");
+            }
         }
         hype::audio::hasio_pump_active();
         hype::interrupts::pit_wait_ticks(1);
