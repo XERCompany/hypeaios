@@ -23,6 +23,8 @@
 #include "kernel/display/clientdisplay.h"
 #include "kernel/display/idscreen.h"
 #include "kernel/display/selftest.h"
+#include "kernel/gfx/gfxbench.h"
+#include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
@@ -384,6 +386,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     report("display modeset/dp selftest=", display3_ok);
     const bool display4_ok = hype::display::display4_selftest();
     report("display multi selftest=", display4_ok);
+    const bool gfx_ok = hype::gfx::gfx_selftest();
+    report("gfx engine selftest=", gfx_ok);
+    hype::gfx::gfx_bench();
     hype::boot::boot_splash_stage("display", 70);
     if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
         serial::write_line("sqlite=ok");
