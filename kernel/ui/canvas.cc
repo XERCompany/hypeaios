@@ -1,10 +1,18 @@
 #include "kernel/ui/canvas.h"
 
 #include "hcpp/utf8.hpp"
+#include "kernel/font/hypefont.h"
+#include "kernel/font/hypetext.h"
+#include "kernel/ui/theme.h"
 
 namespace hype::ui {
 
     namespace {
+
+        hcpp::u32 ttf_size(const hcpp::fonts::FontFace& font) noexcept {
+            const hcpp::u32 themed = theme_active().text_size;
+            return themed != 0 ? themed : font.height;
+        }
 
         hcpp::i32 isqrt_i32(hcpp::i32 value) noexcept {
             if (value <= 0) {
@@ -246,6 +254,25 @@ namespace hype::ui {
 
     void Canvas::draw_text(hcpp::i32 x, hcpp::i32 baseline_y, hcpp::StringView text,
                            hcpp::u32 color, const hcpp::fonts::FontFace& font) noexcept {
+        if (font.glyph_for == nullptr || clip_.empty() || text.empty()) {
+            return;
+        }
+        const hcpp::u32 size_px = ttf_size(font);
+        const hcpp::u32 em = hype::font::font_em_px();
+        if (size_px >= 10 && em != 0 && hype::font::hypefont_ready()) {
+            const hcpp::i32 ascent = static_cast<hcpp::i32>(
+                (static_cast<hcpp::i64>(hype::font::font_ascent()) * size_px +
+                 em / 2) / em);
+            hype::font::text_draw_clip(target_, x, baseline_y - ascent, text,
+                                       color, size_px, clip_);
+            return;
+        }
+        draw_text_px(x, baseline_y, text, color, font);
+    }
+
+    void Canvas::draw_text_px(hcpp::i32 x, hcpp::i32 baseline_y,
+                              hcpp::StringView text, hcpp::u32 color,
+                              const hcpp::fonts::FontFace& font) noexcept {
         if (font.glyph_for == nullptr || clip_.empty()) {
             return;
         }
@@ -284,7 +311,20 @@ namespace hype::ui {
         draw_text(x, baseline_y, text, color, *font);
     }
 
+    void Canvas::draw_text_px(hcpp::i32 x, hcpp::i32 baseline_y,
+                              hcpp::StringView text, hcpp::u32 color) noexcept {
+        const hcpp::fonts::FontFace* font = hcpp::fonts::default_font();
+        if (font == nullptr) {
+            return;
+        }
+        draw_text_px(x, baseline_y, text, color, *font);
+    }
+
     Size text_extent(hcpp::StringView text, const hcpp::fonts::FontFace& font) noexcept {
+        const hcpp::u32 size_px = ttf_size(font);
+        if (size_px >= 10 && hype::font::hypefont_ready()) {
+            return Size{hype::font::text_measure(text, size_px), font.height};
+        }
         Size extent{0, font.height};
         if (font.glyph_for == nullptr) {
             return extent;

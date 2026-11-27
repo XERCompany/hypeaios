@@ -155,8 +155,8 @@ namespace hype::ui {
             const hcpp::i32 tx = b.x + static_cast<hcpp::i32>(i) * tab_w;
             const bool current = i == active_;
             if (current) {
-                canvas.fill_rect(
-                    Rect{tx + 4, b.y + strip - 2, tab_w - 8, 2},
+                canvas.fill_rounded_rect(
+                    Rect{tx + 6, b.y + strip - 3, tab_w - 12, 3}, 1,
                     canvas.color(theme.accent));
             }
             if (face == nullptr || labels_[i].empty()) {

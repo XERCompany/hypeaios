@@ -1,5 +1,6 @@
 #include "kernel/ui/overlays/toast.h"
 
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -94,13 +95,12 @@ namespace hype::ui {
             const Rect card{screen.right() - margin - card_w, cursor_y, card_w,
                             card_h};
 
-            if (theme.hard_shadow) {
-                draw_hard_shadow(canvas, card, theme.card, theme.border);
-            } else {
-                canvas.fill_rect(card, canvas.color(theme.card));
-                canvas.stroke_rect(card, canvas.color(theme.border));
-            }
-            canvas.fill_rect({card.x, card.y, 4, card.h},
+            rui_card(canvas, card);
+            const hcpp::i32 bar_inset =
+                theme.hard_shadow ? 0
+                                  : static_cast<hcpp::i32>(theme.radius_lg) / 2;
+            canvas.fill_rect({card.x, card.y + bar_inset, 4,
+                              card.h - 2 * bar_inset},
                              canvas.color(kind_rgb(toast.kind, theme)));
 
             if (face == nullptr) {

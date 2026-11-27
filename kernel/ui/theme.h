@@ -34,6 +34,8 @@ namespace hype::ui {
         hcpp::u32 radius_md;
         hcpp::u32 radius_lg;
 
+        hcpp::u32 text_size;
+
         const hcpp::fonts::FontFace* font;
 
         bool hard_shadow;

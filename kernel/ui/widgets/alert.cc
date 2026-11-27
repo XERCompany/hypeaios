@@ -1,5 +1,6 @@
 #include "kernel/ui/widgets/alert.h"
 
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -89,8 +90,7 @@ namespace hype::ui {
         const Theme& theme = theme_active();
         const hcpp::u32 accent = canvas.color(tone_rgb(tone_, theme));
         const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_lg);
-        canvas.fill_rounded_rect(box, radius, canvas.color(theme.card));
-        canvas.stroke_rounded_rect(box, radius, canvas.color(theme.border));
+        rui_card(canvas, box);
 
         hcpp::i32 bar_h = box.h - 2 * radius;
         if (bar_h < 2) {

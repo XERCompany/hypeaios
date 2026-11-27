@@ -35,6 +35,10 @@ namespace hype::ui {
                        const hcpp::fonts::FontFace& font) noexcept;
         void draw_text(hcpp::i32 x, hcpp::i32 baseline_y, hcpp::StringView text,
                        hcpp::u32 color) noexcept;
+        void draw_text_px(hcpp::i32 x, hcpp::i32 baseline_y, hcpp::StringView text,
+                          hcpp::u32 color, const hcpp::fonts::FontFace& font) noexcept;
+        void draw_text_px(hcpp::i32 x, hcpp::i32 baseline_y, hcpp::StringView text,
+                          hcpp::u32 color) noexcept;
 
     private:
         hcpp::graphics::Framebuffer& target_;

@@ -1,6 +1,7 @@
 #include "kernel/ui/widgets/table.h"
 
 #include "hcpp/utf8.hpp"
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -216,7 +217,10 @@ namespace hype::ui {
         canvas.stroke_rect(box, canvas.color(theme.border));
 
         const Rect header_rect{box.x + 1, box.y + 1, box.w - 2, line};
-        canvas.fill_rect(header_rect, canvas.color(theme.muted));
+        canvas.fill_rect(header_rect, canvas.color(rui_lift(theme.muted, 1)));
+        canvas.fill_rect_alpha(
+            Rect{header_rect.x, header_rect.bottom(), header_rect.w, 2},
+            canvas.color(theme.shadow), 48);
         const hcpp::i32 rows_y = header_rect.bottom();
 
         for (hcpp::size_t row = 0; row < row_count_; ++row) {
