@@ -37,6 +37,7 @@
 #include "kernel/serial.hpp"
 #include "kernel/ui/demo.h"
 #include "kernel/ui/flowlogin.h"
+#include "kernel/vfs/hypefs.h"
 #include "kernel/video/videov4lv.h"
 
 using InitArrayFunction = void (*)();
@@ -408,6 +409,22 @@ namespace {
     }
 
     void stage_vfs() noexcept {
+        hype::vfs::fs_init();
+        const bool vfs_seeded = hype::vfs::fs_seed();
+        serial::write("vfs disks=");
+        serial::write_dec32(hype::vfs::fs_disk_count());
+        serial::write(" seed=");
+        serial::write_line(vfs_seeded ? "ok" : "fail");
+        hype::vfs::FsSelftest vfs_selftest{};
+        const bool vfs_ok = hype::vfs::fs_selftest(vfs_selftest);
+        serial::write("vfs path=");
+        serial::write_line(vfs_selftest.path_ok ? "ok" : "fail");
+        serial::write("vfs sys=");
+        serial::write_line(vfs_selftest.sys_locked ? "locked" : "fail");
+        serial::write("vfs io=");
+        serial::write_line(vfs_selftest.io_ok ? "ok" : "fail");
+        report("vfs selftest=", vfs_ok && vfs_seeded &&
+                                   hype::vfs::fs_disk_count() == 3);
         if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
             serial::write_line("sqlite=ok");
             serial::write("db selftest=");
