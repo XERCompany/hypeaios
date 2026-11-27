@@ -15,9 +15,13 @@ namespace hype::pci {
         hcpp::u8 program_interface;
         hcpp::u8 revision;
         hcpp::u8 header_type;
+        hcpp::u8 interrupt_line;
+        hcpp::u8 interrupt_pin;
+        bool is_bridge;
+        hcpp::u32 bars[6];
     };
 
-    constexpr hcpp::size_t max_devices = 64;
+    constexpr hcpp::size_t max_devices = 256;
     constexpr hcpp::u16 invalid_vendor = 0xFFFF;
 
     hcpp::u32 config_read32(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u8 offset) noexcept;
