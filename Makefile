@@ -96,8 +96,8 @@ iso: $(BUILD)/hypeai-os.iso
 test: all
 	./tools/test-qemu.sh
 
-genfont:
-	$(PYTHON) tools/genfont.py --ttf tools/Montserrat.ttf
+embedfont:
+	$(PYTHON) tools/embed_ttf.py
 
 clean:
 	rm -rf $(BUILD)

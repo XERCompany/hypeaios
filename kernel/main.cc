@@ -370,23 +370,19 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("\r\n");
     serial::write("hpf selftest=");
     serial::write_line(hcpp::fonts::hpf_selftest() ? "ok" : "failed");
-    const bool hfnt_loaded =
-        hype::font::hypefont_load(hype::font::montserrat_sdf_hfnt,
-                                  hype::font::montserrat_sdf_hfnt_size);
-    serial::write("font atlas=");
-    serial::write_dec32(hype::font::font_atlas_width());
-    serial::write("x");
-    serial::write_dec32(hype::font::font_atlas_height());
-    serial::write("\r\n");
-    serial::write("font glyphs=");
+    const bool ttf_loaded = hype::font::font_init();
+    serial::write("font ttf=");
+    serial::write(ttf_loaded ? "ok" : "fail");
+    serial::write(" glyphs=");
     serial::write_dec32(hype::font::font_glyph_count());
     serial::write("\r\n");
     serial::write("font cyr=");
     serial::write_line(hype::font::font_glyph(0x041F).valid() ? "ok" : "missing");
     serial::write("font measure=");
-    serial::write_dec32(static_cast<hcpp::u32>(hype::font::font_measure("HypeAI")));
+    serial::write_dec32(static_cast<hcpp::u32>(
+        hype::font::text_measure("HypeAI", 24)));
     serial::write("\r\n");
-    report("font selftest=", hfnt_loaded && hype::font::font_selftest());
+    report("font selftest=", ttf_loaded && hype::font::font_selftest());
     report("text selftest=", hype::font::text_selftest());
     serial::write("sha256=");
     serial::write_line(hcpp::sha256_selftest() ? "ok" : "failed");
