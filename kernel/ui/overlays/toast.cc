@@ -1,5 +1,6 @@
 #include "kernel/ui/overlays/toast.h"
 
+#include "kernel/gfx/hypegfx.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 
@@ -96,6 +97,11 @@ namespace hype::ui {
                             card_h};
 
             rui_card(canvas, card);
+            if (rui_dark_surface()) {
+                hype::gfx::gfx_inner_glow_edge(
+                    canvas, card.inset(Insets::uniform(1)),
+                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
+            }
             const hcpp::i32 bar_inset =
                 theme.hard_shadow ? 0
                                   : static_cast<hcpp::i32>(theme.radius_lg) / 2;

@@ -71,6 +71,17 @@ namespace hype::ui {
             canvas.fill_rect_alpha(Rect{x0, y, x1 - x0, 1}, color, alpha);
         }
 
+        // Dark-UI depth rule: when the card surface is dark, elevation is
+        // expressed through luminosity tiers, not black drop shadows.
+        bool dark_surface() noexcept {
+            const Theme& theme = theme_active();
+            hcpp::u8 r = 0;
+            hcpp::u8 g = 0;
+            hcpp::u8 b = 0;
+            unpack_rgb(theme.card, r, g, b);
+            return static_cast<hcpp::u32>(r) + g + b < 384;
+        }
+
         void fill_rounded_alpha(Canvas& canvas, Rect rect, hcpp::i32 radius,
                                 const Rect& cut, hcpp::u32 color,
                                 hcpp::u8 alpha) noexcept {
@@ -96,6 +107,8 @@ namespace hype::ui {
         }
 
     }  // namespace
+
+    bool rui_dark_surface() noexcept { return dark_surface(); }
 
     hcpp::u32 rui_lift(hcpp::u32 rgb, hcpp::u32 elevation) noexcept {
         hcpp::u8 r = 0;
@@ -154,16 +167,17 @@ namespace hype::ui {
         if (rect.empty() || alpha == 0) {
             return;
         }
-        blur = clamp_i32(blur, 0, 24);
+        blur = clamp_i32(blur, 0, 40);
         const hcpp::i32 rw = rect.w + 2 * blur;
         const hcpp::i32 rh = rect.h + 2 * blur;
         if (rw <= 240 && rw * rh <= 60000) {
-            gfx::gfx_soft_shadow(canvas, rect, radius, blur, alpha);
+            gfx::gfx_soft_shadow_tinted(canvas, rect, radius, blur, alpha,
+                                        theme_active().shadow);
             return;
         }
         const hcpp::u32 shadow =
             canvas.color(theme_active().shadow);
-        const hcpp::i32 off = 1 + blur / 4;
+        const hcpp::i32 off = 2 + blur / 3;
         const Rect outer =
             rect.inset(Insets::uniform(-blur)).translated(Point{0, off + 1});
         const Rect mid =
@@ -190,9 +204,13 @@ namespace hype::ui {
             elevation = rui_elev_window;
         }
         const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_lg);
+        const bool dark = dark_surface();
         if (elevation > 0) {
-            rui_shadow(canvas, rect, radius, 4 + static_cast<hcpp::i32>(elevation) * 3,
-                       static_cast<hcpp::u8>(24 + elevation * 14));
+            // One big soft diffused shadow: wide blur, ~16% opacity.
+            rui_shadow(canvas, rect, radius,
+                       6 + static_cast<hcpp::i32>(elevation) * 4,
+                       static_cast<hcpp::u8>(dark ? 18 + elevation * 5
+                                                 : 24 + elevation * 14));
         }
         rui_rounded_gradient(canvas, rect, radius, rui_lift(theme.card, elevation),
                              theme.card);
@@ -210,7 +228,9 @@ namespace hype::ui {
         }
         const Theme& theme = theme_active();
         const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_md);
-        rui_shadow(canvas, rect, radius, 4, 36);
+        const bool dark = dark_surface();
+        // Dark surfaces get a faint soft shadow; luminosity does the lifting.
+        rui_shadow(canvas, rect, radius, dark ? 8 : 4, dark ? 18 : 36);
         rui_rounded_gradient(canvas, rect, radius, rui_lift(fill_rgb, 1),
                              rui_shade(fill_rgb, 5));
         canvas.stroke_rounded_rect(rect, radius, canvas.color(border_rgb));

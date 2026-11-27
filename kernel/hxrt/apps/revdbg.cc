@@ -100,7 +100,7 @@ namespace hype::hxrt {
                                pane.w - 2, dbg_row_h};
                 dbg_row_rects[i] = row;
                 if (i == dbg_sel) {
-                    canvas.fill_rect(row, canvas.color(hype::ui::rui_lift(theme.accent, 1)));
+                    canvas.fill_rect(row, canvas.color(theme.primary));
                 }
                 const hcpp::u32 badge = state_rgb(list[i].state, theme);
                 canvas.fill_circle(row.x + 10, row.y + row.h / 2, 4,

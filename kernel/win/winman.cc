@@ -2,6 +2,7 @@
 
 #include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
+#include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
@@ -183,13 +184,20 @@ namespace hype::win {
                                    box.y + menu_pad +
                                        static_cast<hcpp::i32>(i) * menu_item_h,
                                    box.w - 2, menu_item_h};
-                    canvas.fill_rect(row, canvas.color(theme.card));
+                    canvas.fill_rect(
+                        row, canvas.color(hype::ui::rui_lift(
+                                 theme.card, hype::ui::rui_elev_panel)));
                     hcpp::i32 top = row.y + (row.h - line) / 2;
                     if (top < row.y) {
                         top = row.y;
                     }
                     paint_label(canvas, row.x + 10, top, menu_items[i],
                                 theme.card_fg, 13);
+                }
+                if (hype::ui::rui_dark_surface()) {
+                    hype::gfx::gfx_inner_glow_edge(
+                        canvas, box.inset(hype::ui::Insets::uniform(1)),
+                        static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
                 }
             }
         };
@@ -227,7 +235,7 @@ namespace hype::win {
                                canvas.color(theme.accent));
 
             const Rect menu_btn = menu_btn_rect(w);
-            hype::ui::rui_control_bg(canvas, menu_btn, theme.card,
+            hype::ui::rui_control_bg(canvas, menu_btn, theme.secondary,
                                      theme.border);
             for (hcpp::i32 k = 0; k < 3; ++k) {
                 canvas.fill_rect(
@@ -417,6 +425,12 @@ namespace hype::win {
                 canvas.fill_rect(region, canvas.color(theme.card));
                 paint_label(canvas, region.x + 16, region.y + 16,
                             "app unavailable", theme.muted_fg, 13);
+            }
+            // Glowing accent bottom edge over the painted content (dark UI).
+            if (hype::ui::rui_dark_surface()) {
+                hype::gfx::gfx_inner_glow_edge(
+                    canvas, w.frame.inset(hype::ui::Insets::uniform(1)),
+                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
             }
         }
         overlays.paint_overlays(canvas, screen);
