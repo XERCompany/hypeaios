@@ -29,6 +29,7 @@
 #include "kernel/gfx/gfxbench.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
+#include "kernel/hxrt/hxrt.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
@@ -420,6 +421,10 @@ namespace {
         }
     }
 
+    void stage_hxrt() noexcept {
+        hype::hxrt::hxrt_boot();
+    }
+
     void stage_ui() noexcept {
         const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
         hcpp::u32 cyrillic_found = 0;
@@ -487,9 +492,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"memory", 56, stage_memory},
         {"display", 70, stage_display},
         {"vfs", 84, stage_vfs},
+        {"hxrt", 92, stage_hxrt},
         {"ui", 95, stage_ui},
     };
-    hype::boot::bootseq_run(boot_steps, 7);
+    hype::boot::bootseq_run(boot_steps, 8);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         serial::write_line("boot info missing or invalid");
