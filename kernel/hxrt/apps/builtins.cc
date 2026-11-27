@@ -11,7 +11,9 @@ namespace hype::hxrt {
         serial::write_char(',');
         serial::write(hxrt_register(hxsettings_app()) ? "HxSettings" : "fail");
         serial::write_char(',');
-        serial::write_line(hxrt_register(hxabout_app()) ? "HxAbout" : "fail");
+        serial::write(hxrt_register(hxabout_app()) ? "HxAbout" : "fail");
+        serial::write_char(',');
+        serial::write_line(hxrt_register(revdbg_app()) ? "RevDBGService" : "fail");
     }
 
 }
