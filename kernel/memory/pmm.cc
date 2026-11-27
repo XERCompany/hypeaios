@@ -1,5 +1,7 @@
 #include "kernel/memory/pmm.h"
 
+extern "C" hcpp::u8 __bss_end[];
+
 namespace hype::memory {
     namespace {
         constexpr hcpp::size_t bitmap_words = max_frames / 64;
@@ -52,6 +54,12 @@ namespace hype::memory {
         mark_range_used(0, 1024 * 1024);
         if (boot_info.kernel_physical != 0 && boot_info.kernel_size != 0) {
             mark_range_used(boot_info.kernel_physical, boot_info.kernel_size);
+        }
+        const hcpp::uintptr_t bss_end =
+            reinterpret_cast<hcpp::uintptr_t>(__bss_end);
+        if (boot_info.kernel_physical != 0 && bss_end > boot_info.kernel_physical) {
+            mark_range_used(boot_info.kernel_physical,
+                            bss_end - boot_info.kernel_physical);
         }
         if (boot_info.e820_physical != 0 && boot_info.e820_entries != 0) {
             mark_range_used(boot_info.e820_physical,

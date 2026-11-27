@@ -10,9 +10,9 @@
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
 #include "kernel/ui/widgets/button.h"
+#include "kernel/ui/widgets/inputotp.h"
 #include "kernel/ui/widgets/label.h"
 #include "kernel/ui/widgets/panel.h"
-#include "kernel/ui/widgets/textinput.h"
 #include "kernel/userservice.h"
 
 namespace hype::ui::flowlogin {
@@ -35,7 +35,7 @@ namespace hype::ui::flowlogin {
         Flex column{FlexDirection::Column};
         Label user_label;
         Label method_label;
-        TextInput secret;
+        InputOTP secret{4};
         Button sign_in;
         OverlayHost overlays;
         WidgetTree tree;
@@ -58,9 +58,7 @@ namespace hype::ui::flowlogin {
                                   "press Enter");
             method_label.set_color(LabelColor::Muted);
 
-            secret.set_masked(true);
             secret.set_focused(true);
-            secret.set_placeholder("pin");
 
             sign_in.set_label("Sign In");
             sign_in.set_style(ButtonStyle::Accent);

@@ -16,8 +16,11 @@
 #include "kernel/ui/widgets/checkbox.h"
 #include "kernel/ui/widgets/dialog.h"
 #include "kernel/ui/widgets/empty.h"
+#include "kernel/ui/widgets/field.h"
+#include "kernel/ui/widgets/inputotp.h"
 #include "kernel/ui/widgets/item.h"
 #include "kernel/ui/widgets/label.h"
+#include "kernel/ui/widgets/listbox.h"
 #include "kernel/ui/widgets/marquee.h"
 #include "kernel/ui/widgets/numticker.h"
 #include "kernel/ui/widgets/panel.h"
@@ -30,6 +33,7 @@
 #include "kernel/ui/widgets/switch.h"
 #include "kernel/ui/widgets/table.h"
 #include "kernel/ui/widgets/tabs.h"
+#include "kernel/ui/widgets/tagsinput.h"
 
 namespace hype::ui {
 
@@ -967,6 +971,141 @@ namespace hype::ui {
         ok = reg_ok && frame_ok && phase_ok && dirty_ok && spin_ok &&
              marq_ok && skel_ok && shadow_ok;
         serial::write_line(ok ? "ui2 anim ok" : "ui2 anim fail");
+        return ok;
+    }
+
+    bool entry_selftest() noexcept {
+        static WidgetTree tree;
+        static Flex column{FlexDirection::Column};
+        static Field field{"one-time code"};
+        static InputOTP otp{6};
+        static TagsInput tags;
+        static Listbox list;
+        static FocusManager focus;
+        static bool built = false;
+
+        if (!built) {
+            column.set_padding(Insets::uniform(8));
+            column.set_spacing(8);
+            column.set_cross_align(CrossAlign::Stretch);
+
+            field.set_description("6-digit sign-in code");
+            field.set_control(&otp, &otp);
+            tags.set_placeholder("add tag");
+            list.add_option("alpha");
+            list.add_option("bravo");
+            list.add_option("charlie");
+
+            column.add_child(&field);
+            column.add_child(&tags);
+            column.add_child(&list);
+            tree.set_root(&column);
+
+            focus.add(&field);
+            focus.add(&tags);
+            focus.add(&list);
+            built = true;
+        }
+
+        otp.clear();
+        tags.clear();
+        list.reset();
+        field.clear_error();
+        focus.focus_at(0);
+        tree.layout_root(Rect{0, 0, 320, 240});
+
+        bool ok = focus.count() == 3 && focus.focus_index() == 0 &&
+                  field.focused() && otp.focused() &&
+                  focus.focused() == static_cast<Focusable*>(&field) &&
+                  field.focus_ring_rect() == otp.bounds();
+
+        bool otp_ok = true;
+        const char* code = "123456";
+        for (hcpp::size_t i = 0; code[i] != '\0'; ++i) {
+            otp_ok = focus.handle_key(code[i]) && otp_ok;
+        }
+        otp_ok = otp_ok && otp.length() == 6 && otp.complete() &&
+                 otp.value().size() == 6 && otp.data()[5] == '6';
+        otp_ok = focus.handle_key('\b') && otp.length() == 5 && otp_ok;
+        otp_ok = focus.handle_key('6') && otp.length() == 6 &&
+                 otp.data()[5] == '6' && otp_ok;
+        otp_ok = !focus.handle_key('x') && otp.length() == 6 && otp_ok;
+
+        focus.handle_key(keys::tab);
+        bool tags_ok = tags.focused() &&
+                       focus.focused() == static_cast<Focusable*>(&tags);
+        const char* first = "red";
+        for (hcpp::size_t i = 0; first[i] != '\0'; ++i) {
+            tags_ok = focus.handle_key(first[i]) && tags_ok;
+        }
+        tags_ok = focus.handle_key(keys::enter) && tags.tag_count() == 1 &&
+                  tags_ok;
+        const char* second = "green";
+        for (hcpp::size_t i = 0; second[i] != '\0'; ++i) {
+            tags_ok = focus.handle_key(second[i]) && tags_ok;
+        }
+        tags_ok = focus.handle_key(keys::enter) && tags.tag_count() == 2 &&
+                  tags_ok;
+        const char* third = "blue";
+        for (hcpp::size_t i = 0; third[i] != '\0'; ++i) {
+            tags_ok = focus.handle_key(third[i]) && tags_ok;
+        }
+        tags_ok = focus.handle_key(keys::enter) && tags.tag_count() == 3 &&
+                  tags_ok;
+        tags_ok = focus.handle_key('\b') && tags.tag_count() == 2 && tags_ok;
+        const char* fourth = "cyan";
+        for (hcpp::size_t i = 0; fourth[i] != '\0'; ++i) {
+            tags_ok = focus.handle_key(fourth[i]) && tags_ok;
+        }
+        tags_ok = focus.handle_key(keys::enter) && tags.tag_count() == 3 &&
+                  tags.tag_at(0).size() == 3 && tags.tag_at(0)[0] == 'r' &&
+                  tags.tag_at(2).size() == 4 && tags_ok;
+        tags_ok = !focus.handle_key(keys::enter) && tags_ok;
+
+        focus.handle_key(keys::tab);
+        bool list_ok =
+            list.focused() &&
+            focus.focused() == static_cast<Focusable*>(&list) &&
+            list.option_count() == 3 && list.selected() == Listbox::none;
+        list_ok = focus.handle_key(keys::down) && list.highlighted() == 1 &&
+                  list_ok;
+        list_ok = focus.handle_key(keys::enter) && list.selected() == 1 &&
+                  list_ok;
+        list_ok = focus.handle_key('c') && list.highlighted() == 2 && list_ok;
+        list_ok = focus.handle_key('a') && list.highlighted() == 0 && list_ok;
+        list_ok = focus.handle_key(keys::up) && list.highlighted() == 2 &&
+                  list.selected() == 1 && list_ok;
+
+        static hcpp::u8 pixels[320 * 240 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 320, 240, 320 * 4, 32, 8, 16,
+                                           8, 8, 8, 0);
+        bool error_ok = false;
+        if (target.valid()) {
+            field.set_error("code required");
+            tree.layout_root(Rect{0, 0, 320, 240});
+            Canvas canvas(target);
+            canvas.fill_rect(Rect{0, 0, 320, 240},
+                             canvas.color(theme_active().bg));
+            tree.paint_tree(canvas);
+            const Rect slot = otp.bounds();
+            const hcpp::u32 border_pixel =
+                target.get_pixel(slot.x + slot.w / 2, slot.y - 2);
+            error_ok = border_pixel ==
+                       canvas.color(theme_active().destructive);
+            field.clear_error();
+        }
+
+        serial::write("ui2 otp=");
+        serial::write_dec32(static_cast<hcpp::u32>(otp.length()));
+        serial::write("\r\n");
+        serial::write("ui2 tags=");
+        serial::write_dec32(static_cast<hcpp::u32>(tags.tag_count()));
+        serial::write("\r\n");
+        serial::write("ui2 list sel=");
+        serial::write_dec32(static_cast<hcpp::u32>(list.selected()));
+        serial::write("\r\n");
+        ok = ok && otp_ok && tags_ok && list_ok && error_ok;
+        serial::write_line(ok ? "ui2 entry ok" : "ui2 entry fail");
         return ok;
     }
 

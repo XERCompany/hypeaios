@@ -32,6 +32,9 @@
 using InitArrayFunction = void (*)();
 extern "C" InitArrayFunction __init_array_start[];
 extern "C" InitArrayFunction __init_array_end[];
+extern "C" hcpp::u8 __bss_start[];
+extern "C" hcpp::u8 __bss_end[];
+extern "C" void *memset(void *dest, int value, hcpp::size_t n) noexcept;
 
 namespace {
 
@@ -229,6 +232,8 @@ namespace {
 }  // namespace
 
 extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
+    memset(__bss_start, 0,
+           static_cast<hcpp::size_t>(__bss_end - __bss_start));
     for (InitArrayFunction *fn = __init_array_start; fn != __init_array_end; ++fn) {
         (*fn)();
     }

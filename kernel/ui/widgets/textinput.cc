@@ -23,6 +23,15 @@ namespace hype::ui {
 
     bool TextInput::focused() const noexcept { return focused_; }
 
+    bool TextInput::on_key(char key) noexcept {
+        if (key == '\b' || key == '\x7F') {
+            return backspace();
+        }
+        return push_char(key);
+    }
+
+    Rect TextInput::focus_ring_rect() const noexcept { return bounds(); }
+
     void TextInput::set_padding(Insets padding) noexcept { padding_ = padding; }
 
     Insets TextInput::padding() const noexcept { return padding_; }
