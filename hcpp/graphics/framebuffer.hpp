@@ -17,6 +17,8 @@ namespace hcpp::graphics {
         u32 pitch() const noexcept;
 
         u32 encode_rgb(u8 red, u8 green, u8 blue) const noexcept;
+        void decode_rgb(u32 color, u8& red, u8& green, u8& blue) const noexcept;
+        u32 get_pixel(u32 x, u32 y) const noexcept;
         void put_pixel(u32 x, u32 y, u32 color) const noexcept;
         void fill_rect(u32 x, u32 y, u32 width, u32 height, u32 color) const noexcept;
         void clear(u32 color) const noexcept;
@@ -24,6 +26,7 @@ namespace hcpp::graphics {
 
     private:
         static u32 scale_channel(u8 value, u8 bits) noexcept;
+        static u8 unscale_channel(u32 color, u8 position, u8 bits) noexcept;
         u32 bytes_per_pixel() const noexcept;
 
         volatile u8* base_ = nullptr;
