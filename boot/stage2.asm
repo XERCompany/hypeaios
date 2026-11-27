@@ -390,6 +390,14 @@ protected_mode_entry:
     mov ss, ax
     mov esp, STACK_TOP
 
+    mov edi, [VBE_MODE_INFO + 40]
+    movzx eax, word [VBE_MODE_INFO + 16]
+    movzx ecx, word [VBE_MODE_INFO + 20]
+    mul ecx
+    mov ecx, eax
+    xor eax, eax
+    rep stosb
+
     mov edi, PAGE_TABLES
     xor eax, eax
     mov ecx, 6144
