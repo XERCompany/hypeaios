@@ -1,5 +1,6 @@
 #include "kernel/input/hypeptr.h"
 
+#include "kernel/functionemitkeys.h"
 #include "kernel/input/cursprite.h"
 #include "kernel/input/msaux.h"
 #include "kernel/input/ptrmv.h"
@@ -12,6 +13,33 @@ namespace hype::input {
     namespace {
 
         bool initialized;
+        MsauxMode last_mode = MsauxMode::Probing;
+
+        void route_wheel(hcpp::i32 delta) noexcept {
+            serial::write("ptr wheel=");
+            if (delta < 0) {
+                serial::write_char('-');
+                serial::write_dec32(static_cast<hcpp::u32>(-delta));
+            } else {
+                serial::write_dec32(static_cast<hcpp::u32>(delta));
+            }
+            serial::write("\r\n");
+            emit_input_event({InputEventType::Relative, rel_wheel_code,
+                              static_cast<hcpp::u32>(delta), 0});
+        }
+
+        void route_mode() noexcept {
+            const MsauxMode mode = msaux_mode();
+            if (mode == last_mode) {
+                return;
+            }
+            last_mode = mode;
+            if (mode == MsauxMode::Irq) {
+                serial::write_line("ptr irq=ok");
+            } else if (mode == MsauxMode::Poll) {
+                serial::write_line("ptr irq=poll");
+            }
+        }
 
         void route_buttons(hcpp::u8 before, hcpp::u8 after, hcpp::i32 x,
                            hcpp::i32 y) noexcept {
@@ -55,6 +83,11 @@ namespace hype::input {
         serial::write_line(png_ok ? "png" : "arrow");
         const bool ok = msaux_init();
         initialized = ok;
+        serial::write("ptr id=");
+        serial::write_dec32(msaux_mouse_id());
+        serial::write(" pkt=");
+        serial::write_dec32(msaux_packet_size());
+        serial::write("\r\n");
         return ok;
     }
 
@@ -66,7 +99,11 @@ namespace hype::input {
         const hcpp::u32 n = msaux_poll(packets, 16);
         for (hcpp::u32 i = 0; i < n; ++i) {
             ptr_apply(packets[i]);
+            if (packets[i].wheel != 0) {
+                route_wheel(packets[i].wheel);
+            }
         }
+        route_mode();
         const hcpp::u8 after = ptr_buttons();
         if (before != after) {
             route_buttons(before, after, ptr_x(), ptr_y());

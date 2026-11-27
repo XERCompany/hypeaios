@@ -21,7 +21,7 @@ namespace hype::input {
         return true;
     }
     void emit_input_event(const InputEvent &event) noexcept {
-        if (!key_event_valid(event) && event.type != InputEventType::Sync) return;
+        if (event.type == InputEventType::Key && !key_event_valid(event)) return;
         for (hcpp::size_t i = 0; i < count; ++i) slots[i].handler(slots[i].context, event);
     }
     void emit_key_event(hcpp::u16 key, KeyState state, hcpp::u64 timestamp) noexcept {
