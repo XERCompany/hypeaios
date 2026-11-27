@@ -18,7 +18,12 @@
 #include "kernel/display/hgc.h"
 #include "kernel/display/id-stat.h"
 #include "kernel/display/idscreen.h"
+#include "kernel/display/msthub.h"
+#include "kernel/display/multidisplay-mode.h"
+#include "kernel/display/multidisplay-swich.h"
+#include "kernel/display/multidisplay.h"
 #include "kernel/display/pal.h"
+#include "kernel/display/scrnmap.h"
 #include "kernel/display/scaler.h"
 #include "kernel/display/scaleuhd.h"
 #include "kernel/display/uhdtv2.h"
@@ -871,6 +876,140 @@ namespace hype::display {
             return false;
         }
         serial::write_line("disp sess ok");
+        return true;
+    }
+
+    bool display4_selftest() noexcept {
+        static hcpp::u8 edid[128];
+        static hcpp::u8 buf_a[32 * 24 * 4];
+        static hcpp::u8 buf_b[32 * 24 * 4];
+        static hcpp::u8 buf_desktop[64 * 24 * 4];
+        build_synthetic_edid(edid);
+        const OutputId out_a = idscreen_register(edid, 10);
+        const OutputId out_b = idscreen_register(edid, 11);
+        if (out_a == output_id_none || out_b == output_id_none || out_a == out_b) {
+            serial::write_line("disp multi=fail");
+            return false;
+        }
+        if (!multi_register_output(out_a) || !multi_register_output(out_b) ||
+            multi_count() != 2) {
+            serial::write_line("disp multi=fail");
+            return false;
+        }
+        if (multi_register_output(output_id_none) ||
+            multi_register_output(0xDEADBEEFull)) {
+            serial::write_line("disp multi=fail");
+            return false;
+        }
+        hcpp::graphics::Framebuffer fb_a(buf_a, 32, 24, 32 * 4, 32, 8, 16, 8, 8,
+                                       8, 0);
+        hcpp::graphics::Framebuffer fb_b(buf_b, 32, 24, 32 * 4, 32, 8, 16, 8, 8,
+                                       8, 0);
+        hcpp::graphics::Framebuffer desktop(buf_desktop, 64, 24, 64 * 4, 32, 8,
+                                          16, 8, 8, 8, 0);
+        for (hcpp::u32 y = 0; y < 24; ++y) {
+            for (hcpp::u32 x = 0; x < 64; ++x) {
+                desktop.put_pixel(x, y,
+                                  desktop.encode_rgb(static_cast<hcpp::u8>(x * 3),
+                                                     static_cast<hcpp::u8>(y * 9),
+                                                     static_cast<hcpp::u8>((x + y) * 2)));
+            }
+        }
+        if (!scrnmap_add(out_a, fb_a) || !scrnmap_add(out_b, fb_b) ||
+            scrnmap_count() != 2 || scrnmap_fb(out_a) != &fb_a ||
+            scrnmap_fb(out_b) != &fb_b) {
+            serial::write_line("disp scrnmap=fail");
+            return false;
+        }
+        serial::write("disp multi=");
+        serial::write_dec32(multi_count());
+        serial::write("\r\n");
+        fb_a.clear(0);
+        fb_b.clear(0);
+        if (!multi_set_mode(MultiMode::Mirror) ||
+            multi_mode() != MultiMode::Mirror ||
+            multi_present(desktop) != 2) {
+            serial::write_line("disp mirror=fail");
+            return false;
+        }
+        if (fb_a.get_pixel(16, 12) == 0 || fb_b.get_pixel(16, 12) == 0 ||
+            fb_a.get_pixel(16, 12) != fb_b.get_pixel(16, 12)) {
+            serial::write_line("disp mirror=fail");
+            return false;
+        }
+        serial::write_line("disp mirror=ok");
+        if (!multi_arrange(32, 24) || !multi_set_mode(MultiMode::Span) ||
+            multi_mode() != MultiMode::Span) {
+            serial::write_line("disp span=fail");
+            return false;
+        }
+        const MultiSlot* slot_a = multi_find(out_a);
+        const MultiSlot* slot_b = multi_find(out_b);
+        const MultiVirtualRect vrect = multi_virtual_rect();
+        if (slot_a == nullptr || slot_b == nullptr || slot_a->position.x != 0 ||
+            slot_b->position.x != 32 || vrect.width != 64 || vrect.height != 24) {
+            serial::write_line("disp span=fail");
+            return false;
+        }
+        fb_a.clear(0);
+        fb_b.clear(0);
+        if (multi_present(desktop) != 2) {
+            serial::write_line("disp span=fail");
+            return false;
+        }
+        bool span_ok = true;
+        for (hcpp::u32 y = 0; y < 24 && span_ok; ++y) {
+            for (hcpp::u32 x = 0; x < 32 && span_ok; ++x) {
+                hcpp::u8 dr = 0;
+                hcpp::u8 dg = 0;
+                hcpp::u8 db = 0;
+                hcpp::u8 fr = 0;
+                hcpp::u8 fg = 0;
+                hcpp::u8 fb = 0;
+                desktop.decode_rgb(desktop.get_pixel(x, y), dr, dg, db);
+                fb_a.decode_rgb(fb_a.get_pixel(x, y), fr, fg, fb);
+                if (dr != fr || dg != fg || db != fb) {
+                    span_ok = false;
+                    break;
+                }
+                desktop.decode_rgb(desktop.get_pixel(32 + x, y), dr, dg, db);
+                fb_b.decode_rgb(fb_b.get_pixel(x, y), fr, fg, fb);
+                if (dr != fr || dg != fg || db != fb) {
+                    span_ok = false;
+                }
+            }
+        }
+        if (!span_ok) {
+            serial::write_line("disp span=fail");
+            return false;
+        }
+        serial::write_line("disp span=ok");
+        if (!multi_set_mode(MultiMode::Single) ||
+            !multi_switch_active(out_b) || multi_active_output() != out_b) {
+            serial::write_line("disp swich=fail");
+            return false;
+        }
+        fb_a.clear(0);
+        fb_b.clear(0);
+        if (multi_present(desktop) != 1 || fb_b.get_pixel(4, 4) == 0 ||
+            fb_a.get_pixel(4, 4) != 0) {
+            serial::write_line("disp swich=fail");
+            return false;
+        }
+        serial::write_line("disp swich=ok");
+        MstHub hub{};
+        if (mst_topology_parse(hub) != MstStatus::NotSupported || hub.present ||
+            hub.port_count != 0 || mst_status_name(MstStatus::Ok)[0] != 'o') {
+            serial::write_line("disp mst=fail");
+            return false;
+        }
+        serial::write_line("disp mst=stub");
+        if (multi_mode_describe(MultiMode::Mirror)[0] != 's' ||
+            multi_mode_name(MultiMode::Span)[0] != 's') {
+            serial::write_line("disp multi=fail");
+            return false;
+        }
+        serial::write_line("disp multi ok");
         return true;
     }
 
