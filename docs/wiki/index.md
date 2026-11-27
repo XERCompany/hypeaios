@@ -5,6 +5,7 @@ XX
 XX## Environment
 XX
 XX- [Build & run on this machine](build-and-run.md) — MSYS2/clang toolchain commands, QEMU invocation, path pitfalls
+- [USB / VirtualBox / real hardware](run-hardware.md) — dd-образ на флешку, make vdi, настройки VM
 XX
 XX## Programs
 XX
