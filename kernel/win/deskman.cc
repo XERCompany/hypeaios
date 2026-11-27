@@ -1,6 +1,7 @@
 #include "kernel/win/deskman.h"
 
 #include "kernel/gfx/hypegfx.h"
+#include "kernel/win/deskbg.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
@@ -35,8 +36,10 @@ namespace hype::win {
             0, 0, static_cast<hcpp::i32>(fb.width()),
             static_cast<hcpp::i32>(fb.height())};
         canvas.set_clip(screen);
-        hype::gfx::gfx_gradient_v(canvas, screen, theme.bg,
-                                  hype::ui::rui_shade(theme.bg, 10));
+        if (!desk_bg_paint(fb)) {
+            hype::gfx::gfx_gradient_v(canvas, screen, theme.bg,
+                                      hype::ui::rui_shade(theme.bg, 10));
+        }
         wm_paint(fb);
         return wm_count();
     }

@@ -31,6 +31,7 @@
 #include "kernel/gfx/gfxbench.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
+#include "kernel/hxrt/apps/dxbg.h"
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
@@ -489,6 +490,7 @@ namespace {
 
     void stage_hxrt() noexcept {
         hype::hxrt::hxrt_boot();
+        report("dxbg selftest=", hype::hxrt::dxbg_selftest());
     }
 
     void stage_ui() noexcept {

@@ -6,6 +6,7 @@ namespace hype::hxrt {
 
     const HxerHeader* hxsettings_app() noexcept;
     const HxerHeader* hxabout_app() noexcept;
+    const HxerHeader* dxbg_app() noexcept;
     void hxrt_register_builtins() noexcept;
 
 }
