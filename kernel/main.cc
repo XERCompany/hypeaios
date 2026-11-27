@@ -19,6 +19,7 @@
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/db/hypedb.hpp"
+#include "kernel/display/selftest.h"
 #include "kernel/hello/hello.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
@@ -346,6 +347,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_line(hcpp::rng_selftest() ? "ok" : "failed");
     serial::write("ecdsa=");
     serial::write_line(hcpp::ecdsa_selftest() ? "ok" : "failed");
+    const bool display_core_ok = hype::display::display_selftest();
+    report("display core selftest=", display_core_ok);
     if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
         serial::write_line("sqlite=ok");
         serial::write("db selftest=");
