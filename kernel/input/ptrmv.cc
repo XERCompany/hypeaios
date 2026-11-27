@@ -10,6 +10,7 @@ namespace hype::input {
         hcpp::i32 pos_y;
         hcpp::u8 buttons;
         hcpp::u64 packets;
+        hcpp::i32 wheel_total;
         bool dirty;
 
         hcpp::i32 clamp_axis(hcpp::i32 value, hcpp::i32 limit) noexcept {
@@ -40,6 +41,7 @@ namespace hype::input {
         pos_y = bound_h / 2;
         buttons = 0;
         packets = 0;
+        wheel_total = 0;
         dirty = true;
     }
 
@@ -64,6 +66,7 @@ namespace hype::input {
 
     bool ptr_apply(const MsauxPacket &packet) noexcept {
         ++packets;
+        wheel_total += packet.wheel;
         return ptr_apply_motion(packet.dx, packet.dy, packet.buttons);
     }
 
@@ -87,6 +90,7 @@ namespace hype::input {
         stat.ready = msaux_ready();
         stat.packets = packets;
         stat.resyncs = msaux_resync_count();
+        stat.wheel = wheel_total;
         return stat;
     }
 

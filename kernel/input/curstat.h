@@ -15,6 +15,7 @@ namespace hype::input {
         bool ready = false;
         hcpp::u64 packets = 0;
         hcpp::u64 resyncs = 0;
+        hcpp::i32 wheel = 0;
     };
 
 }

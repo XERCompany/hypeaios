@@ -4,6 +4,7 @@
 #include "kernel/arch/x86/io.h"
 #include "kernel/functionemitkeys.h"
 #include "kernel/input/keyring.h"
+#include "kernel/input/msaux.h"
 #include "kernel/input/scancode.h"
 #include "kernel/irq.h"
 #include "kernel/panic.h"
@@ -32,6 +33,7 @@ namespace hype::interrupts {
                 input::emit_key_event(key.key_code, key.pressed ? input::KeyState::Pressed : input::KeyState::Released,
                                       ticks);
         }
+        void mouse_handler(void*, hcpp::u32) noexcept { input::msaux_irq(); }
     }  // namespace
     extern "C" void interrupt_handle(hcpp::u64 vector, hcpp::u64 error,
                                      InterruptRegisters* regs) noexcept {
@@ -96,6 +98,9 @@ namespace hype::interrupts {
         input::scancode_initialize();
         input::keyring_initialize();
         kernel::irq_register(1, keyboard_handler, nullptr);
+    }
+    void mouse_initialize() noexcept {
+        kernel::irq_register(12, mouse_handler, nullptr);
     }
     hcpp::u64 pit_ticks() noexcept { return ticks; }
     void pit_wait_ticks(hcpp::u64 count) noexcept {
