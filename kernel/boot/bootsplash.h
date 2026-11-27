@@ -10,6 +10,7 @@ namespace hype::boot {
                         hcpp::StringView text, hcpp::u32 color, hcpp::u32 scale) noexcept;
 
     void boot_splash_begin(hcpp::graphics::Framebuffer& fb) noexcept;
+    void boot_splash_hold() noexcept;
     void boot_splash_stage(hcpp::StringView name, hcpp::u32 pct) noexcept;
     void boot_splash_spinner() noexcept;
     void boot_splash_end() noexcept;

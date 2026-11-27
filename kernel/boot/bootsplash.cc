@@ -132,6 +132,18 @@ namespace hype::boot {
         serial::write_line("boot splash=shown");
     }
 
+    void boot_splash_hold() noexcept {
+        if (state.fb == nullptr) {
+            return;
+        }
+        if (interrupts::interrupts_initialized()) {
+            interrupts::pit_wait_ticks(8);
+            return;
+        }
+        for (volatile hcpp::u32 spin = 0; spin < 40000000; ++spin) {
+        }
+    }
+
     void boot_splash_stage(hcpp::StringView name, hcpp::u32 pct) noexcept {
         if (state.fb == nullptr) {
             return;
