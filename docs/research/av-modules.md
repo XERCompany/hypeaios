@@ -7,7 +7,7 @@ hand-written `HypeAI.*` implementation. QEMU is the only test harness: it emulat
 engines or capture hardware. Spec hub: <https://wiki.osdev.org/Technical_Specifications>.
 
 Current state: PCI probe + real Intel-HDA bring-up path exist and run at boot
-(`audio-serivce.cc` → `izau_*` → 440 Hz tone over BDL, verified via LPIB). Everything else is
+(`audio-serivce.cc` → `hda_*` → 440 Hz tone over BDL, verified via LPIB). Everything else is
 API skeletons. `kernel/video` is a V4L2-shaped skeleton: registry + buffer queueing model, no
 hardware behind it.
 
@@ -43,13 +43,15 @@ Doc: internal; pattern mirrors `core_services.cc`.
 Add: `chip → bringup_fn` dispatch table, AC97/ES1370/virtio-snd branches, `audio_format_selftest()` body.
 QEMU: full (serial-logged, already exercised).
 
-### `izau.cc/h` — Intel HDA controller driver (23.7 KB, the real driver)
-Role/State: cryptic name ≈ "I(ntel)Z Au(dio)". HDA host driver: GCAP/GCTL, CORB/RIRB rings,
-codec verbs, stream descriptors, BDL DMA, AFG→DAC→pin walk, 48 kHz s16 stereo
-(`izau.h:7-130`); produces verified LPIB motion.
+### `hda.cc/h` — Intel HDA controller driver (23.7 KB, the real driver)
+Role/State: HDA host driver: GCAP/GCTL, CORB/RIRB rings,
+codec verbs, stream descriptors, BDL DMA, AFG→DAC→pin + ADC→pin capture walks,
+48 kHz s16 stereo playback + capture, IOC interrupts, amp get/set
+(`hda.h:7-190`); produces verified LPIB motion both directions.
 Doc: Intel HDA Spec 1.0a <https://www.intel.com/content/dam/www/public/us/en/documents/product-specifications/high-definition-audio-specification.pdf>; OSDev <https://wiki.osdev.org/Intel_High_Definition_Audio>.
-Add: **rename `hda.cc/hda.h`**; capture stream, IOC interrupts vs polling, `hda_pin_set_amp()`
-volume verbs, LPIB-wrap handling, multi-stream.
+Done: renamed `hda.cc/hda.h`, capture stream, IOC interrupts (INTSTS-polled count),
+`hda_volume_get/set()` amp verbs, `hda_topology_walk()`. Add: LPIB-wrap handling,
+multi-stream.
 QEMU: full — `intel-hda`+`hda-duplex` faithful; MSI works.
 
 ### `audiofudev.h` — HDA widget/function topology walker

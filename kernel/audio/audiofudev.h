@@ -1,7 +1,7 @@
 #pragma once
 
 #include "hcpp/types.hpp"
-#include "kernel/audio/izau.h"
+#include "kernel/audio/hda.h"
 
 namespace hype::audio {
 
