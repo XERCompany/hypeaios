@@ -44,6 +44,7 @@
 #include "kernel/session/session.h"
 #include "kernel/svc/revsvc.h"
 #include "kernel/ui/selftest.h"
+#include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefile.h"
 #include "kernel/vfs/hypefs.h"
 #include "kernel/video/videov4lv.h"
@@ -439,6 +440,17 @@ namespace {
         }
         serial::write("vfs hxer=");
         serial::write_dec32(hxer_files);
+        serial::write("\r\n");
+        const hype::vfs::BlobMount blob = hype::vfs::hypeblob_mount();
+        serial::write("blob ata=");
+        serial::write_line(blob.ata_ok ? "ok" : "fail");
+        serial::write("ata lba=");
+        serial::write_line(blob.lba_ok ? "ok" : "fail");
+        serial::write("blob files=");
+        serial::write_dec32(blob.files);
+        serial::write("\r\n");
+        serial::write("blob bytes=");
+        serial::write_dec32(static_cast<hcpp::u32>(blob.bytes));
         serial::write("\r\n");
         hype::vfs::FsSelftest vfs_selftest{};
         const bool vfs_ok = hype::vfs::fs_selftest(vfs_selftest);
