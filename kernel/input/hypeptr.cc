@@ -48,6 +48,11 @@ namespace hype::input {
         ptr_set_bounds(static_cast<hcpp::i32>(screen_w),
                        static_cast<hcpp::i32>(screen_h));
         ptr_home();
+        const bool png_ok = cursprite_init();
+        serial::write("cursor src=");
+        serial::write_line(png_ok ? "png" : "arrow");
+        serial::write("cursor sprite=");
+        serial::write_line(png_ok ? "png" : "arrow");
         const bool ok = msaux_init();
         initialized = ok;
         return ok;

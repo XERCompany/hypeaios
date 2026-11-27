@@ -99,6 +99,9 @@ test: all
 embedfont:
 	$(PYTHON) tools/embed_ttf.py
 
+embedcursor:
+	$(PYTHON) tools/embed_cursor.py
+
 clean:
 	rm -rf $(BUILD)
 	mkdir -p $(BUILD)
