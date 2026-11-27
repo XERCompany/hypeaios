@@ -8,9 +8,14 @@
 #include "kernel/ui/focus.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
+#include "kernel/ui/widgets/alert.h"
+#include "kernel/ui/widgets/badge.h"
 #include "kernel/ui/widgets/checkbox.h"
 #include "kernel/ui/widgets/label.h"
+#include "kernel/ui/widgets/progress.h"
 #include "kernel/ui/widgets/radiogroup.h"
+#include "kernel/ui/widgets/separator.h"
+#include "kernel/ui/widgets/skeleton.h"
 #include "kernel/ui/widgets/switch.h"
 #include "kernel/ui/widgets/tabs.h"
 
@@ -389,6 +394,184 @@ namespace hype::ui {
         ok = order_ok && check_ok && switch_ok && radio_ok && tabs_ok &&
              wrap_ok && ring_ok;
         serial::write_line(ok ? "ui2 sel ok" : "ui2 sel fail");
+        return ok;
+    }
+
+    bool feedback_selftest() noexcept {
+        WidgetTree tree;
+        Flex column(FlexDirection::Column);
+        Flex alerts(FlexDirection::Row);
+        Flex badges(FlexDirection::Row);
+        Alert alert_info("Info", "note");
+        Alert alert_ok("Done", "note");
+        Alert alert_warn("Warn", "note");
+        Alert alert_bad("Fail", "note");
+        Progress progress;
+        Badge badge_solid("Solid");
+        Badge badge_outline("Edge");
+        Badge badge_bad("Bad");
+        Badge badge_alt("Alt");
+        Separator sep_h;
+        Separator sep_v(SeparatorOrientation::Vertical);
+        Skeleton skeleton(Size{120, 20});
+
+        alert_ok.set_tone(AlertTone::Success);
+        alert_warn.set_tone(AlertTone::Warning);
+        alert_bad.set_tone(AlertTone::Destructive);
+        progress.set_progress(200);
+        const bool progress_clamped = progress.progress() == 100;
+        progress.set_progress(40);
+        progress.set_label("Loading");
+        badge_outline.set_variant(BadgeVariant::Outline);
+        badge_bad.set_variant(BadgeVariant::Destructive);
+        badge_alt.set_variant(BadgeVariant::Secondary);
+        skeleton.set_phase(96);
+
+        column.set_padding(Insets::uniform(8));
+        column.set_spacing(6);
+        column.set_cross_align(CrossAlign::Stretch);
+        alerts.set_spacing(6);
+        alerts.set_cross_align(CrossAlign::Stretch);
+        badges.set_spacing(4);
+        badges.set_cross_align(CrossAlign::Stretch);
+
+        if (!alerts.add_child(&alert_info) || !alerts.add_child(&alert_ok) ||
+            !alerts.add_child(&alert_warn) || !alerts.add_child(&alert_bad)) {
+            return false;
+        }
+        if (!badges.add_child(&badge_solid) || !badges.add_child(&sep_v) ||
+            !badges.add_child(&badge_outline) || !badges.add_child(&badge_bad) ||
+            !badges.add_child(&badge_alt)) {
+            return false;
+        }
+        if (!column.add_child(&alerts) || !column.add_child(&progress) ||
+            !column.add_child(&badges) || !column.add_child(&sep_h) ||
+            !column.add_child(&skeleton)) {
+            return false;
+        }
+
+        tree.set_root(&column);
+        const Rect area{0, 0, 256, 176};
+        tree.layout_root(area);
+
+        const bool geo_ok = alerts.bounds().h == 52 &&
+                            progress.bounds().h == 28 &&
+                            badges.bounds().h == 20 &&
+                            bounds_eq(sep_h, 8, 126, 240, 1) &&
+                            sep_v.bounds().w == 1 &&
+                            sep_v.bounds().h == 20 &&
+                            skeleton.bounds().h == 20 &&
+                            widget_count(column) == 15 && progress_clamped;
+        if (!geo_ok) {
+            serial::write_line("ui2 feedback fail");
+            return false;
+        }
+
+        static hcpp::u8 pixels[256 * 176 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 256, 176, 256 * 4, 32, 8, 16,
+                                          8, 8, 8, 0);
+        if (!target.valid()) {
+            return false;
+        }
+        Canvas canvas(target);
+        canvas.fill_rect(area, 0);
+        tree.paint_tree(canvas);
+
+        const Theme& theme = theme_active();
+        const hcpp::u32 c_primary = canvas.color(theme.primary);
+        const hcpp::u32 c_success = canvas.color(theme.success);
+        const hcpp::u32 c_warning = canvas.color(theme.warning);
+        const hcpp::u32 c_destructive = canvas.color(theme.destructive);
+        const hcpp::u32 c_muted = canvas.color(theme.muted);
+        const hcpp::u32 c_border = canvas.color(theme.border);
+        const hcpp::u32 c_card = canvas.color(theme.card);
+        const hcpp::u32 c_secondary = canvas.color(theme.secondary);
+
+        const Widget* alert_list[] = {&alert_info, &alert_ok, &alert_warn,
+                                      &alert_bad};
+        const hcpp::u32 alert_tones[] = {c_primary, c_success, c_warning,
+                                         c_destructive};
+        hcpp::u32 alert_count = 0;
+        for (hcpp::size_t i = 0; i < 4; ++i) {
+            const Rect b = alert_list[i]->bounds();
+            if (target.get_pixel(static_cast<hcpp::u32>(b.x + 2),
+                                 static_cast<hcpp::u32>(b.y + b.h / 2)) ==
+                    alert_tones[i] &&
+                target.get_pixel(static_cast<hcpp::u32>(b.x + b.w / 2),
+                                 static_cast<hcpp::u32>(b.y)) == c_border &&
+                target.get_pixel(static_cast<hcpp::u32>(b.x + b.w - 4),
+                                 static_cast<hcpp::u32>(b.y + b.h / 2)) ==
+                    c_card) {
+                ++alert_count;
+            }
+        }
+
+        const Rect pb = progress.bounds();
+        const hcpp::i32 track_y = pb.bottom() - 8;
+        const hcpp::i32 fill_w = pb.w * 40 / 100;
+        const bool progress_ok =
+            target.get_pixel(static_cast<hcpp::u32>(pb.x + fill_w / 2),
+                             static_cast<hcpp::u32>(track_y + 4)) == c_primary &&
+            target.get_pixel(static_cast<hcpp::u32>(pb.x + pb.w - 2),
+                             static_cast<hcpp::u32>(track_y + 4)) == c_muted;
+
+        const Widget* badge_list[] = {&badge_solid, &badge_outline, &badge_bad,
+                                      &badge_alt};
+        const hcpp::u32 badge_centers[] = {c_primary, 0u, c_destructive,
+                                           c_secondary};
+        hcpp::u32 badge_count = 0;
+        for (hcpp::size_t i = 0; i < 4; ++i) {
+            const Rect b = badge_list[i]->bounds();
+            if (target.get_pixel(static_cast<hcpp::u32>(b.x + 2),
+                                 static_cast<hcpp::u32>(b.y + b.h / 2)) ==
+                    badge_centers[i] &&
+                target.get_pixel(static_cast<hcpp::u32>(b.x + b.w / 2),
+                                 static_cast<hcpp::u32>(b.y)) == c_border) {
+                ++badge_count;
+            }
+        }
+
+        const bool separator_ok =
+            target.get_pixel(static_cast<hcpp::u32>(sep_h.bounds().x +
+                                                    sep_h.bounds().w / 2),
+                             static_cast<hcpp::u32>(sep_h.bounds().y)) ==
+                c_border &&
+            target.get_pixel(static_cast<hcpp::u32>(sep_v.bounds().x),
+                             static_cast<hcpp::u32>(sep_v.bounds().y +
+                                                    sep_v.bounds().h / 2)) ==
+                c_border;
+
+        const Rect sb = skeleton.bounds();
+        const hcpp::u32 skeleton_pixel_a =
+            target.get_pixel(static_cast<hcpp::u32>(sb.x + sb.w / 2),
+                             static_cast<hcpp::u32>(sb.y + sb.h / 2));
+        skeleton.set_phase(0);
+        skeleton.paint(canvas);
+        const hcpp::u32 skeleton_pixel_b =
+            target.get_pixel(static_cast<hcpp::u32>(sb.x + sb.w / 2),
+                             static_cast<hcpp::u32>(sb.y + sb.h / 2));
+        const bool skeleton_ok = skeleton_pixel_a != 0 &&
+                                 skeleton_pixel_b != 0 &&
+                                 skeleton_pixel_a != skeleton_pixel_b;
+
+        serial::write("ui2 alert=");
+        serial::write_dec32(alert_count);
+        serial::write("\r\n");
+        serial::write("ui2 badge=");
+        serial::write_dec32(badge_count);
+        serial::write("\r\n");
+        serial::write("ui2 progress=");
+        serial::write_dec32(progress_ok ? 1 : 0);
+        serial::write("\r\n");
+        serial::write("ui2 separator=");
+        serial::write_dec32(separator_ok ? 1 : 0);
+        serial::write("\r\n");
+        serial::write("ui2 skeleton=");
+        serial::write_dec32(skeleton_ok ? 1 : 0);
+        serial::write("\r\n");
+        const bool ok = alert_count == 4 && badge_count == 4 && progress_ok &&
+                        separator_ok && skeleton_ok;
+        serial::write_line(ok ? "ui2 feedback ok" : "ui2 feedback fail");
         return ok;
     }
 
