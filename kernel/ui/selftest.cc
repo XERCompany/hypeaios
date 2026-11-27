@@ -2,6 +2,7 @@
 
 #include "hcpp/graphics/framebuffer.hpp"
 #include "kernel/serial.hpp"
+#include "kernel/ui/anim.h"
 #include "kernel/ui/box.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
@@ -17,11 +18,14 @@
 #include "kernel/ui/widgets/empty.h"
 #include "kernel/ui/widgets/item.h"
 #include "kernel/ui/widgets/label.h"
+#include "kernel/ui/widgets/marquee.h"
 #include "kernel/ui/widgets/numticker.h"
+#include "kernel/ui/widgets/panel.h"
 #include "kernel/ui/widgets/progress.h"
 #include "kernel/ui/widgets/radiogroup.h"
 #include "kernel/ui/widgets/separator.h"
 #include "kernel/ui/widgets/skeleton.h"
+#include "kernel/ui/widgets/spinner.h"
 #include "kernel/ui/widgets/stepper.h"
 #include "kernel/ui/widgets/switch.h"
 #include "kernel/ui/widgets/table.h"
@@ -824,6 +828,145 @@ namespace hype::ui {
         serial::write("\r\n");
 
         serial::write_line(ok ? "ui2 data ok" : "ui2 data fail");
+        return ok;
+    }
+
+    bool anim_selftest() noexcept {
+        static hcpp::u8 pixels[160 * 120 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 160, 120, 160 * 4, 32, 8, 16,
+                                           8, 8, 8, 0);
+        if (!target.valid()) {
+            return false;
+        }
+        Canvas canvas(target);
+        const Theme& theme = theme_active();
+        const hcpp::u32 bg = canvas.color(theme.bg);
+        bool ok = true;
+
+        const auto band_sum =
+            [&target](const Rect& r) noexcept -> hcpp::u64 {
+            hcpp::u64 sum = 0;
+            for (hcpp::i32 y = r.y; y < r.bottom(); ++y) {
+                for (hcpp::i32 x = r.x; x < r.right(); ++x) {
+                    sum += static_cast<hcpp::u64>(target.get_pixel(
+                               static_cast<hcpp::u32>(x),
+                               static_cast<hcpp::u32>(y))) *
+                           static_cast<hcpp::u64>((x - r.x + 1) *
+                                                  (y - r.y + 1));
+                }
+            }
+            return sum;
+        };
+
+        AnimTicker& ticker = anim_ticker();
+        ticker.clear();
+
+        static Spinner spinner;
+        static Marquee marquee;
+        static Skeleton skeleton;
+        static Switch toggle;
+        static NumberTicker counter;
+
+        spinner.set_phase(0);
+        marquee.set_text("HypeAI OS");
+        marquee.set_speed(4);
+        marquee.set_offset(0);
+        skeleton.set_phase(0);
+        toggle.set_on(false);
+        counter.set_target(40);
+        counter.set_value(0);
+        counter.set_step(5);
+
+        const bool reg_ok =
+            ticker.add(&spinner) && ticker.add(&marquee) &&
+            ticker.add(&skeleton) && ticker.add(&toggle) &&
+            ticker.add(&counter) && ticker.count() == 5;
+
+        spinner.layout(Rect{4, 4, 24, 24});
+        marquee.layout(Rect{32, 4, 112, 16});
+        skeleton.layout(Rect{4, 36, 64, 12});
+        counter.layout(Rect{80, 34, 64, 16});
+
+        canvas.fill_rect(Rect{0, 0, 160, 120}, bg);
+        spinner.paint(canvas);
+        marquee.paint(canvas);
+        skeleton.paint(canvas);
+        const hcpp::u64 spin_sum_a = band_sum(spinner.bounds());
+        const hcpp::u64 marq_sum_a = band_sum(marquee.bounds());
+        const hcpp::u64 skel_sum_a = band_sum(skeleton.bounds());
+
+        constexpr hcpp::u32 frames = 6;
+        for (hcpp::u32 i = 0; i < frames; ++i) {
+            anim_tick();
+        }
+        const bool frame_ok = ticker.frame() == frames;
+        const bool phase_ok =
+            spinner.phase() == frames % Spinner::phase_count &&
+            marquee.offset() == frames * marquee.speed() &&
+            skeleton.phase() == static_cast<hcpp::u8>((frames * 8) & 0xFF) &&
+            counter.value() == 30;
+        const bool dirty_ok =
+            ticker.is_dirty(&spinner) && ticker.is_dirty(&marquee) &&
+            ticker.is_dirty(&skeleton) && ticker.is_dirty(&counter) &&
+            !ticker.is_dirty(&toggle);
+        serial::write("ui2 anim tick=");
+        serial::write_dec32(ticker.frame());
+        serial::write("\r\n");
+
+        canvas.fill_rect(Rect{0, 0, 160, 120}, bg);
+        spinner.paint(canvas);
+        marquee.paint(canvas);
+        skeleton.paint(canvas);
+        const bool spin_ok =
+            spinner.phase() != 0 && band_sum(spinner.bounds()) != spin_sum_a;
+        const bool marq_ok = marquee.offset() != 0 &&
+                             band_sum(marquee.bounds()) != marq_sum_a;
+        const bool skel_ok =
+            skeleton.phase() != 0 && band_sum(skeleton.bounds()) != skel_sum_a;
+        serial::write("ui2 spin=");
+        serial::write_dec32(spin_ok ? 1 : 0);
+        serial::write("\r\n");
+        serial::write("ui2 marquee=");
+        serial::write_dec32(marq_ok ? 1 : 0);
+        serial::write("\r\n");
+
+        static Panel panel;
+        panel.set_title("S");
+        panel.layout(Rect{20, 64, 60, 30});
+        const Rect pb = panel.bounds();
+        theme_set_hard_shadow(true);
+        canvas.fill_rect(Rect{0, 0, 160, 120}, bg);
+        panel.paint(canvas);
+        const hcpp::u32 shadow_rgb = canvas.color(theme.shadow);
+        const hcpp::u32 border_rgb = canvas.color(theme.border);
+        const bool shadow_on =
+            target.get_pixel(static_cast<hcpp::u32>(pb.right() + 2),
+                             static_cast<hcpp::u32>(pb.bottom() - 2)) ==
+                shadow_rgb &&
+            target.get_pixel(static_cast<hcpp::u32>(pb.right() + 2),
+                             static_cast<hcpp::u32>(pb.bottom() + 2)) ==
+                shadow_rgb &&
+            target.get_pixel(static_cast<hcpp::u32>(pb.right() + 5),
+                             static_cast<hcpp::u32>(pb.bottom() + 5)) == bg &&
+            target.get_pixel(static_cast<hcpp::u32>(pb.x),
+                             static_cast<hcpp::u32>(pb.y + 4)) == border_rgb &&
+            target.get_pixel(static_cast<hcpp::u32>(pb.x + 1),
+                             static_cast<hcpp::u32>(pb.y + 4)) == border_rgb;
+        theme_set_hard_shadow(false);
+        canvas.fill_rect(Rect{0, 0, 160, 120}, bg);
+        panel.paint(canvas);
+        const bool shadow_off =
+            target.get_pixel(static_cast<hcpp::u32>(pb.right() + 2),
+                             static_cast<hcpp::u32>(pb.bottom() + 2)) == bg;
+        const bool shadow_ok =
+            theme.hard_shadow == false && shadow_on && shadow_off;
+        serial::write("ui2 shadow=");
+        serial::write_dec32(shadow_ok ? 1 : 0);
+        serial::write("\r\n");
+
+        ok = reg_ok && frame_ok && phase_ok && dirty_ok && spin_ok &&
+             marq_ok && skel_ok && shadow_ok;
+        serial::write_line(ok ? "ui2 anim ok" : "ui2 anim fail");
         return ok;
     }
 

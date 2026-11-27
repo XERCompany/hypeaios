@@ -98,8 +98,12 @@ namespace hype::ui {
             return;
         }
         const Theme& theme = theme_active();
-        canvas.fill_rect(box, canvas.color(theme.card));
-        canvas.stroke_rect(box, canvas.color(theme.border));
+        if (theme.hard_shadow) {
+            draw_hard_shadow(canvas, box, theme.card, theme.border);
+        } else {
+            canvas.fill_rect(box, canvas.color(theme.card));
+            canvas.stroke_rect(box, canvas.color(theme.border));
+        }
 
         const hcpp::i32 strip_h = title_bar_height();
         const Rect strip{box.x + 1, box.y + 1, box.w - 2, strip_h};

@@ -3,13 +3,14 @@
 #include "hcpp/fonts/font.hpp"
 #include "hcpp/string_view.hpp"
 #include "hcpp/types.hpp"
+#include "kernel/ui/anim.h"
 #include "kernel/ui/focus.h"
 #include "kernel/ui/geometry.h"
 #include "kernel/ui/widget.h"
 
 namespace hype::ui {
 
-    class Switch : public Widget, public Focusable {
+    class Switch : public Widget, public Focusable, public Animatable {
     public:
         static constexpr hcpp::u8 knob_steps = 4;
 
@@ -24,6 +25,7 @@ namespace hype::ui {
         void toggle() noexcept;
 
         void tick() noexcept;
+        bool tick(hcpp::u32 frame) noexcept override;
         hcpp::u8 position() const noexcept;
 
         void set_font(const hcpp::fonts::FontFace* font) noexcept;

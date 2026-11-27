@@ -94,8 +94,12 @@ namespace hype::ui {
             const Rect card{screen.right() - margin - card_w, cursor_y, card_w,
                             card_h};
 
-            canvas.fill_rect(card, canvas.color(theme.card));
-            canvas.stroke_rect(card, canvas.color(theme.border));
+            if (theme.hard_shadow) {
+                draw_hard_shadow(canvas, card, theme.card, theme.border);
+            } else {
+                canvas.fill_rect(card, canvas.color(theme.card));
+                canvas.stroke_rect(card, canvas.color(theme.border));
+            }
             canvas.fill_rect({card.x, card.y, 4, card.h},
                              canvas.color(kind_rgb(toast.kind, theme)));
 
