@@ -8,7 +8,7 @@ namespace hype::codec {
             "unknown", "bmp", "pnm",  "tga",    "qoi",  "png",  "gif", "jpeg", "ico",
             "tiff",    "psd", "webp", "jp2",    "avif", "heic", "exif", "yuv",
             "wav",     "adpcm", "flac", "mp3",  "vorbis", "opus", "alac", "aac",
-            "ogg",     "mp4",
+            "ogg",     "mp4", "mp2", "ac3",
         };
     }  // namespace
 

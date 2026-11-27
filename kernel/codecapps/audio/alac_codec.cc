@@ -1,5 +1,6 @@
 #include "kernel/codecapps/audio/alac_codec.h"
 #include "kernel/audio/alacdecoder.h"
+#include "kernel/audio/alacencoder.h"
 #include "kernel/audio/audioapi.h"
 #include "kernel/codecapps/arena.h"
 
@@ -65,6 +66,47 @@ namespace hype::codec {
         buf->format.channels = config.channels;
         buf->format.sample_format = audio::AudioSampleFormat::S16Le;
         buf->frames = frames;
+        return CodecStatus::Ok;
+    }
+
+    CodecStatus audio_alac_encode(const void *input, hcpp::u8 *output, hcpp::size_t output_cap,
+                                  hcpp::size_t &written, Arena &arena) noexcept {
+        (void)arena;
+        written = 0;
+        const auto *buf = static_cast<const PcmBuf *>(input);
+        if (buf == nullptr || output == nullptr || buf->data == nullptr || buf->frames == 0)
+            return CodecStatus::BadInput;
+        if (buf->format.sample_format != audio::AudioSampleFormat::S16Le)
+            return CodecStatus::BadInput;
+        audio::AlacConfig config = audio::alac_default_config();
+        config.channels = buf->format.channels;
+        config.sample_rate = buf->format.sample_rate;
+        if (!audio::alac_config_valid(config)) return CodecStatus::BadInput;
+        constexpr hcpp::size_t atom_bytes = 36;
+        if (output_cap < atom_bytes) return CodecStatus::NoSpace;
+        output[0] = 0;
+        output[1] = 0;
+        output[2] = 0;
+        output[3] = static_cast<hcpp::u8>(atom_bytes);
+        output[4] = 'a';
+        output[5] = 'l';
+        output[6] = 'a';
+        output[7] = 'c';
+        output[8] = 0;
+        output[9] = 0;
+        output[10] = 0;
+        output[11] = 0;
+        if (audio::alac_write_cookie(config, output + 12,
+                                     static_cast<hcpp::u32>(output_cap - 12)) == 0)
+            return CodecStatus::NoSpace;
+        audio::AlacEncoderState state{};
+        if (!audio::alac_encoder_initialize(state, config)) return CodecStatus::BadInput;
+        const hcpp::u32 packet_bytes = audio::alac_encoder_encode(
+            state, reinterpret_cast<const hcpp::i16 *>(buf->data),
+            static_cast<hcpp::u32>(buf->frames), output + atom_bytes,
+            static_cast<hcpp::u32>(output_cap - atom_bytes));
+        if (packet_bytes == 0) return CodecStatus::NoSpace;
+        written = atom_bytes + packet_bytes;
         return CodecStatus::Ok;
     }
 
