@@ -15,6 +15,7 @@
 #include "kernel/ui/widgets/listbox.h"
 #include "kernel/ui/widgets/panel.h"
 #include "kernel/ui/widgets/separator.h"
+#include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefs.h"
 #include "kernel/win/deskbg.h"
 
@@ -413,6 +414,10 @@ namespace hype::hxrt {
             }
         }
         seeded = ok;
+        if (ok) {
+            // Persist the freshly written wallpapers to the HYPEDATA blob.
+            hype::vfs::hypeblob_sync();
+        }
         return ok;
     }
 

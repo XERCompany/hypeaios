@@ -21,4 +21,12 @@ namespace hype::vfs {
     // "HYPEOS://<DISK>/<path>"; all others mount under HYPEOS://S/data/.
     BlobMount hypeblob_mount() noexcept;
 
+    // Serializes the persistable memfs state (U:*, S:/data, T:*) back into
+    // the HYPEDATA region at hypeblob_data_lba, then flushes the drive
+    // cache. Every written sector is read back and compared before the
+    // call reports success. No-op (returns false) until hypeblob_mount()
+    // has seen a valid on-disk blob, so boot-time writes cannot clobber
+    // the region. Format matches tools/mkimage.py exactly.
+    bool hypeblob_sync() noexcept;
+
 }
