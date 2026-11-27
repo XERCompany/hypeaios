@@ -76,6 +76,9 @@ namespace hype::ui {
         if (!selftest()) {
             return 0;
         }
+        if (!canvas2_selftest()) {
+            return 0;
+        }
         if (!framebuffer.valid()) {
             return 0;
         }
