@@ -425,6 +425,9 @@ namespace {
         hcpp::u32 hxer_files = 0;
         if (vfs_seeded) {
             hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::speedstart_app()) ? 1
+                                                                        : 0;
+            hxer_files +=
                 hype::vfs::hypefile_install(hype::hxrt::hxsettings_app()) ? 1
                                                                         : 0;
             hxer_files +=
