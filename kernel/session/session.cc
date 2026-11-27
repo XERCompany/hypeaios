@@ -4,7 +4,9 @@
 #include "kernel/functionemitkeys.h"
 #include "kernel/hello/hello.h"
 #include "kernel/input/scancode.h"
+#include "kernel/power.h"
 #include "kernel/serial.hpp"
+#include "kernel/session/lockscr.h"
 #include "kernel/svc/revsvc.h"
 #include "kernel/time/rtc.h"
 #include "kernel/ui/canvas.h"
@@ -19,6 +21,8 @@
 #include "kernel/ui/widgets/panel.h"
 #include "kernel/ui/widgets/textinput.h"
 #include "kernel/userservice.h"
+#include "kernel/ui/deskbar.h"
+#include "kernel/win/winman.h"
 
 namespace hype::session {
 
@@ -32,6 +36,44 @@ namespace hype::session {
         SessionState current_state = SessionState::Booting;
         hcpp::u32 active_uid = 0;
         hcpp::u32 login_user_uid = 0;
+        char active_name[32] = {};
+        hcpp::graphics::Framebuffer* shell_fb = nullptr;
+        bool power_dialog = false;
+
+        void copy_active_name(hcpp::StringView name) noexcept {
+            hcpp::size_t i = 0;
+            for (; i + 1 < sizeof(active_name) && i < name.size(); ++i) {
+                active_name[i] = name[i];
+            }
+            active_name[i] = '\0';
+        }
+
+        constexpr hcpp::u32 power_id_shutdown = 1;
+        constexpr hcpp::u32 power_id_restart = 2;
+
+        // Rendered through the shared winman context-menu machinery
+        // (rui_panel + scrim + click-outside dismiss). Row heights mirror
+        // winman's ctx_item_h/ctx_sep_h/menu_pad so the anchor math below
+        // lands the menu centered.
+        const win::WmCtxItem power_items[] = {
+            {"Power", 0, win::wm_ctx_disabled},
+            {nullptr, 0, win::wm_ctx_separator},
+            {"Shut Down", power_id_shutdown, 0},
+            {"Restart", power_id_restart, 0},
+            {"Cancel", 3, 0},
+        };
+        constexpr hcpp::i32 power_menu_w = 180;
+        constexpr hcpp::i32 power_menu_h = 4 * 2 + 28 + 9 + 3 * 28;
+
+        void power_pick(hcpp::u32 id, void*) noexcept {
+            power_dialog = false;
+            serial::write_line("power dialog=closed");
+            if (id == power_id_shutdown) {
+                power::power_shutdown();
+            } else if (id == power_id_restart) {
+                power::power_restart();
+            }
+        }
 
         void log_login_timestamp() noexcept {
             char text[20];
@@ -247,14 +289,93 @@ namespace hype::session {
             case SessionState::Registering: return "registering";
             case SessionState::Authenticating: return "authenticating";
             case SessionState::LoggedIn: return "logged-in";
+            case SessionState::Locked: return "locked";
         }
         return "unknown";
     }
 
     hcpp::u32 session_user() noexcept { return active_uid; }
 
+    const char* session_user_name() noexcept { return active_name; }
+
     bool session_logged_in() noexcept {
         return current_state == SessionState::LoggedIn;
+    }
+
+    bool session_locked() noexcept {
+        return current_state == SessionState::Locked;
+    }
+
+    void session_lock() noexcept {
+        if (current_state != SessionState::LoggedIn) {
+            return;
+        }
+        // Tear down transient shell UI so nothing overlays the veil.
+        session_power_dialog_close();
+        if (ui::deskbar_start_open()) {
+            ui::deskbar_close_start();
+        }
+        current_state = SessionState::Locked;
+        lockscr_enter();
+        serial::write_line("session locked=1");
+    }
+
+    void session_unlock() noexcept {
+        if (current_state != SessionState::Locked) {
+            return;
+        }
+        current_state = SessionState::LoggedIn;
+        serial::write_line("session locked=0");
+        // Force a full desktop repaint under the lifted veil.
+        win::wm_invalidate_all();
+    }
+
+    void session_power_dialog() noexcept {
+        if (current_state != SessionState::LoggedIn) {
+            return;
+        }
+        if (ui::deskbar_start_open()) {
+            ui::deskbar_close_start();
+        }
+        hcpp::i32 sw = 1024;
+        hcpp::i32 sh = 768;
+        if (shell_fb != nullptr && shell_fb->valid()) {
+            sw = static_cast<hcpp::i32>(shell_fb->width());
+            sh = static_cast<hcpp::i32>(shell_fb->height());
+        }
+        const hcpp::i32 x = (sw - power_menu_w) / 2;
+        const hcpp::i32 y = (sh - power_menu_h) / 2;
+        if (!win::wm_ctx_open(x, y, power_items, 5, &power_pick,
+                              nullptr)) {
+            serial::write_line("power dialog=fail");
+            return;
+        }
+        power_dialog = true;
+        serial::write_line("power dialog=open");
+    }
+
+    bool session_power_dialog_active() noexcept {
+        // The menu can also close itself (click-outside pick path), so
+        // reconcile the flag against the real overlay state.
+        power_dialog = power_dialog && win::wm_ctx_visible();
+        return power_dialog;
+    }
+
+    void session_power_dialog_close() noexcept {
+        if (!power_dialog) {
+            return;
+        }
+        win::wm_ctx_close();
+        power_dialog = false;
+        serial::write_line("power dialog=closed");
+    }
+
+    bool session_frame(hcpp::graphics::Framebuffer& fb) noexcept {
+        if (current_state != SessionState::Locked) {
+            return false;
+        }
+        shell_fb = &fb;
+        return lockscr_frame(fb);
     }
 
     hcpp::u32 session_register(hcpp::StringView name, const void* password,
@@ -299,6 +420,7 @@ namespace hype::session {
                           security::capability_execute);
         }
         active_uid = uid;
+        copy_active_name(name);
         serial::write_line("session reg=ok");
         write_users_marker();
         return uid;
@@ -306,6 +428,8 @@ namespace hype::session {
 
     hcpp::u32 session_begin(hcpp::graphics::Framebuffer& fb) noexcept {
         current_state = SessionState::Greeter;
+        shell_fb = &fb;
+        lockscr_init();
         serial::write_line("session state=greeter");
         hcpp::u32 running = 0;
         const svc::RevService* services = svc::svc_list();
@@ -324,6 +448,7 @@ namespace hype::session {
             return reg_show(fb);
         }
         const hcpp::u32 uid = hello::hello_find_user(greeter_user_name);
+        copy_active_name(greeter_user_name);
         ui::flowlogin::set_user(uid, greeter_user_name);
         const hcpp::u32 shown = ui::flowlogin::show(fb);
         if (shown == 0) {
@@ -355,6 +480,7 @@ namespace hype::session {
             }
             hello::hello_reset_failures(uid, hello::HelloMethod::PinCode);
             active_uid = uid;
+            copy_active_name(greeter_user_name);
             write_users_marker();
         }
         if (uid == 0) {
@@ -394,6 +520,9 @@ namespace hype::session {
     }
 
     bool session_handle_char(char ascii) noexcept {
+        if (current_state == SessionState::Locked) {
+            return true;
+        }
         if (current_state == SessionState::Registering) {
             return reg_handle_char(ascii);
         }
