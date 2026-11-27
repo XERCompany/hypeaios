@@ -244,6 +244,7 @@ namespace hype::audio {
         serial::write_line("hasio open=ok");
 
         pullmix_reset();
+        pullmix_set_output_rate(fmt.rate);
         sine_a.tone = waveform_tone(440, fmt.rate);
         sine_a.amplitude = 16000;
         sine_b.tone = waveform_tone(554, fmt.rate);

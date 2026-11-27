@@ -11,6 +11,7 @@
 #include "kernel/audio/audiohigh.h"
 #include "kernel/audio/audioparse.h"
 #include "kernel/audio/dvdeca.h"
+#include "kernel/audio/pullmix.h"
 #include "kernel/audio/waveform.h"
 #include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/registry.h"
@@ -1282,6 +1283,27 @@ namespace hype::audio {
         hype_audio_pcm_swap_channels_s16(stereo, frames);
     }
 
+    void pcm_s16_to_s24(hcpp::u8 *dst, const hcpp::i16 *src, hcpp::u32 samples) noexcept {
+        if (dst == nullptr || src == nullptr || samples == 0) {
+            return;
+        }
+        for (hcpp::u32 i = 0; i < samples; ++i) {
+            const hcpp::u32 value = static_cast<hcpp::u32>(src[i]) << 8;
+            dst[i * 3] = static_cast<hcpp::u8>(value & 0xFF);
+            dst[i * 3 + 1] = static_cast<hcpp::u8>((value >> 8) & 0xFF);
+            dst[i * 3 + 2] = static_cast<hcpp::u8>((value >> 16) & 0xFF);
+        }
+    }
+
+    void pcm_s16_to_s32(hcpp::i32 *dst, const hcpp::i16 *src, hcpp::u32 samples) noexcept {
+        if (dst == nullptr || src == nullptr || samples == 0) {
+            return;
+        }
+        for (hcpp::u32 i = 0; i < samples; ++i) {
+            dst[i] = static_cast<hcpp::i32>(src[i]) << 16;
+        }
+    }
+
     hcpp::u32 src_output_frames(hcpp::u32 in_frames, hcpp::u32 in_rate,
                                 hcpp::u32 out_rate) noexcept {
         if (in_rate == 0 || out_rate == 0) {
@@ -1471,6 +1493,19 @@ namespace hype::audio {
         pcm_swap_channels(pair, 2);
         ok = ok && stereo[0] == 7 && stereo[1] == 7 && stereo[4] == 11 && stereo[6] == 13 &&
              pair[0] == 2 && pair[1] == 1 && pair[2] == 4 && pair[3] == 3;
+        const hcpp::i16 expand_in[2] = {-1, 32767};
+        hcpp::u8 expand24[6]{};
+        hcpp::i32 expand32[2]{};
+        pcm_s16_to_s24(expand24, expand_in, 2);
+        pcm_s16_to_s32(expand32, expand_in, 2);
+        const bool s24_ok = expand24[0] == 0x00 && expand24[1] == 0xFF &&
+                            expand24[2] == 0xFF && expand24[3] == 0x00 &&
+                            expand24[4] == 0xFF && expand24[5] == 0x7F;
+        serial::write(s24_ok ? "pcm s24=ok\r\n" : "pcm s24=fail\r\n");
+        const bool s32_ok = expand32[0] == static_cast<hcpp::i32>(0xFFFF0000) &&
+                            expand32[1] == 0x7FFF0000;
+        serial::write(s32_ok ? "pcm s32=ok\r\n" : "pcm s32=fail\r\n");
+        ok = ok && s24_ok && s32_ok;
         return ok;
     }
 
@@ -1530,6 +1565,7 @@ namespace hype::audio {
             serial::write("alac=unsupported\r\n");
         }
         ok = mix_selftest() && ok;
+        ok = pullmix_selftest() && ok;
         return ok;
     }
 
