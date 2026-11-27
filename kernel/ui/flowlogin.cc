@@ -45,7 +45,7 @@ namespace hype::ui::flowlogin {
             if (built) {
                 return;
             }
-            const Theme& theme = Theme::dark();
+            const Theme& theme = theme_active();
             window.set_title("Sign in to HypeAI OS");
 
             column.set_padding(Insets::uniform(
@@ -110,10 +110,10 @@ namespace hype::ui::flowlogin {
 
     void repaint(hcpp::graphics::Framebuffer& framebuffer) noexcept {
         Canvas canvas(framebuffer);
-        const Theme& theme = Theme::dark();
+        const Theme& theme = theme_active();
         const Rect screen{0, 0, static_cast<hcpp::i32>(framebuffer.width()),
                           static_cast<hcpp::i32>(framebuffer.height())};
-        canvas.fill_rect(screen, canvas.color(theme.background));
+        canvas.fill_rect(screen, canvas.color(theme.bg));
 
         const Rect window_rect = centered_window(screen, 440, 300);
         tree.layout_root(window_rect);
