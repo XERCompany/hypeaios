@@ -498,6 +498,7 @@ namespace {
         serial::write_dec32(started);
         serial::write("\r\n");
         report("svc selftest=", hype::svc::svc_selftest());
+        report("revdbg selftest=", hype::hxrt::revdbg_selftest());
     }
 
     void stage_hxrt() noexcept {
