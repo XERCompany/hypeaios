@@ -36,5 +36,6 @@ namespace hype::audio {
     }
 
     bool alac_parse_cookie(const void *data, hcpp::u32 size, AlacConfig &config) noexcept;
+    hcpp::u32 alac_write_cookie(const AlacConfig &config, void *out, hcpp::u32 capacity) noexcept;
 
 }  // namespace hype::audio

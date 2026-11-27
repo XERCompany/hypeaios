@@ -1,5 +1,5 @@
 #include "kernel/audio/alacdecoder.h"
-#include "kernel/audio/alacencdoer.h"
+#include "kernel/audio/alacencoder.h"
 #include "kernel/audio/alsaau.h"
 #include "kernel/audio/audio-serivce.h"
 #include "kernel/audio/audioapi.h"
@@ -55,6 +55,27 @@ namespace hype::audio {
         bool alac_probe(const void *data, hcpp::u32 bytes) noexcept {
             AlacConfig config{};
             return alac_parse_cookie(data, bytes, config);
+        }
+
+        bool mp2_probe(const void *data, hcpp::u32 bytes) noexcept {
+            const auto *b = static_cast<const hcpp::u8 *>(data);
+            if (b == nullptr || bytes < 4 || b[0] != 0xFF || (b[1] & 0xE0) != 0xE0) {
+                return false;
+            }
+            if (((b[1] >> 3) & 0x03) == 0x01 || ((b[1] >> 1) & 0x03) != 0x02) {
+                return false;
+            }
+            const hcpp::u8 bitrate = static_cast<hcpp::u8>((b[2] >> 4) & 0x0F);
+            const hcpp::u8 rate = static_cast<hcpp::u8>((b[2] >> 2) & 0x03);
+            return bitrate != 0 && bitrate != 0x0F && rate != 0x03;
+        }
+
+        bool ac3_probe(const void *data, hcpp::u32 bytes) noexcept {
+            const auto *b = static_cast<const hcpp::u8 *>(data);
+            if (b == nullptr || bytes < 6 || b[0] != 0x0B || b[1] != 0x77) {
+                return false;
+            }
+            return (b[4] >> 6) != 0x03 && (b[4] & 0x3F) <= 37 && (b[5] >> 3) <= 10;
         }
     }
 
@@ -315,6 +336,8 @@ namespace hype::audio {
         dvdeca_register({AudioCodecId::WavPcm, "wav/pcm", wav_probe});
         dvdeca_register({AudioCodecId::Pcm, "pcm/s16le", wav_probe});
         dvdeca_register({AudioCodecId::Alac, "alac", alac_probe});
+        dvdeca_register({AudioCodecId::Mp2, "mp2", mp2_probe});
+        dvdeca_register({AudioCodecId::Ac3, "ac3", ac3_probe});
     }
 
     bool alac_parse_cookie(const void *data, hcpp::u32 size, AlacConfig &config) noexcept {
@@ -505,6 +528,32 @@ namespace hype::audio {
         }
     }  // namespace
 
+    hcpp::u32 alac_write_cookie(const AlacConfig &config, void *out, hcpp::u32 capacity) noexcept {
+        auto *bytes = static_cast<hcpp::u8 *>(out);
+        if (bytes == nullptr || capacity < alac_cookie_size || !alac_config_valid(config)) {
+            return 0;
+        }
+        const auto write_be32 = [&](hcpp::u32 at, hcpp::u32 value) noexcept {
+            bytes[at] = static_cast<hcpp::u8>(value >> 24);
+            bytes[at + 1] = static_cast<hcpp::u8>(value >> 16);
+            bytes[at + 2] = static_cast<hcpp::u8>(value >> 8);
+            bytes[at + 3] = static_cast<hcpp::u8>(value);
+        };
+        write_be32(0, config.frame_length);
+        bytes[4] = 0;
+        bytes[5] = config.bit_depth;
+        bytes[6] = config.history_multiplier;
+        bytes[7] = config.initial_history;
+        bytes[8] = config.rice_modifier;
+        bytes[9] = config.channels;
+        bytes[10] = 0;
+        bytes[11] = 0xFF;
+        write_be32(12, config.max_frame_bytes);
+        write_be32(16, config.avg_bit_rate);
+        write_be32(20, config.sample_rate);
+        return alac_cookie_size;
+    }
+
     hcpp::u32 alac_decoder_decode(AlacDecoderState &state, const void *packet, hcpp::u32 packet_bytes,
                                   hcpp::i16 *output, hcpp::u32 max_frames) noexcept {
         if (!state.initialized) {
@@ -669,16 +718,79 @@ namespace hype::audio {
 
     void alac_encoder_reset(AlacEncoderState &state) noexcept { state.frames_encoded = 0; }
 
+    namespace {
+        struct AlacBitWriter {
+            hcpp::u8 *data;
+            hcpp::u32 capacity;
+            hcpp::u32 position;
+            bool overflow;
+        };
+
+        void alac_bits_put(AlacBitWriter &writer, hcpp::u32 value, hcpp::u8 count) noexcept {
+            for (hcpp::u8 i = 0; i < count; ++i) {
+                const hcpp::u32 byte_index = writer.position >> 3;
+                if (writer.data == nullptr || byte_index >= writer.capacity) {
+                    writer.overflow = true;
+                    return;
+                }
+                if ((writer.position & 7) == 0) {
+                    writer.data[byte_index] = 0;
+                }
+                const hcpp::u32 bit = (value >> (count - 1 - i)) & 1u;
+                writer.data[byte_index] |=
+                    static_cast<hcpp::u8>(bit << (7 - (writer.position & 7)));
+                ++writer.position;
+            }
+        }
+    }  // namespace
+
     hcpp::u32 alac_encoder_encode(AlacEncoderState &state, const hcpp::i16 *frames, hcpp::u32 frame_count,
                                   void *packet, hcpp::u32 packet_capacity) noexcept {
-        (void)frames;
-        (void)frame_count;
-        (void)packet;
-        (void)packet_capacity;
-        if (!state.initialized) {
+        if (!state.initialized || frames == nullptr || packet == nullptr || frame_count == 0) {
             return 0;
         }
-        return state.frames_encoded;
+        const hcpp::u8 channels = state.config.channels;
+        if (state.config.bit_depth != 16 || (channels != 1 && channels != 2)) {
+            return 0;
+        }
+        const hcpp::u32 element_count = (frame_count + alac_max_element_frames - 1) /
+                                        alac_max_element_frames;
+        const hcpp::u64 needed_bits =
+            static_cast<hcpp::u64>(element_count) * 55 +
+            static_cast<hcpp::u64>(frame_count) * channels * 16 + 10;
+        if (packet_capacity == 0 || needed_bits / 8 > packet_capacity) {
+            return 0;
+        }
+        AlacBitWriter writer{static_cast<hcpp::u8 *>(packet), packet_capacity, 0, false};
+        hcpp::u32 remaining = frame_count;
+        const hcpp::i16 *cursor = frames;
+        while (remaining != 0 && !writer.overflow) {
+            const hcpp::u32 chunk = remaining < alac_max_element_frames
+                                        ? remaining
+                                        : alac_max_element_frames;
+            alac_bits_put(writer, channels == 2 ? 1u : 0u, 3);
+            alac_bits_put(writer, 0, 4);
+            alac_bits_put(writer, 0, 12);
+            alac_bits_put(writer, 1, 1);
+            alac_bits_put(writer, 0, 2);
+            alac_bits_put(writer, 1, 1);
+            alac_bits_put(writer, chunk, 32);
+            for (hcpp::u32 i = 0; i < chunk; ++i) {
+                for (hcpp::u8 c = 0; c < channels; ++c) {
+                    alac_bits_put(
+                        writer,
+                        static_cast<hcpp::u16>(cursor[i * channels + c]), 16);
+                }
+            }
+            cursor += static_cast<hcpp::u64>(chunk) * channels;
+            remaining -= chunk;
+        }
+        alac_bits_put(writer, 7, 3);
+        if (writer.overflow) {
+            return 0;
+        }
+        state.frames_encoded += frame_count;
+        return (writer.position + 7) / 8;
     }
 
     bool audiofudev_probe(hcpp::u8 card_index, hcpp::u8 codec_address) noexcept {

@@ -36,6 +36,8 @@ namespace hype::codec {
         Aac,
         Ogg,
         Mp4,
+        Mp2,
+        Ac3,
         Count
     };
 
