@@ -23,6 +23,9 @@ namespace hype::ui {
         void set_font(const hcpp::fonts::FontFace* font) noexcept;
         const hcpp::fonts::FontFace* font() const noexcept;
 
+        void set_text_size(hcpp::u32 size_px) noexcept;
+        hcpp::u32 text_size() const noexcept;
+
         Size measure(Size available) noexcept override;
         void paint(Canvas& canvas) noexcept override;
 
@@ -32,6 +35,7 @@ namespace hype::ui {
         hcpp::StringView text_;
         const hcpp::fonts::FontFace* font_ = nullptr;
         LabelColor color_ = LabelColor::Primary;
+        hcpp::u32 size_px_ = 0;
     };
 
 }  // namespace hype::ui
