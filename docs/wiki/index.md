@@ -18,3 +18,4 @@ XX- `../research/runtime-failures.md` — root cause of dead runtime stages (no 
 XX- `../research/hello-audio.md` — investigation for spec #13 (QEMU devices, HDA/AC97, ALSA-style API)
 XX- `../research/codecapps.md` — investigation for spec #23 (format magic, port-friendly PD/MIT decoder libs)
 - [display](display.md) — P1 display engine: modeset/DPI/CTA/multi-display/scaler/capture subsystems
+- [boot-type](boot-type.md) — P8: native TTF font engine, gfx shadows/elevation, hyperui restyle, bootsplash/bootseq
