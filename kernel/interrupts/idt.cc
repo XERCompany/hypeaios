@@ -6,6 +6,7 @@
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
 #include "kernel/irq.h"
+#include "kernel/panic.h"
 #include "kernel/serial.hpp"
 
 extern "C" hcpp::uintptr_t isr_stub_table[];
@@ -32,16 +33,23 @@ namespace hype::interrupts {
                                       ticks);
         }
     }  // namespace
-    extern "C" void interrupt_handle(hcpp::u64 vector, hcpp::u64 error) noexcept {
+    extern "C" void interrupt_handle(hcpp::u64 vector, hcpp::u64 error,
+                                     InterruptRegisters* regs) noexcept {
         if (vector >= 32 && vector < 48) {
             kernel::irq_dispatch(static_cast<hcpp::u8>(vector - 32));
             pic_send_eoi(static_cast<hcpp::u8>(vector - 32));
         } else if (vector < 32) {
-            serial::write("exception vector=");
-            serial::write_dec32(static_cast<hcpp::u32>(vector));
-            serial::write(" error=");
-            serial::write_hex64(error);
-            serial::write("\r\n");
+            // CPU faults re-execute the faulting instruction on iret,
+            // so returning here would re-fault forever. Route every
+            // exception (div0, debug, nmi, bp, of, br, ud, nm, df, ts,
+            // np, ss, gp, pf, mf, ac, mc, xm, ...) to the panic path.
+            InterruptRegisters fallback{};
+            if (regs == nullptr) {
+                fallback.vector = vector;
+                fallback.error = error;
+                regs = &fallback;
+            }
+            panic_exception(*regs);
         }
     }
     void idt_initialize() noexcept {

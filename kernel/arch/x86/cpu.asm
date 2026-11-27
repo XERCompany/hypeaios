@@ -1,6 +1,7 @@
 [BITS 64]
 section .text
 global hype_cpu_read_cr0
+global hype_cpu_read_cr2
 global hype_cpu_read_cr3
 global hype_cpu_read_cr4
 global hype_cpu_write_cr0
@@ -13,6 +14,9 @@ global hype_cpu_disable_interrupts
 
 hype_cpu_read_cr0:
     mov rax, cr0
+    ret
+hype_cpu_read_cr2:
+    mov rax, cr2
     ret
 hype_cpu_read_cr3:
     mov rax, cr3

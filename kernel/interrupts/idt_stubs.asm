@@ -21,6 +21,7 @@ isr_common:
     push r15
     mov rdi, [rsp + 15*8]
     mov rsi, [rsp + 16*8]
+    mov rdx, rsp
     cld
     call interrupt_handle
     pop r15

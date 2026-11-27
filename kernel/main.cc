@@ -43,6 +43,8 @@
 #include "kernel/input/msaux.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
+#include "kernel/klog.h"
+#include "kernel/panic.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
 #include "kernel/session/session.h"
@@ -127,7 +129,7 @@ namespace {
     MonitorReport analyze_monitor(const BootInfo &boot_info) noexcept {
         MonitorReport report;
         if (boot_info.edid_blocks == 0 || boot_info.edid_physical == 0) {
-            serial::write_line("monitor EDID unavailable through VBE/DDC");
+            klog::warn("monitor", "monitor EDID unavailable through VBE/DDC");
             return report;
         }
 
@@ -146,7 +148,7 @@ namespace {
         serial::write_line(report.edid.checksum_ok ? "ok" : "bad");
 
         if (!report.edid_available) {
-            serial::write_line("monitor EDID header invalid");
+            klog::err("monitor", "monitor EDID header invalid");
             return report;
         }
 
@@ -365,6 +367,7 @@ namespace {
         serial::write_dec32(static_cast<hcpp::u32>(boot_runtime.acpi_tables));
         serial::write(" interrupts=");
         serial::write_line(boot_runtime.interrupts_ready ? "ready" : "failed");
+        report("panic test=", hype::panic_selftest());
     }
 
     void stage_display() noexcept {
@@ -691,6 +694,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
             boot_info->green_position, boot_info->blue_mask_size, boot_info->blue_position);
         hype::display::display_bind_target(framebuffer);
         boot_fb = framebuffer;
+        hype::panic_bind_framebuffer(framebuffer);
         hype::boot::boot_splash_begin(framebuffer);
         hype::boot::boot_splash_hold();
     }
@@ -711,7 +715,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     hype::boot::bootseq_run(boot_steps, 10);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
-        serial::write_line("boot info missing or invalid");
+        klog::err("boot", "boot info missing or invalid");
         write_vga_text("HYPEAI OS BOOT INFO ERROR");
         halt_forever();
     }
@@ -720,7 +724,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     const MonitorReport monitor = analyze_monitor(*boot_info);
 
     if (!has_framebuffer) {
-        serial::write_line("VBE framebuffer unavailable; VGA text fallback active");
+        klog::warn("display", "VBE framebuffer unavailable; VGA text fallback active");
         write_vga_text("HYPEAI OS BOOT OK - VGA TEXT MODE");
         halt_forever();
     }
@@ -769,9 +773,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
 
     serial::write("preferred colorspace=");
     serial::write_line(hcpp::display::color_space_name(hcpp::display::ColorSpace::Srgb));
-    serial::write_line(
-        "HDR colorspace activation is not possible through legacy "
-        "VBE; native GPU/HDMI/DisplayPort driver required");
+    klog::warn("display",
+               "HDR colorspace activation is not possible through legacy "
+               "VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
     hype::session::session_begin(framebuffer);
     hype::session::session_scripted_auth(framebuffer);
