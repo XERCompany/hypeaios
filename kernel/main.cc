@@ -34,7 +34,9 @@
 #include "kernel/hxrt/apps/builtins.h"
 #include "kernel/hxrt/apps/dxbg.h"
 #include "kernel/hxrt/hxrt.h"
+#include "kernel/input/hypeptr.h"
 #include "kernel/input/keyring.h"
+#include "kernel/input/msaux.h"
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/runtime/runtime.h"
@@ -262,6 +264,7 @@ namespace {
     }
 
     BootInfo *boot_info_arg = nullptr;
+    hcpp::graphics::Framebuffer boot_fb;
     hype::runtime::RuntimeInfo boot_runtime{};
     bool codec_probe_ok = false;
     bool image_selftest_ok = false;
@@ -555,6 +558,22 @@ namespace {
         report("wm selftest=", hype::win::wm_selftest());
     }
 
+    void stage_input() noexcept {
+        if (boot_fb.valid()) {
+            hype::input::cursor_init(boot_fb.width(), boot_fb.height());
+        } else {
+            hype::input::cursor_init(1024, 768);
+        }
+        serial::write("ptr init=");
+        serial::write_line(hype::input::cursor_ready() ? "ok" : "fail");
+        if (!hype::input::cursor_ready()) {
+            serial::write("ptr failstep=");
+            serial::write_dec32(hype::input::msaux_fail_step());
+            serial::write("\r\n");
+        }
+        report("input selftest=", hype::input::input_selftest(boot_fb));
+    }
+
 }  // namespace
 
 extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
@@ -583,6 +602,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
             boot_info->red_mask_size, boot_info->red_position, boot_info->green_mask_size,
             boot_info->green_position, boot_info->blue_mask_size, boot_info->blue_position);
         hype::display::display_bind_target(framebuffer);
+        boot_fb = framebuffer;
         hype::boot::boot_splash_begin(framebuffer);
         hype::boot::boot_splash_hold();
     }
@@ -597,9 +617,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"vfs", 84, stage_vfs},
         {"hxrt", 92, stage_hxrt},
         {"ui", 95, stage_ui},
+        {"input", 96, stage_input},
         {"svc", 98, stage_svc},
     };
-    hype::boot::bootseq_run(boot_steps, 9);
+    hype::boot::bootseq_run(boot_steps, 10);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         serial::write_line("boot info missing or invalid");
@@ -666,6 +687,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
     hype::session::session_begin(framebuffer);
     hype::session::session_scripted_auth(framebuffer);
+    hype::input::cursor_poll();
+    hype::input::cursor_draw(framebuffer);
     if (hype::session::session_logged_in()) {
         const hcpp::u32 shell_wins = hype::win::desk_paint(framebuffer);
         if (shell_wins > 0) {
@@ -678,6 +701,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     } else {
         serial::write_line("ui shell=blocked");
     }
+    hype::input::cursor_poll();
+    hype::input::cursor_draw(framebuffer);
     const bool codec_integrated =
         hype::codec::codec_count() ==
             static_cast<hcpp::size_t>(hype::codec::CodecId::Count) - 1 -
@@ -696,5 +721,14 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write(" decoder=ready input=");
     if (hype::input::keyring_count() != 0) serial::write_char(hype::input::keyring_peek(0));
     serial::write("\r\n");
-    halt_forever();
+    serial::write_line("cursor poll=active");
+    for (;;) {
+        if (hype::input::cursor_poll()) {
+            if (hype::session::session_logged_in()) {
+                hype::win::desk_paint(framebuffer);
+            }
+            hype::input::cursor_draw(framebuffer);
+        }
+        hype::interrupts::pit_wait_ticks(1);
+    }
 }
