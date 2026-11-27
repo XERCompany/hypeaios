@@ -3,6 +3,7 @@
 #include "kernel/acpi/acpi.h"
 #include "kernel/acpi/apic.h"
 #include "kernel/acpi/madt.h"
+#include "kernel/arch/x86/apic.h"
 #include "kernel/core_services.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/memory/pmm.h"
@@ -77,13 +78,23 @@ namespace hype::runtime {
             interrupts::pit_initialize(100);
             interrupts::keyboard_initialize();
             interrupts::mouse_initialize();
-            interrupts::pic_unmask(0);
-            interrupts::pic_unmask(1);
-            // IRQ12 lives on the slave PIC; the cascade line (master
-            // IRQ2) must be unmasked for slave IRQs to be delivered.
-            interrupts::pic_unmask(2);
-            interrupts::pic_unmask(12);
+            // irq_enable() drives the 8259 pair while the PIC path is
+            // live. IRQ12 lives on the slave PIC; the cascade line
+            // (master IRQ2) must be unmasked for slave IRQs to arrive.
+            interrupts::irq_enable(0);
+            interrupts::irq_enable(1);
+            interrupts::irq_enable(2);
+            interrupts::irq_enable(12);
             interrupts::interrupts_enable();
+            // Try to hand the interrupt path to LAPIC + IOAPIC. On
+            // success the 8259 pair is masked and the same irq_enable()
+            // calls open the lines through IOAPIC redirection entries
+            // instead; on failure the PIC path above keeps running.
+            if (x86::apic_initialize()) {
+                current.apic_active = true;
+                interrupts::irq_enable(1);
+                interrupts::irq_enable(12);
+            }
             current.interrupts_ready = interrupts::interrupts_initialized();
             return current.interrupts_ready;
         }

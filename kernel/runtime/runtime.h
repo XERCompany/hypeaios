@@ -35,6 +35,7 @@ namespace hype::runtime {
         hcpp::size_t ioapics;
         bool apic_supported;
         hcpp::uintptr_t apic_base;
+        bool apic_active;
         bool interrupts_ready;
         bool context_switch_ready;
         bool scheduler_ready;

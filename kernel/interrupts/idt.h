@@ -16,6 +16,9 @@ namespace hype::interrupts {
     void pic_mask_all() noexcept;
     void pic_unmask(hcpp::u8 irq) noexcept;
     void pic_send_eoi(hcpp::u8 irq) noexcept;
+    // Unmasks a legacy IRQ on whichever controller is live: the 8259
+    // pair, or the IOAPIC once x86::apic_initialize() has switched over.
+    void irq_enable(hcpp::u8 irq) noexcept;
     void pit_initialize(hcpp::u32 frequency) noexcept;
     void keyboard_initialize() noexcept;
     void mouse_initialize() noexcept;

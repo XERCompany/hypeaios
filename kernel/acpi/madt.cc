@@ -24,6 +24,13 @@ namespace hype::acpi {
             hcpp::u32 address;
             hcpp::u32 gsi_base;
         } __attribute__((packed));
+        struct IsoEntry {
+            EntryHeader header;
+            hcpp::u8 bus;
+            hcpp::u8 source_irq;
+            hcpp::u32 gsi;
+            hcpp::u16 flags;
+        } __attribute__((packed));
         MadtInfo current;
     }  // namespace
 
@@ -51,8 +58,14 @@ namespace hype::acpi {
                 const auto* ioapic = reinterpret_cast<const IoApicEntry*>(header);
                 if (current.ioapic_count == 0) current.first_ioapic_address = ioapic->address;
                 ++current.ioapic_count;
-            } else if (header->type == static_cast<hcpp::u8>(MadtEntryType::InterruptSourceOverride)) {
+            } else if (header->type == static_cast<hcpp::u8>(MadtEntryType::InterruptSourceOverride) &&
+                       header->length >= sizeof(IsoEntry)) {
                 ++current.interrupt_override_count;
+                if (current.iso_override_count < madt_max_isos) {
+                    const auto* iso = reinterpret_cast<const IsoEntry*>(header);
+                    current.iso_overrides[current.iso_override_count++] = {iso->bus, iso->source_irq, iso->gsi,
+                                                                         iso->flags};
+                }
             } else if (header->type == static_cast<hcpp::u8>(MadtEntryType::LocalApicAddressOverride) &&
                        header->length >= sizeof(EntryHeader) + 10) {
                 current.effective_lapic_address = *reinterpret_cast<const hcpp::u64*>(bytes + offset + 4);
