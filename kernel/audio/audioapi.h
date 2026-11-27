@@ -72,5 +72,7 @@ namespace hype::audio {
 
     void pcm_mono_to_stereo(hcpp::i16 *dst, const hcpp::i16 *src, hcpp::u32 frames) noexcept;
     void pcm_swap_channels(hcpp::i16 *stereo, hcpp::u32 frames) noexcept;
+    void pcm_s16_to_s24(hcpp::u8 *dst, const hcpp::i16 *src, hcpp::u32 samples) noexcept;
+    void pcm_s16_to_s32(hcpp::i32 *dst, const hcpp::i16 *src, hcpp::u32 samples) noexcept;
 
 }  // namespace hype::audio
