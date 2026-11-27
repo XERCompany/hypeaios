@@ -67,6 +67,17 @@ namespace hype::hxrt {
 
     hcpp::u32 hxrt_count() noexcept { return table_count; }
 
+    bool hxrt_unregister(const char* name) noexcept {
+        for (hcpp::u32 i = 0; i < table_count; ++i) {
+            if (name_equals(table[i]->name, name)) {
+                table[i] = table[--table_count];
+                table[table_count] = nullptr;
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool hxrt_exec(const char* name, AppCtx& ctx) noexcept {
         const HxerHeader* app = hxrt_find(name);
         if (app == nullptr || app->entry == nullptr) {
@@ -106,6 +117,7 @@ namespace hype::hxrt {
         const bool dup_rejected = !hxrt_register(&selftest_app);
         serial::write("hxrt dup=");
         serial::write_line(dup_rejected ? "ok" : "fail");
+        hxrt_unregister("hxrt_selftest");
         return reg_ok && found && exec_ok && sys_ok && dup_rejected;
     }
 
