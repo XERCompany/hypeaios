@@ -8,7 +8,7 @@
 
 namespace hype::ui {
 
-    enum class ButtonStyle : hcpp::u8 { Accent, Outline };
+    enum class ButtonStyle : hcpp::u8 { Accent, Outline, Destructive };
 
     class Button : public Widget {
     public:

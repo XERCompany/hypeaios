@@ -5,8 +5,10 @@
 #include "kernel/ui/box.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
+#include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
+#include "kernel/ui/widgets/dialog.h"
 
 namespace hype::ui {
 
@@ -16,6 +18,12 @@ namespace hype::ui {
                        hcpp::i32 h) noexcept {
             const Rect r = widget.bounds();
             return r.x == x && r.y == y && r.w == w && r.h == h;
+        }
+
+        void overlay_test_confirm(void* context) noexcept {
+            if (context != nullptr) {
+                *static_cast<bool*>(context) = true;
+            }
         }
 
     }  // namespace
@@ -259,6 +267,67 @@ namespace hype::ui {
         const bool ok = nonzero && chart_distinct && variants_differ && set_ok &&
                         restore_ok;
         serial::write_line(ok ? "ui2 theme ok" : "ui2 theme fail");
+        return ok;
+    }
+
+    bool overlay_selftest() noexcept {
+        static hcpp::u8 pixels[320 * 240 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 320, 240, 320 * 4, 32, 8, 16,
+                                           8, 8, 8, 0);
+        if (!target.valid()) {
+            return false;
+        }
+        Canvas canvas(target);
+        const Theme& theme = theme_active();
+        const Rect screen{0, 0, 320, 240};
+        const hcpp::u32 bg = canvas.color(theme.fg);
+        const hcpp::u32 card = canvas.color(theme.card);
+        canvas.fill_rect(screen, bg);
+
+        static OverlayHost host;
+        static Dialog dialog;
+        static AlertDialog alert;
+        static bool confirm_fired = false;
+
+        dialog.set_title("confirm action");
+        dialog.set_description("proceed with the operation?");
+        bool open_ok = host.open(&dialog) && host.is_open();
+        host.paint_overlays(canvas, screen);
+
+        const Rect box = dialog.bounds();
+        const hcpp::i32 probe_x = box.x + box.w / 2;
+        const hcpp::i32 probe_y = box.y + box.h - 8;
+        open_ok = open_ok && !box.empty() && screen.contains(box) &&
+                  target.get_pixel(4, 4) != bg &&
+                  target.get_pixel(probe_x, probe_y) == card;
+        serial::write("ui2 overlay open=");
+        serial::write_dec32(open_ok ? 1 : 0);
+        serial::write("\r\n");
+
+        const bool esc_handled = host.handle_key(27);
+        canvas.fill_rect(screen, bg);
+        host.paint_overlays(canvas, screen);
+        const bool close_ok =
+            esc_handled && !host.is_open() && target.get_pixel(4, 4) == bg &&
+            target.get_pixel(probe_x, probe_y) == bg;
+        serial::write("ui2 overlay close=");
+        serial::write_dec32(close_ok ? 1 : 0);
+        serial::write("\r\n");
+
+        confirm_fired = false;
+        alert.set_title("erase disk");
+        alert.set_message("this cannot be undone");
+        alert.set_on_confirm(&overlay_test_confirm, &confirm_fired);
+        bool alert_ok = host.open(&alert) && host.is_open();
+        host.paint_overlays(canvas, screen);
+        alert_ok = alert_ok && host.handle_key('\n') && confirm_fired;
+        host.close();
+        serial::write("ui2 overlay alert=");
+        serial::write_dec32(alert_ok ? 1 : 0);
+        serial::write("\r\n");
+
+        const bool ok = open_ok && close_ok && alert_ok;
+        serial::write_line(ok ? "ui2 overlay ok" : "ui2 overlay fail");
         return ok;
     }
 
