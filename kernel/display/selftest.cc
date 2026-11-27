@@ -8,9 +8,13 @@
 #include "kernel/display/display_qxga.h"
 #include "kernel/display/display_wvga.h"
 #include "kernel/display/displaydpi.h"
+#include "kernel/display/clientdisplay.h"
 #include "kernel/display/displayhda.h"
+#include "kernel/display/displayport.h"
 #include "kernel/display/displaysize.h"
+#include "kernel/display/dpxaux.h"
 #include "kernel/display/edidcta.h"
+#include "kernel/display/foepnscr.h"
 #include "kernel/display/hgc.h"
 #include "kernel/display/id-stat.h"
 #include "kernel/display/idscreen.h"
@@ -20,6 +24,7 @@
 #include "kernel/display/uhdtv2.h"
 #include "kernel/display/uhdtv2-vision.h"
 #include "kernel/display/urecordscr.h"
+#include "kernel/display/vgadispi.h"
 #include "kernel/display/writeframe.h"
 #include "kernel/serial.hpp"
 
@@ -37,6 +42,252 @@ namespace hype::display {
                 return 0;
             }
             return value > hi ? hi : value;
+        }
+
+        void write_hex16_short(hcpp::u16 value) noexcept {
+            serial::write("0x");
+            bool started = false;
+            for (hcpp::i32 shift = 12; shift >= 0; shift -= 4) {
+                const hcpp::u8 nibble =
+                    static_cast<hcpp::u8>((value >> shift) & 0xF);
+                if (nibble != 0 || started || shift == 0) {
+                    serial::write_char(static_cast<char>(
+                        nibble < 10 ? '0' + nibble : 'a' + (nibble - 10)));
+                    started = true;
+                }
+            }
+        }
+
+        bool dispi_selftest(hcpp::u32& width_out, hcpp::u32& height_out) noexcept {
+            dispi_init();
+            const DispiInfo& info = dispi_info();
+            if (!info.present) {
+                serial::write_line("disp dispi=absent");
+                return false;
+            }
+            serial::write("disp dispi=");
+            write_hex16_short(info.id);
+            if (info.mmio) {
+                serial::write(" mmio");
+            }
+            serial::write("\r\n");
+            DispiMode before{};
+            hcpp::u32 set_w = 1280;
+            hcpp::u32 set_h = 720;
+            if (dispi_get_mode(before) && before.width != 0 &&
+                before.height != 0 &&
+                find_mode(before.width, before.height) != nullptr) {
+                set_w = before.width;
+                set_h = before.height;
+            }
+            const hcpp::u32 bpp =
+                (before.bpp == 24 || before.bpp == 32) ? before.bpp : 32;
+            if (find_mode(set_w, set_h) == nullptr ||
+                !dispi_set_mode(set_w, set_h, bpp)) {
+                serial::write_line("disp modeset=fail");
+                return false;
+            }
+            DispiMode after{};
+            if (!dispi_get_mode(after) || after.width != set_w ||
+                after.height != set_h || after.bpp != bpp ||
+                !after.enabled || !after.lfb) {
+                serial::write_line("disp modeset=fail");
+                return false;
+            }
+            width_out = after.width;
+            height_out = after.height;
+            if (info.port_only) {
+                serial::write_line("disp modeset=port-only");
+            } else {
+                serial::write_line("disp modeset=ok");
+            }
+            return true;
+        }
+
+        hcpp::u32 mode_index_for(const DisplayMode& mode) noexcept {
+            for (hcpp::u32 i = 0; i < mode_count(); ++i) {
+                const DisplayMode* entry = mode_at(i);
+                if (entry != nullptr && entry->width == mode.width &&
+                    entry->height == mode.height) {
+                    return i;
+                }
+            }
+            return 0xFFFFFFFFu;
+        }
+
+        bool client_selftest(hcpp::graphics::Framebuffer& dst,
+                             const hcpp::graphics::Framebuffer& src,
+                             hcpp::u32 width, hcpp::u32 height) noexcept {
+            const hcpp::u32 client = display_open(display_hw_output());
+            if (client == display_client_invalid) {
+                serial::write_line("disp client=fail open");
+                return false;
+            }
+            const DisplayMode* first = display_mode_at(client, 0);
+            if (display_mode_count(client) != mode_count() ||
+                first == nullptr || first->width != mode_at(0)->width ||
+                first->height != mode_at(0)->height) {
+                serial::write_line("disp client=fail modes");
+                return false;
+            }
+            if (!display_bind_target(dst)) {
+                serial::write_line("disp client=fail bind");
+                return false;
+            }
+            const DisplayMode* mode = find_mode(width, height);
+            if (mode == nullptr || !display_set_mode(client, *mode)) {
+                serial::write_line("disp client=fail set");
+                return false;
+            }
+            if (!display_present(client, src)) {
+                serial::write_line("disp client=fail present");
+                return false;
+            }
+            const DisplayClientInfo* info = display_client_info(client);
+            if (info == nullptr || !info->open || !info->hw_bound ||
+                info->mode_index != mode_index_for(*mode)) {
+                serial::write_line("disp client=fail info");
+                return false;
+            }
+            if (display_output_count() == 0 || display_list(0) == nullptr) {
+                serial::write_line("disp client=fail list");
+                return false;
+            }
+            const OutputStatus* stat = output_stat_read(info->output);
+            if (stat == nullptr || stat->frames_presented == 0 ||
+                stat->link_state != OutputLink::Up) {
+                serial::write_line("disp client=fail stat");
+                return false;
+            }
+            if (!display_close(client) || display_client_info(client) != nullptr ||
+                display_client_count() != 0) {
+                serial::write_line("disp client=fail close");
+                return false;
+            }
+            return true;
+        }
+
+        bool dp_selftest() noexcept {
+            if (dp_aux_is_native(DpAuxCmd::I2cRead) ||
+                !dp_aux_is_i2c(DpAuxCmd::I2cReadMot) ||
+                !dp_aux_is_native(DpAuxCmd::NativeWrite) ||
+                !dp_aux_is_read(DpAuxCmd::I2cReadMot) ||
+                !dp_aux_mot(DpAuxCmd::I2cWriteMot)) {
+                return false;
+            }
+            DpAuxRequest request{};
+            request.cmd = DpAuxCmd::NativeRead;
+            request.addr = dpcd_rev;
+            request.len = 1;
+            DpAuxFrame frame{};
+            if (!dp_aux_frame_encode(request, frame) ||
+                frame.header[0] != 0x90 || frame.header[1] != 0x00 ||
+                frame.header[2] != 0x00 || frame.len != 0) {
+                return false;
+            }
+            DpAuxRequest decoded{};
+            if (!dp_aux_frame_decode(frame, decoded) ||
+                decoded.cmd != DpAuxCmd::NativeRead ||
+                decoded.addr != dpcd_rev || decoded.len != 1) {
+                return false;
+            }
+            if (dp_aux_available()) {
+                return false;
+            }
+            DpAuxResponse response{};
+            if (dp_aux_transaction(request, response) !=
+                    DpAuxStatus::NotSupported ||
+                dp_aux_read(dpcd_rev, &frame.len, 1) !=
+                    DpAuxStatus::NotSupported ||
+                dp_aux_write(dpcd_link_bw_set, &frame.len, 1) !=
+                    DpAuxStatus::NotSupported) {
+                return false;
+            }
+            const DpLinkStatus parsed = dp_lane_status(4, 0x77, 0x77, 0x01);
+            if (!parsed.clock_recovery || !parsed.channel_eq ||
+                !parsed.symbol_locked || !parsed.interlane_align) {
+                return false;
+            }
+            if (dp_lane_status(4, 0x76, 0x77, 0x01).clock_recovery ||
+                dp_lane_status(4, 0x77, 0x00, 0x01).symbol_locked ||
+                dp_lane_status(4, 0x77, 0x77, 0x00).interlane_align ||
+                !dp_lane_status(2, 0x77, 0x00, 0x01).clock_recovery) {
+                return false;
+            }
+            DpLink link{};
+            dp_link_reset(link);
+            if (link.state != DpLinkState::Idle ||
+                !dp_link_begin(link, 4, dp_link_bw_2_70)) {
+                return false;
+            }
+            if (link.state != DpLinkState::ClockRecovery ||
+                link.training_pattern !=
+                    static_cast<hcpp::u8>(dp_train_pattern_1 |
+                                          dp_train_scrambling_disable)) {
+                return false;
+            }
+            DpLinkStatus status{};
+            if (dp_link_advance(link, status) != DpLinkState::ClockRecovery ||
+                link.cr_retries != 1) {
+                return false;
+            }
+            status.clock_recovery = true;
+            status.symbol_locked = true;
+            if (dp_link_advance(link, status) != DpLinkState::ChannelEq ||
+                link.training_pattern !=
+                    static_cast<hcpp::u8>(dp_train_pattern_2 |
+                                          dp_train_scrambling_disable)) {
+                return false;
+            }
+            status.channel_eq = true;
+            status.interlane_align = true;
+            if (dp_link_advance(link, status) != DpLinkState::Done ||
+                link.training_pattern != dp_train_pattern_off) {
+                return false;
+            }
+            DpLinkStatus polled{};
+            if (dp_link_poll(link, polled) != DpAuxStatus::NotSupported) {
+                return false;
+            }
+            dp_link_reset(link);
+            serial::write("disp dp state=");
+            serial::write_line(dp_link_state_name(link.state));
+            return link.state == DpLinkState::Idle;
+        }
+
+        bool foepn_selftest(hcpp::graphics::Framebuffer& dst,
+                            const hcpp::graphics::Framebuffer& src,
+                            OutputId output) noexcept {
+            const FoepnSession session = foepn_open(output);
+            if (session == foepn_invalid) {
+                return false;
+            }
+            const OutputStatus* stat = output_stat_read(output);
+            if (stat == nullptr) {
+                return false;
+            }
+            const hcpp::u64 frames_before = stat->frames_presented;
+            if (!foepn_bind(session, dst)) {
+                return false;
+            }
+            if (!foepn_present(session, src)) {
+                return false;
+            }
+            const FoepnInfo* info = foepn_info(session);
+            if (info == nullptr || !info->open || !info->bound ||
+                info->presents != 1 || info->output != output) {
+                return false;
+            }
+            const OutputStatus* after = output_stat_read(output);
+            if (after == nullptr ||
+                after->frames_presented != frames_before + 1) {
+                return false;
+            }
+            if (!foepn_close(session) || foepn_info(session) != nullptr ||
+                foepn_active_sessions() != 0) {
+                return false;
+            }
+            return true;
         }
 
         bool modes_selftest() noexcept {
@@ -583,6 +834,43 @@ namespace hype::display {
         }
         serial::write_line("disp dpi=ok");
         serial::write_line("disp id ok");
+        return true;
+    }
+
+    bool display3_selftest() noexcept {
+        static hcpp::u8 dst_buf[64 * 48 * 4];
+        static hcpp::u8 src_buf[32 * 24 * 4];
+        hcpp::graphics::Framebuffer dst(dst_buf, 64, 48, 64 * 4, 32, 8, 16,
+                                        8, 8, 8, 0);
+        hcpp::graphics::Framebuffer src(src_buf, 32, 24, 32 * 4, 32, 8, 16,
+                                        8, 8, 8, 0);
+        for (hcpp::u32 y = 0; y < 24; ++y) {
+            for (hcpp::u32 x = 0; x < 32; ++x) {
+                src.put_pixel(x, y,
+                              src.encode_rgb(static_cast<hcpp::u8>(x * 7),
+                                             static_cast<hcpp::u8>(y * 9),
+                                             static_cast<hcpp::u8>((x + y) * 3)));
+            }
+        }
+        hcpp::u32 width = 0;
+        hcpp::u32 height = 0;
+        if (!dispi_selftest(width, height)) {
+            return false;
+        }
+        if (!dp_selftest()) {
+            serial::write_line("disp dp=fail");
+            return false;
+        }
+        if (!client_selftest(dst, src, width, height)) {
+            serial::write_line("disp client=fail");
+            return false;
+        }
+        serial::write_line("disp client=ok");
+        if (!foepn_selftest(dst, src, display_hw_output())) {
+            serial::write_line("disp sess=fail");
+            return false;
+        }
+        serial::write_line("disp sess ok");
         return true;
     }
 
