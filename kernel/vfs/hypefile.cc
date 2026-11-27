@@ -238,6 +238,7 @@ namespace hype::vfs {
         serial::write("hxer guard=");
         serial::write_line(out.guard_ok ? "ok" : "fail");
 
+        hype::hxrt::hxrt_unregister("hxf_probe");
         return out.pack_ok && out.file_ok && out.guard_ok;
     }
 

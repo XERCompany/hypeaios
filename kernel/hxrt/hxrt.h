@@ -12,6 +12,7 @@ namespace hype::hxrt {
     const HxerHeader* hxrt_find(const char* name) noexcept;
     const HxerHeader* const* hxrt_list() noexcept;
     hcpp::u32 hxrt_count() noexcept;
+    bool hxrt_unregister(const char* name) noexcept;
     bool hxrt_exec(const char* name, AppCtx& ctx) noexcept;
     bool hxrt_is_system(hcpp::u32 index) noexcept;
 
