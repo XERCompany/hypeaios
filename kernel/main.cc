@@ -32,6 +32,7 @@
 #include "kernel/display/selftest.h"
 #include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
+#include "kernel/gdxf/gdxf.h"
 #include "kernel/gfx/gfxbench.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
@@ -453,6 +454,8 @@ namespace {
                 hype::vfs::hypefile_install(hype::hxrt::revdbg_app()) ? 1 : 0;
             hxer_files +=
                 hype::vfs::hypefile_install(hype::hxrt::dxbg_app()) ? 1 : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::gdxfdemo_app()) ? 1 : 0;
         }
         serial::write("vfs hxer=");
         serial::write_dec32(hxer_files);
@@ -630,6 +633,15 @@ namespace {
         report("wm selftest=", hype::win::wm_selftest());
     }
 
+    void stage_gdxf() noexcept {
+        if (boot_fb.valid()) {
+            hype::gdxf::gdxf_initialize(boot_fb);
+        } else {
+            serial::write_line("gdxf init=skipped nofb");
+        }
+        hype::gdxf::gdxf_selftest();
+    }
+
     void stage_input() noexcept {
         if (boot_fb.valid()) {
             hype::input::cursor_init(boot_fb.width(), boot_fb.height());
@@ -711,8 +723,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"ui", 95, stage_ui},
         {"input", 96, stage_input},
         {"svc", 98, stage_svc},
+        {"gdxf", 99, stage_gdxf},
     };
-    hype::boot::bootseq_run(boot_steps, 10);
+    hype::boot::bootseq_run(boot_steps, 11);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         klog::err("boot", "boot info missing or invalid");
@@ -788,6 +801,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
             serial::write("ui shell=painted wins=");
             serial::write_dec32(shell_wins);
             serial::write("\r\n");
+            const hcpp::u32 demo_win = hype::win::desk_open_app("GDXFDemo");
+            serial::write("gdxf demo win=");
+            serial::write_line(demo_win != 0 ? "ok" : "fail");
         } else {
             serial::write_line("ui shell=failed");
         }

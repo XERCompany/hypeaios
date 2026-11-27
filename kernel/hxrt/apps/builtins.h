@@ -9,6 +9,7 @@ namespace hype::hxrt {
     const HxerHeader* hxabout_app() noexcept;
     const HxerHeader* dxbg_app() noexcept;
     const HxerHeader* revdbg_app() noexcept;
+    const HxerHeader* gdxfdemo_app() noexcept;
     void hxrt_register_builtins() noexcept;
 
     hcpp::size_t dbg_refresh() noexcept;
