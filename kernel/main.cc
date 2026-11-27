@@ -22,6 +22,7 @@
 #include "kernel/display/clientdisplay.h"
 #include "kernel/display/idscreen.h"
 #include "kernel/display/selftest.h"
+#include "kernel/font/hypefont.h"
 #include "kernel/hello/hello.h"
 #include "kernel/input/keyring.h"
 #include "kernel/input/scancode.h"
@@ -345,6 +346,23 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("\r\n");
     serial::write("hpf selftest=");
     serial::write_line(hcpp::fonts::hpf_selftest() ? "ok" : "failed");
+    const bool hfnt_loaded =
+        hype::font::hypefont_load(hype::font::montserrat_sdf_hfnt,
+                                  hype::font::montserrat_sdf_hfnt_size);
+    serial::write("font atlas=");
+    serial::write_dec32(hype::font::font_atlas_width());
+    serial::write("x");
+    serial::write_dec32(hype::font::font_atlas_height());
+    serial::write("\r\n");
+    serial::write("font glyphs=");
+    serial::write_dec32(hype::font::font_glyph_count());
+    serial::write("\r\n");
+    serial::write("font cyr=");
+    serial::write_line(hype::font::font_glyph(0x041F).valid() ? "ok" : "missing");
+    serial::write("font measure=");
+    serial::write_dec32(static_cast<hcpp::u32>(hype::font::font_measure("HypeAI")));
+    serial::write("\r\n");
+    report("font selftest=", hfnt_loaded && hype::font::font_selftest());
     serial::write("sha256=");
     serial::write_line(hcpp::sha256_selftest() ? "ok" : "failed");
     serial::write("pbkdf2=");
