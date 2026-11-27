@@ -25,6 +25,7 @@
 #include "kernel/display/idscreen.h"
 #include "kernel/display/selftest.h"
 #include "kernel/font/hypefont.h"
+#include "kernel/font/hypetext.h"
 #include "kernel/gfx/gfxbench.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
@@ -385,6 +386,7 @@ namespace {
         serial::write_dec32(static_cast<hcpp::u32>(hype::font::font_measure("HypeAI")));
         serial::write("\r\n");
         report("font selftest=", hfnt_loaded && hype::font::font_selftest());
+        report("text selftest=", hype::font::text_selftest());
         serial::write("sha256=");
         serial::write_line(hcpp::sha256_selftest() ? "ok" : "failed");
         serial::write("pbkdf2=");
