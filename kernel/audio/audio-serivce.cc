@@ -155,6 +155,9 @@ namespace hype::audio {
                 write_hex8(playback.dac_node);
                 serial::write("\r\n");
                 verify_playback(controller, playback);
+                const bool halted = hda::hda_stream_halt(controller, playback);
+                serial::write("hda halt=");
+                serial::write_line(halted ? "ok" : "fail");
             }
             hda_selftest2(controller, codecs[0].address, playback);
         }

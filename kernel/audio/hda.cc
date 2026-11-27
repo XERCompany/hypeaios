@@ -307,7 +307,7 @@ namespace hype::audio::hda {
                 return false;
             }
             return send_command(controller, codec, playback.dac_node,
-                                verb_set_stream_format | fmt_48k_s16_2ch);
+                                verb_set_stream_format | playback.format);
         }
 
         hcpp::u16 output_stream_offset(HdaController &controller) noexcept {
@@ -492,7 +492,8 @@ namespace hype::audio::hda {
             return (reg8(controller, static_cast<hcpp::u16>(offset + sd_ctl)) & sd_ctl_run) != 0;
         }
 
-        bool start_output_stream(HdaController &controller, HdaPlayback &playback) noexcept {
+        bool program_output_stream(HdaController &controller,
+                                   const HdaPlayback &playback) noexcept {
             const hcpp::u16 offset = playback.stream_offset;
             reg8(controller, static_cast<hcpp::u16>(offset + sd_ctl)) = 0;
             reg8(controller, static_cast<hcpp::u16>(offset + sd_ctl)) = sd_ctl_srst;
@@ -502,7 +503,7 @@ namespace hype::audio::hda {
             reg32(controller, static_cast<hcpp::u16>(offset + sd_cbl)) = playback.buffer_bytes;
             reg16(controller, static_cast<hcpp::u16>(offset + sd_lvi)) =
                 static_cast<hcpp::u16>(playback.bdl_entries - 1);
-            reg16(controller, static_cast<hcpp::u16>(offset + sd_fmt)) = fmt_48k_s16_2ch;
+            reg16(controller, static_cast<hcpp::u16>(offset + sd_fmt)) = playback.format;
             reg32(controller, static_cast<hcpp::u16>(offset + sd_bdpl)) = playback.bdl_phys;
             reg32(controller, static_cast<hcpp::u16>(offset + sd_bdpu)) = 0;
             reg8(controller, static_cast<hcpp::u16>(offset + sd_ctl)) = 0;
@@ -511,8 +512,54 @@ namespace hype::audio::hda {
             }
             reg8(controller, static_cast<hcpp::u16>(offset + sd_ctl_stream)) =
                 static_cast<hcpp::u8>(playback.stream_number << 4);
+            return true;
+        }
+
+        bool start_output_stream(HdaController &controller, HdaPlayback &playback) noexcept {
+            const hcpp::u16 offset = playback.stream_offset;
+            if (!program_output_stream(controller, playback)) {
+                return false;
+            }
             reg8(controller, static_cast<hcpp::u16>(offset + sd_ctl)) = sd_ctl_run;
             return (reg8(controller, static_cast<hcpp::u16>(offset + sd_ctl)) & sd_ctl_run) != 0;
+        }
+
+        bool build_stream_ring(HdaPlayback &playback, hcpp::u32 period_bytes,
+                               hcpp::u16 entries) noexcept {
+            if (period_bytes == 0 || entries < 2 || entries > 256 ||
+                period_bytes > memory::page_size) {
+                return false;
+            }
+            const hcpp::u64 ring_bytes =
+                static_cast<hcpp::u64>(period_bytes) * entries;
+            const hcpp::u32 pages = static_cast<hcpp::u32>(
+                (ring_bytes + memory::page_size - 1) / memory::page_size);
+            playback.bdl_phys = static_cast<hcpp::u32>(memory::pmm_allocate_page());
+            playback.buffer_phys = static_cast<hcpp::u32>(memory::pmm_allocate_pages(pages));
+            if (playback.bdl_phys == 0 || playback.buffer_phys == 0) {
+                return false;
+            }
+            for (hcpp::u16 i = 0; i < entries; ++i) {
+                const hcpp::u32 address = playback.buffer_phys + i * period_bytes;
+                if ((address & (memory::page_size - 1)) + period_bytes > memory::page_size) {
+                    playback.buffer_phys = 0;
+                    return false;
+                }
+            }
+            zero_page(playback.bdl_phys);
+            auto *bdl = reinterpret_cast<volatile hcpp::u64 *>(playback.bdl_phys);
+            for (hcpp::u16 i = 0; i < entries; ++i) {
+                bdl[i * 2] = playback.buffer_phys +
+                             static_cast<hcpp::u64>(i) * period_bytes;
+                bdl[i * 2 + 1] = period_bytes;
+            }
+            playback.buffer_bytes = static_cast<hcpp::u32>(ring_bytes);
+            playback.bdl_entries = entries;
+            auto *ring = reinterpret_cast<volatile hcpp::u64 *>(playback.buffer_phys);
+            for (hcpp::u64 i = 0; i < ring_bytes / sizeof(hcpp::u64); ++i) {
+                ring[i] = 0;
+            }
+            return true;
         }
 
         bool build_tone_buffer(HdaPlayback &playback) noexcept {
@@ -660,6 +707,7 @@ namespace hype::audio::hda {
         playback = {};
         playback.codec = codec;
         playback.stream_number = 1;
+        playback.format = fmt_48k_s16_2ch;
         playback.stream_offset = output_stream_offset(controller);
         if (playback.stream_offset == 0) {
             return false;
@@ -682,7 +730,7 @@ namespace hype::audio::hda {
 
     hcpp::u32 hda_playback_position(HdaController &controller,
                                      const HdaPlayback &playback) noexcept {
-        if (!playback.running || playback.stream_offset == 0) {
+        if (playback.stream_offset == 0) {
             return 0;
         }
         return reg32(controller, static_cast<hcpp::u16>(playback.stream_offset + sd_lpib));
@@ -845,6 +893,86 @@ namespace hype::audio::hda {
             }
         }
         return topology.function_groups != 0;
+    }
+
+    hcpp::u16 hda_format_word(hcpp::u32 rate, hcpp::u8 channels, hcpp::u8 bits) noexcept {
+        hcpp::u16 bits_code;
+        switch (bits) {
+            case 8: bits_code = 0; break;
+            case 16: bits_code = 1; break;
+            case 20: bits_code = 2; break;
+            case 24: bits_code = 3; break;
+            case 32: bits_code = 4; break;
+            default: return hda_format_invalid;
+        }
+        if (channels == 0 || channels > 16) {
+            return hda_format_invalid;
+        }
+        hcpp::u16 base = 0;
+        hcpp::u16 mult = 0;
+        hcpp::u16 div = 0;
+        switch (rate) {
+            case 48000: break;
+            case 44100: base = 1; break;
+            case 96000: mult = 1; break;
+            case 88200: base = 1; mult = 1; break;
+            case 24000: div = 1; break;
+            case 22050: base = 1; div = 1; break;
+            case 192000: mult = 3; break;
+            default: return hda_format_invalid;
+        }
+        return static_cast<hcpp::u16>((channels - 1) | (bits_code << 4) | (div << 8) |
+                                      (mult << 11) | (base << 14));
+    }
+
+    bool hda_stream_open(HdaController &controller, hcpp::u8 codec, HdaPlayback &playback,
+                         hcpp::u16 format, hcpp::u32 period_bytes,
+                         hcpp::u16 bdl_entries) noexcept {
+        playback = {};
+        playback.codec = codec;
+        playback.stream_number = 1;
+        playback.format = format;
+        playback.stream_offset = output_stream_offset(controller);
+        if (playback.stream_offset == 0) {
+            return false;
+        }
+        if (!find_output_path(controller, codec, playback)) {
+            return false;
+        }
+        if (!build_stream_ring(playback, period_bytes, bdl_entries)) {
+            return false;
+        }
+        if (!configure_output_path(controller, codec, playback)) {
+            return false;
+        }
+        return program_output_stream(controller, playback);
+    }
+
+    bool hda_stream_run(HdaController &controller, HdaPlayback &playback) noexcept {
+        if (playback.stream_offset == 0) {
+            return false;
+        }
+        const hcpp::u16 ctl = playback.stream_offset + sd_ctl;
+        reg8(controller, ctl) = static_cast<hcpp::u8>(reg8(controller, ctl) | sd_ctl_run);
+        if ((reg8(controller, ctl) & sd_ctl_run) == 0) {
+            return false;
+        }
+        playback.running = true;
+        return true;
+    }
+
+    bool hda_stream_halt(HdaController &controller, HdaPlayback &playback) noexcept {
+        if (playback.stream_offset == 0) {
+            playback.running = false;
+            return false;
+        }
+        const hcpp::u16 ctl = playback.stream_offset + sd_ctl;
+        reg8(controller, ctl) = static_cast<hcpp::u8>(reg8(controller, ctl) & ~sd_ctl_run);
+        reg8(controller, ctl) = static_cast<hcpp::u8>(reg8(controller, ctl) | sd_ctl_srst);
+        const bool reset = wait_stream_reset(controller, playback.stream_offset, sd_ctl_srst);
+        reg8(controller, ctl) = static_cast<hcpp::u8>(reg8(controller, ctl) & ~sd_ctl_srst);
+        playback.running = false;
+        return reset;
     }
 
 }  // namespace hype::audio::hda

@@ -11,6 +11,7 @@
 #include "hcpp/types.hpp"
 #include "kernel/audio/audio-serivce.h"
 #include "kernel/audio/audioac97.h"
+#include "kernel/audio/hasio.h"
 #include "kernel/boot/bootseq.h"
 #include "kernel/boot/bootsplash.h"
 #include "kernel/boot_info.hpp"
@@ -530,6 +531,14 @@ namespace {
         return hype::audio::ready();
     }
 
+    bool svc_hasio_start() noexcept {
+        return hype::audio::hasio_service_start();
+    }
+
+    bool svc_hasio_stop() noexcept {
+        return hype::audio::hasio_service_stop();
+    }
+
     bool svc_ac97_start() noexcept {
         return hype::audio::ac97::ac97_ready();
     }
@@ -547,6 +556,8 @@ namespace {
         hype::svc::svc_register("vfs", svc_vfs_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("sqlite", svc_sqlite_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("hda", svc_hda_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("hasio", svc_hasio_start, svc_hasio_stop, SvcRestart::OnFail,
+                                true);
         hype::svc::svc_register("ac97", svc_ac97_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("video", svc_video_start, nullptr, SvcRestart::OnFail, true);
         const hcpp::u32 started = hype::svc::svc_autostart();
@@ -778,6 +789,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
             }
             hype::input::cursor_draw(framebuffer);
         }
+        hype::audio::hasio_pump_active();
         hype::interrupts::pit_wait_ticks(1);
     }
 }
