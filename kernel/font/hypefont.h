@@ -33,6 +33,7 @@ namespace hype::font {
     hcpp::u32 font_atlas_height() noexcept;
     hcpp::u32 font_glyph_count() noexcept;
     hcpp::u32 font_spread() noexcept;
+    hcpp::u32 font_em_px() noexcept;
     hcpp::u16 font_line_height() noexcept;
     hcpp::i32 font_kerning(hcpp::u32 left, hcpp::u32 right) noexcept;
     hcpp::i32 font_measure(hcpp::StringView text) noexcept;

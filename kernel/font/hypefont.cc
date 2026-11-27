@@ -184,6 +184,8 @@ namespace hype::font {
 
     hcpp::u32 font_spread() noexcept { return loaded.spread; }
 
+    hcpp::u32 font_em_px() noexcept { return loaded.px_size; }
+
     hcpp::u16 font_line_height() noexcept { return loaded.line_height; }
 
     hcpp::i32 font_kerning(hcpp::u32 left, hcpp::u32 right) noexcept {
