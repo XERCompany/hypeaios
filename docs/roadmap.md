@@ -89,3 +89,19 @@ User request (2026-01-16): Windows-style boot sequence; text currently pixel-ugl
 | T5 | `bootsplash` — logo + spinner + progress bar, driven from main.cc init stages | — |
 | T6 | Polish pass + screenshot verification | T4, T5 |
 
+## P9 — Shell & Runtime (user program layer)
+
+User direction (2026-11-27): remove demo entirely; registration/login session; `.hxer` executables (`.hxersys` = system apps, non-deletable); services load in background while login shows; RevServices service manager + RevDBGService.hxersys control panel (restart/stop/logs); DXBackgroundDesktop.hxer wallpaper app; SpeedStart.hxersys launcher; proprietary path scheme `HYPEOS://<DiskChar>/`; .hxer windows get close button + menu.
+
+| # | Ticket | Depends |
+|---|--------|---------|
+| S1 | `hxrt` runtime — .hxer descriptor {magic,name,ver,entry,flags SYS/USER}, app registry, exec into window | — |
+| S2 | `winman` — window chrome (title/close/menu), focus, z-order, app window slots | S1 |
+| S3 | `hypepath` — `HYPEOS://<char>/` resolver + memfs VFS (S=system non-del, U=user, T=temp) | — |
+| S4 | `RevServices` — service registry {name,state,start_fn,log_ring,autostart}, restart/stop API, boot autostart | — |
+| S5 | `RevDBGService.hxersys` — service list UI → control panel (restart/stop/log view) | S2,S4 |
+| S6 | `DXBackgroundDesktop.hxer` — wallpaper: decode via codec path → desktop bg | S2 |
+| S7 | `SpeedStart.hxersys` — launcher grid of registered .hxer apps | S2,S3 |
+| S8 | Session — registration flow + login gate; services start in background behind greeter; demo.cc removed | S2,S4 |
+| S9 | `hypefile` — .hxer/.hxersys file entries in memfs at HYPEOS://S/apps/, delete guard on .hxersys | S3,S1 |
+
