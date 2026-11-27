@@ -3,6 +3,7 @@
 #include "hcpp/memory.hpp"
 #include "hcpp/utf8.hpp"
 #include "kernel/font/hypefont.h"
+#include "kernel/font/ttfrast.h"
 #include "kernel/serial.hpp"
 
 namespace hype::font {
@@ -70,127 +71,104 @@ namespace hype::font {
                         (plot.blue * alpha + dst_blue * inverse) / 255)));
         }
 
-        hcpp::u8 atlas_sample(const hcpp::u8* atlas, hcpp::u32 atlas_width,
-                              hcpp::u32 atlas_height, hcpp::i32 ax_q8,
-                              hcpp::i32 ay_q8) noexcept {
-            hcpp::i32 x0 = ax_q8 >> 8;
-            hcpp::i32 y0 = ay_q8 >> 8;
-            const hcpp::u32 fx = static_cast<hcpp::u32>(ax_q8 & 255);
-            const hcpp::u32 fy = static_cast<hcpp::u32>(ay_q8 & 255);
-            x0 = clamp_i32(x0, 0, static_cast<hcpp::i32>(atlas_width) - 2);
-            y0 = clamp_i32(y0, 0, static_cast<hcpp::i32>(atlas_height) - 2);
-            const hcpp::u8* row0 = atlas + y0 * atlas_width + x0;
-            const hcpp::u8* row1 = row0 + atlas_width;
-            const hcpp::u32 top =
-                row0[0] * (256 - fx) + row0[1] * fx;
-            const hcpp::u32 bottom =
-                row1[0] * (256 - fx) + row1[1] * fx;
-            return static_cast<hcpp::u8>((top * (256 - fy) + bottom * fy) >> 16);
-        }
-
-        hcpp::u32 edge_alpha(hcpp::u32 sdf, hcpp::i32 edge,
-                             hcpp::i32 aa_half) noexcept {
-            hcpp::i32 t = (static_cast<hcpp::i32>(sdf) - edge + aa_half) * 256 /
-                          (2 * aa_half);
-            t = clamp_i32(t, 0, 256);
-            const hcpp::u32 smooth =
-                static_cast<hcpp::u32>(t) * static_cast<hcpp::u32>(t) *
-                    static_cast<hcpp::u32>(768 - 2 * t) >> 16;
-            return smooth > 255 ? 255 : smooth;
-        }
-
-        hcpp::i32 scaled(hcpp::i32 value, hcpp::u32 scale_q8) noexcept {
-            return (value * static_cast<hcpp::i32>(scale_q8) + 128) >> 8;
-        }
-
-        hcpp::i32 fallback_advance(hcpp::u32 scale_q8) noexcept {
-            const FontGlyphSdf fallback = font_glyph('?');
-            if (fallback.valid()) {
-                return scaled(fallback.advance, scale_q8);
+        hcpp::i32 units_to_q8(hcpp::i32 units, hcpp::u32 size_px) noexcept {
+            const hcpp::u32 em = font_em_px();
+            if (em == 0) {
+                return 0;
             }
-            return scaled(static_cast<hcpp::i32>(font_em_px()) / 2, scale_q8);
+            return static_cast<hcpp::i32>(
+                static_cast<hcpp::i64>(units) *
+                    (static_cast<hcpp::i64>(size_px) << 8) / em);
         }
 
-        hcpp::i32 span_advance(hcpp::StringView text, hcpp::u32 scale_q8) noexcept {
+        hcpp::i32 q8_to_px(hcpp::i32 value_q8) noexcept {
+            return (value_q8 + 128) >> 8;
+        }
+
+        hcpp::i32 fallback_advance_q8(hcpp::u32 size_px) noexcept {
+            const hcpp::i32 fallback = rast::advance_q8('?', size_px);
+            if (fallback != 0) {
+                return fallback;
+            }
+            return units_to_q8(static_cast<hcpp::i32>(font_em_px()) / 2,
+                               size_px);
+        }
+
+        hcpp::i32 span_advance_q8(hcpp::StringView text,
+                                  hcpp::u32 size_px) noexcept {
             hcpp::i32 width = 0;
             hcpp::u32 previous = 0;
             hcpp::size_t cursor = 0;
             while (cursor < text.size()) {
                 const hcpp::u32 codepoint = hcpp::utf8::next_codepoint(text, cursor);
                 if (previous != 0) {
-                    width += scaled(font_kerning(previous, codepoint), scale_q8);
+                    width += units_to_q8(font_kerning(previous, codepoint),
+                                         size_px);
                 }
-                const FontGlyphSdf glyph = font_glyph(codepoint);
-                width += glyph.valid() ? scaled(glyph.advance, scale_q8)
-                                       : fallback_advance(scale_q8);
+                const hcpp::i32 advance = rast::advance_q8(codepoint, size_px);
+                width += advance != 0 ? advance
+                                      : fallback_advance_q8(size_px);
                 previous = codepoint;
             }
             return width;
         }
 
-        void blit_glyph(const Plot& plot, const FontGlyphSdf& glyph,
-                        hcpp::i32 dest_x, hcpp::i32 dest_y, hcpp::i32 dest_w,
-                        hcpp::i32 dest_h, hcpp::i32 baseline_y, hcpp::i32 edge,
-                        hcpp::i32 aa_half, bool italic) noexcept {
-            const hcpp::u8* atlas = font_atlas();
-            const hcpp::u32 atlas_width = font_atlas_width();
-            const hcpp::u32 atlas_height = font_atlas_height();
-            for (hcpp::i32 row = 0; row < dest_h; ++row) {
-                const hcpp::i32 py = dest_y + row;
-                const hcpp::i32 v_q8 =
-                    (2 * row + 1) * glyph.height * 128 / dest_h;
+        void blit_glyph(const Plot& plot, const rast::RastGlyph& glyph,
+                        hcpp::i32 pen_x, hcpp::i32 baseline_y,
+                        hcpp::i32 bold_shift, bool italic) noexcept {
+            const hcpp::i32 top = baseline_y - glyph.bearing_y;
+            const hcpp::i32 base_x = pen_x + glyph.bearing_x;
+            for (hcpp::i32 row = 0; row < glyph.height; ++row) {
+                const hcpp::i32 py = top + row;
                 const hcpp::i32 shear =
                     italic ? ((baseline_y - py) * k_italic_shear_q8) >> 8 : 0;
-                for (hcpp::i32 column = 0; column < dest_w; ++column) {
-                    const hcpp::i32 u_q8 =
-                        (2 * column + 1) * glyph.width * 128 / dest_w;
-                    const hcpp::u8 sdf = atlas_sample(
-                        atlas, atlas_width, atlas_height,
-                        (glyph.x << 8) + u_q8, (glyph.y << 8) + v_q8);
-                    const hcpp::u32 alpha = edge_alpha(sdf, edge, aa_half);
-                    plot_put(plot, dest_x + column + shear, py, alpha);
+                const hcpp::u8* src = glyph.alpha + row * glyph.width;
+                for (hcpp::i32 col = 0; col < glyph.width; ++col) {
+                    const hcpp::u32 alpha = src[col];
+                    if (alpha == 0) {
+                        continue;
+                    }
+                    const hcpp::i32 px = base_x + col + shear;
+                    plot_put(plot, px, py, alpha);
+                    for (hcpp::i32 extra = 1; extra <= bold_shift; ++extra) {
+                        plot_put(plot, px + extra, py, alpha);
+                    }
                 }
             }
         }
 
         hcpp::i32 draw_run(const Plot& plot, hcpp::i32 x, hcpp::i32 baseline_y,
-                           hcpp::StringView text, hcpp::u32 scale_q8,
+                           hcpp::StringView text, hcpp::u32 size_px,
                            hcpp::u8 weight, bool italic) noexcept {
-            const hcpp::u32 spread = font_spread();
-            hcpp::i32 aa_half =
-                static_cast<hcpp::i32>((255 * 256) / (4 * spread * scale_q8));
-            aa_half = clamp_i32(aa_half, 2, 64);
-            const hcpp::i32 edge = clamp_i32(128 - weight, 16, 128);
-            hcpp::i32 pen_x = x;
+            const hcpp::i32 bold_shift = weight > 0 ? 1 + weight / 128 : 0;
+            hcpp::i32 pen_q8 = x << 8;
             hcpp::u32 previous = 0;
             hcpp::size_t cursor = 0;
             while (cursor < text.size()) {
                 const hcpp::u32 codepoint = hcpp::utf8::next_codepoint(text, cursor);
                 if (previous != 0) {
-                    pen_x += scaled(font_kerning(previous, codepoint), scale_q8);
+                    pen_q8 += units_to_q8(font_kerning(previous, codepoint),
+                                          size_px);
                 }
-                const FontGlyphSdf glyph = font_glyph(codepoint);
-                if (!glyph.valid()) {
-                    pen_x += fallback_advance(scale_q8);
+                const rast::RastGlyph* glyph = rast::glyph(codepoint, size_px);
+                if (glyph == nullptr) {
+                    pen_q8 += fallback_advance_q8(size_px);
                     previous = codepoint;
                     continue;
                 }
-                if (glyph.width != 0 && glyph.height != 0) {
-                    const hcpp::i32 dest_w = scaled(glyph.width, scale_q8);
-                    const hcpp::i32 dest_h = scaled(glyph.height, scale_q8);
-                    if (dest_w > 0 && dest_h > 0) {
-                        const hcpp::i32 dest_x =
-                            pen_x + scaled(glyph.bearing_x, scale_q8);
-                        const hcpp::i32 dest_y =
-                            baseline_y - scaled(glyph.bearing_y, scale_q8);
-                        blit_glyph(plot, glyph, dest_x, dest_y, dest_w, dest_h,
-                                   baseline_y, edge, aa_half, italic);
-                    }
+                if (glyph->alpha != nullptr && glyph->width > 0 &&
+                    glyph->height > 0) {
+                    blit_glyph(plot, *glyph, pen_q8 >> 8, baseline_y,
+                               bold_shift, italic);
                 }
-                pen_x += scaled(glyph.advance, scale_q8);
+                pen_q8 += glyph->advance_q8;
                 previous = codepoint;
             }
-            return pen_x - x;
+            return q8_to_px(pen_q8 - (x << 8));
+        }
+
+        hcpp::i32 baseline_for(hcpp::i32 y, hcpp::u32 size_px) noexcept {
+            return y + q8_to_px(units_to_q8(font_ascent(), size_px));
         }
 
         void blur_mask(hcpp::u8* mask, hcpp::i32 width, hcpp::i32 height,
@@ -252,35 +230,32 @@ namespace hype::font {
     }  // namespace
 
     hcpp::u32 text_scale_q8(hcpp::u32 size_px) noexcept {
-        const hcpp::u32 em = font_em_px();
-        if (em == 0 || size_px == 0) {
+        if (font_em_px() == 0 || size_px == 0) {
             return 0;
         }
-        return (size_px << 8) / em;
+        return (size_px << 8) / font_em_px();
     }
 
     hcpp::i32 text_measure(hcpp::StringView text, hcpp::u32 size_px) noexcept {
-        const hcpp::u32 scale_q8 = text_scale_q8(size_px);
-        if (scale_q8 == 0) {
+        if (!hypefont_ready() || text_scale_q8(size_px) == 0) {
             return 0;
         }
-        return scaled(font_measure(text), scale_q8);
+        return q8_to_px(span_advance_q8(text, size_px));
     }
 
     hcpp::u32 text_line_height(hcpp::u32 size_px) noexcept {
-        const hcpp::u32 scale_q8 = text_scale_q8(size_px);
-        if (scale_q8 == 0) {
+        if (text_scale_q8(size_px) == 0) {
             return 0;
         }
-        const hcpp::i32 height = scaled(font_line_height(), scale_q8);
+        const hcpp::i32 height =
+            q8_to_px(units_to_q8(font_line_height(), size_px));
         return static_cast<hcpp::u32>(height > 1 ? height : 1);
     }
 
     hcpp::i32 text_draw_clip(hcpp::graphics::Framebuffer& fb, hcpp::i32 x,
                              hcpp::i32 y, hcpp::StringView text, hcpp::u32 color,
                              hcpp::u32 size_px, Rect clip) noexcept {
-        const hcpp::u32 scale_q8 = text_scale_q8(size_px);
-        if (!hypefont_ready() || scale_q8 == 0 || text.empty() ||
+        if (!hypefont_ready() || text_scale_q8(size_px) == 0 || text.empty() ||
             clip.empty()) {
             return 0;
         }
@@ -288,8 +263,8 @@ namespace hype::font {
         plot.fb = &fb;
         plot.clip = clip;
         fb.decode_rgb(color, plot.red, plot.green, plot.blue);
-        return draw_run(plot, x, y + static_cast<hcpp::i32>(size_px), text,
-                        scale_q8, 0, false);
+        return draw_run(plot, x, baseline_for(y, size_px), text, size_px, 0,
+                        false);
     }
 
     hcpp::i32 text_draw(hcpp::graphics::Framebuffer& fb, hcpp::i32 x, hcpp::i32 y,
@@ -304,8 +279,7 @@ namespace hype::font {
                                hcpp::i32 y, hcpp::StringView text,
                                hcpp::u32 color, hcpp::u32 size_px,
                                hcpp::u8 weight, bool italic) noexcept {
-        const hcpp::u32 scale_q8 = text_scale_q8(size_px);
-        if (!hypefont_ready() || scale_q8 == 0 || text.empty()) {
+        if (!hypefont_ready() || text_scale_q8(size_px) == 0 || text.empty()) {
             return 0;
         }
         Plot plot;
@@ -313,15 +287,14 @@ namespace hype::font {
         plot.clip = Rect{0, 0, static_cast<hcpp::i32>(fb.width()),
                          static_cast<hcpp::i32>(fb.height())};
         fb.decode_rgb(color, plot.red, plot.green, plot.blue);
-        return draw_run(plot, x, y + static_cast<hcpp::i32>(size_px), text,
-                        scale_q8, weight, italic);
+        return draw_run(plot, x, baseline_for(y, size_px), text, size_px,
+                        weight, italic);
     }
 
     hcpp::i32 text_draw_wrapped(hcpp::graphics::Framebuffer& fb, Rect rect,
                                 hcpp::StringView text, TextAlign align,
                                 hcpp::u32 size_px) noexcept {
-        const hcpp::u32 scale_q8 = text_scale_q8(size_px);
-        if (!hypefont_ready() || scale_q8 == 0 || rect.empty() ||
+        if (!hypefont_ready() || text_scale_q8(size_px) == 0 || rect.empty() ||
             text.empty()) {
             return 0;
         }
@@ -332,11 +305,11 @@ namespace hype::font {
         fb.decode_rgb(white, plot.red, plot.green, plot.blue);
         const hcpp::i32 line_height =
             static_cast<hcpp::i32>(text_line_height(size_px));
-        const FontGlyphSdf space = font_glyph(' ');
         const hcpp::i32 space_w =
-            space.valid() ? scaled(space.advance, scale_q8)
-                          : scaled(static_cast<hcpp::i32>(font_em_px()) / 3,
-                                   scale_q8);
+            q8_to_px(rast::advance_q8(' ', size_px)) != 0
+                ? q8_to_px(rast::advance_q8(' ', size_px))
+                : q8_to_px(units_to_q8(
+                      static_cast<hcpp::i32>(font_em_px()) / 3, size_px));
         const hcpp::size_t length = text.size();
         hcpp::size_t pos = 0;
         hcpp::i32 y = rect.y;
@@ -368,10 +341,10 @@ namespace hype::font {
                        text[word_end] != '\n') {
                     ++word_end;
                 }
-                const hcpp::i32 word_w = span_advance(
+                const hcpp::i32 word_w = q8_to_px(span_advance_q8(
                     hcpp::StringView(text.data() + word_start,
                                      word_end - word_start),
-                    scale_q8);
+                    size_px));
                 const hcpp::i32 next_w =
                     first_word ? word_w : line_w + space_w + word_w;
                 if (!first_word && next_w > rect.w) {
@@ -391,10 +364,10 @@ namespace hype::font {
             } else if (align == TextAlign::Right) {
                 draw_x = rect.x + rect.w - line_w;
             }
-            draw_run(plot, draw_x, y + static_cast<hcpp::i32>(size_px),
+            draw_run(plot, draw_x, baseline_for(y, size_px),
                      hcpp::StringView(text.data() + line_start,
                                       line_end - line_start),
-                     scale_q8, 0, false);
+                     size_px, 0, false);
             y += line_height;
             used += line_height;
             pos = line_end;
@@ -408,8 +381,7 @@ namespace hype::font {
     void text_shadow(hcpp::graphics::Framebuffer& fb, hcpp::i32 x, hcpp::i32 y,
                      hcpp::StringView text, hcpp::u32 size_px, hcpp::u32 color,
                      hcpp::i32 shadow_offset, hcpp::i32 blur) noexcept {
-        const hcpp::u32 scale_q8 = text_scale_q8(size_px);
-        if (!hypefont_ready() || scale_q8 == 0 || text.empty()) {
+        if (!hypefont_ready() || text_scale_q8(size_px) == 0 || text.empty()) {
             return;
         }
         const hcpp::i32 text_w = text_measure(text, size_px);
@@ -432,8 +404,8 @@ namespace hype::font {
         mask_plot.off_x = origin_x;
         mask_plot.off_y = origin_y;
         mask_plot.clip = Rect{origin_x, origin_y, mask_w, mask_h};
-        draw_run(mask_plot, x, y + static_cast<hcpp::i32>(size_px), text,
-                 scale_q8, 0, false);
+        draw_run(mask_plot, x, baseline_for(y, size_px), text, size_px, 0,
+                 false);
         blur_mask(text_mask, mask_w, mask_h, blur / 2);
         const hcpp::i32 sx = origin_x + shadow_offset;
         const hcpp::i32 sy = origin_y + shadow_offset;
@@ -473,8 +445,7 @@ namespace hype::font {
     }
 
     bool text_selftest() noexcept {
-        if (!hypefont_ready() &&
-            !hypefont_load(montserrat_sdf_hfnt, montserrat_sdf_hfnt_size)) {
+        if (!hypefont_ready() && !font_init()) {
             return false;
         }
         static hcpp::u8 pixels[160 * 96 * 4] = {};
@@ -494,9 +465,9 @@ namespace hype::font {
         text_shadow(fb, 4, 40, "HypeAI", 24, white, 3, 4);
         const hcpp::u32 shadow_ink = inked_pixels(fb, bg, full, white, nullptr);
         const hcpp::i32 expected = text_measure("HypeAI", 24);
-        const bool sdf_ok = ink > 0 && mid > 0 && drawn == expected &&
+        const bool ttf_ok = ink > 0 && mid > 0 && drawn == expected &&
                             expected > 0 && shadow_ink > ink;
-        serial::write_line(sdf_ok ? "text sdf=ok" : "text sdf=fail");
+        serial::write_line(ttf_ok ? "text ttf=ok" : "text ttf=fail");
 
         fb.clear(bg);
         const hcpp::i32 line_height =
@@ -517,7 +488,7 @@ namespace hype::font {
         const bool cyr_ok = cyr_ink > 0;
         serial::write_line(cyr_ok ? "text cyr=ok" : "text cyr=fail");
 
-        return sdf_ok && wrap_ok && cyr_ok;
+        return ttf_ok && wrap_ok && cyr_ok;
     }
 
 }  // namespace hype::font
