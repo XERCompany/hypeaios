@@ -10,6 +10,7 @@
 #include "kernel/ui/flex.h"
 #include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/selftest.h"
+#include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
 #include "kernel/ui/widgets/alert.h"
@@ -332,6 +333,11 @@ namespace hype::ui {
         serial::write_line(
             showcase_ok && subtree_within(window, window_rect) ? "ok" : "fail");
         paint_codec_image(canvas, window_rect);
+        if (hype::font::hypefont_ready()) {
+            draw_text_sdf_shadow(canvas, window_rect.right() - 168,
+                                 window_rect.y + 12, "HypeAI SDF", 14,
+                                 canvas.color(theme.accent), 2, 3);
+        }
 
         if (overlays.toasts().count() == 0) {
             overlays.toasts().show("desktop painted \xE2\x80\x94 widgets online",
