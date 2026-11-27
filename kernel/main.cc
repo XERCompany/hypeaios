@@ -21,7 +21,9 @@
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/db/hypedb.hpp"
+#include "kernel/db/hypevfs.h"
 #include "kernel/display/clientdisplay.h"
+#include "kernel/display/hgc.h"
 #include "kernel/display/idscreen.h"
 #include "kernel/display/selftest.h"
 #include "kernel/font/hypefont.h"
@@ -34,6 +36,7 @@
 #include "kernel/interrupts/idt.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
+#include "kernel/svc/revsvc.h"
 #include "kernel/ui/demo.h"
 #include "kernel/ui/flowlogin.h"
 #include "kernel/video/videov4lv.h"
@@ -420,6 +423,50 @@ namespace {
         }
     }
 
+    bool svc_gfx_start() noexcept {
+        return hype::gfx::gfx_selftest();
+    }
+
+    bool svc_font_start() noexcept {
+        return hype::font::hypefont_ready();
+    }
+
+    bool svc_codecs_start() noexcept {
+        return hype::codec::codec_count() != 0;
+    }
+
+    bool svc_display_start() noexcept {
+        return hype::display::hgc_ready();
+    }
+
+    bool svc_vfs_start() noexcept {
+        return hypevfs_mem_methods() != nullptr;
+    }
+
+    bool svc_sqlite_start() noexcept {
+        return hype::db::db_handle() != nullptr;
+    }
+
+    bool svc_hda_start() noexcept {
+        return hype::audio::ready();
+    }
+
+    void stage_svc() noexcept {
+        using hype::svc::SvcRestart;
+        hype::svc::svc_register("gfx", svc_gfx_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("font", svc_font_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("codecs", svc_codecs_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("display", svc_display_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("vfs", svc_vfs_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("sqlite", svc_sqlite_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("hda", svc_hda_start, nullptr, SvcRestart::OnFail, true);
+        const hcpp::u32 started = hype::svc::svc_autostart();
+        serial::write("svc autostart=");
+        serial::write_dec32(started);
+        serial::write("\r\n");
+        report("svc selftest=", hype::svc::svc_selftest());
+    }
+
     void stage_ui() noexcept {
         const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
         hcpp::u32 cyrillic_found = 0;
@@ -488,8 +535,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"display", 70, stage_display},
         {"vfs", 84, stage_vfs},
         {"ui", 95, stage_ui},
+        {"svc", 98, stage_svc},
     };
-    hype::boot::bootseq_run(boot_steps, 7);
+    hype::boot::bootseq_run(boot_steps, 8);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         serial::write_line("boot info missing or invalid");
