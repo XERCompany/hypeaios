@@ -1,14 +1,19 @@
 #include "kernel/display/selftest.h"
 
+#include "hcpp/display/edid.hpp"
 #include "hcpp/display/hdr.hpp"
 #include "hcpp/graphics/framebuffer.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/display/display_huxga.h"
 #include "kernel/display/display_qxga.h"
 #include "kernel/display/display_wvga.h"
+#include "kernel/display/displaydpi.h"
 #include "kernel/display/displayhda.h"
 #include "kernel/display/displaysize.h"
+#include "kernel/display/edidcta.h"
 #include "kernel/display/hgc.h"
+#include "kernel/display/id-stat.h"
+#include "kernel/display/idscreen.h"
 #include "kernel/display/pal.h"
 #include "kernel/display/scaler.h"
 #include "kernel/display/scaleuhd.h"
@@ -310,7 +315,275 @@ namespace hype::display {
             return true;
         }
 
+        void edid_fix_checksum(hcpp::u8* block) noexcept {
+            hcpp::u8 sum = 0;
+            for (hcpp::u32 i = 0; i < 127; ++i) {
+                sum = static_cast<hcpp::u8>(sum + block[i]);
+            }
+            block[127] = static_cast<hcpp::u8>(0 - sum);
+        }
+
+        void build_synthetic_edid(hcpp::u8* edid) noexcept {
+            for (hcpp::u32 i = 0; i < 128; ++i) {
+                edid[i] = 0;
+            }
+            edid[0] = 0x00;
+            for (hcpp::u32 i = 1; i < 7; ++i) {
+                edid[i] = 0xFF;
+            }
+            edid[7] = 0x00;
+            edid[8] = 0x22;
+            edid[9] = 0x09;
+            edid[10] = 0x04;
+            edid[11] = 0xD2;
+            edid[12] = 0x04;
+            edid[13] = 0x03;
+            edid[14] = 0x02;
+            edid[15] = 0x01;
+            edid[16] = 1;
+            edid[17] = 34;
+            edid[18] = 1;
+            edid[19] = 4;
+            edid[20] = 0xA5;
+            edid[21] = 52;
+            edid[22] = 29;
+            edid[23] = 120;
+            edid[24] = 0x02;
+            edid[126] = 1;
+            edid_fix_checksum(edid);
+        }
+
+        void build_synthetic_cta(hcpp::u8* cta) noexcept {
+            for (hcpp::u32 i = 0; i < 128; ++i) {
+                cta[i] = 0;
+            }
+            cta[0] = 0x02;
+            cta[1] = 0x03;
+            cta[3] = 0x70;
+            hcpp::u32 position = 4;
+            cta[position++] = 0x43;
+            cta[position++] = 0x84;
+            cta[position++] = 0x10;
+            cta[position++] = 0x1F;
+            cta[position++] = 0x26;
+            cta[position++] = 0x09;
+            cta[position++] = 0x07;
+            cta[position++] = 0x07;
+            cta[position++] = 0x15;
+            cta[position++] = 0x07;
+            cta[position++] = 0x50;
+            cta[position++] = 0x83;
+            cta[position++] = 0x4F;
+            cta[position++] = 0x00;
+            cta[position++] = 0x00;
+            cta[position++] = 0x68;
+            cta[position++] = 0x03;
+            cta[position++] = 0x0C;
+            cta[position++] = 0x00;
+            cta[position++] = 0x10;
+            cta[position++] = 0x00;
+            cta[position++] = 0xA8;
+            cta[position++] = 0x28;
+            cta[position++] = 0x00;
+            cta[2] = static_cast<hcpp::u8>(position);
+            edid_fix_checksum(cta);
+        }
+
+        bool output_id_selftest(const hcpp::u8* edid) noexcept {
+            const OutputId id0 = idscreen_register(edid, 0);
+            const OutputId id1 = idscreen_register(edid, 1);
+            if (id0 == output_id_none || id1 == output_id_none || id0 == id1) {
+                return false;
+            }
+            if (idscreen_register(edid, 0) != id0 || idscreen_register(edid, 1) != id1) {
+                return false;
+            }
+            if (idscreen_id_for(edid, 0) != id0 || idscreen_id_for(edid, 2) == id0) {
+                return false;
+            }
+            if (idscreen_count() != 2) {
+                return false;
+            }
+            const OutputDescriptor* first = idscreen_find(id0);
+            const OutputDescriptor* second = idscreen_find(id1);
+            if (first == nullptr || second == nullptr) {
+                return false;
+            }
+            if (first->connector != 0 || second->connector != 1) {
+                return false;
+            }
+            if (first->product_code != 0xD204 || first->serial_number != 0x01020304) {
+                return false;
+            }
+            if (first->manufacturer[0] != 'H' || first->manufacturer[1] != 'P' ||
+                first->manufacturer[2] != 'I') {
+                return false;
+            }
+            if (idscreen_find(0xDEADBEEFull) != nullptr || idscreen_at(0) != first ||
+                idscreen_at(1) != second || idscreen_at(2) != nullptr) {
+                return false;
+            }
+            if (idscreen_register(nullptr, 0) != output_id_none) {
+                return false;
+            }
+            OutputStatus* stat = output_stat_for(id0);
+            if (stat == nullptr || stat->output_id != id0 || !stat->valid) {
+                return false;
+            }
+            if (!output_stat_set_link(id0, OutputLink::Up) ||
+                !output_stat_set_mode(id0, 13)) {
+                return false;
+            }
+            if (!output_stat_present(id0, 42) || !output_stat_present(id0, 100)) {
+                return false;
+            }
+            const OutputStatus* readback = output_stat_read(id0);
+            if (readback == nullptr || readback->frames_presented != 2 ||
+                readback->last_present_ticks != 100 ||
+                readback->link_state != OutputLink::Up ||
+                readback->active_mode_idx != 13) {
+                return false;
+            }
+            if (output_stat_read(id1) != nullptr || output_stat_count() != 1) {
+                return false;
+            }
+            if (output_stat_for(output_id_none) != nullptr) {
+                return false;
+            }
+            return true;
+        }
+
+        bool cta_selftest(const hcpp::u8* edid, const hcpp::u8* cta) noexcept {
+            CtaInfo info;
+            if (!cta_parse(cta, info)) {
+                return false;
+            }
+            if (!info.present || !info.checksum_ok || info.revision != 3) {
+                return false;
+            }
+            if (!info.basic_audio || !info.ycbcr444 || !info.ycbcr422 || info.underscan) {
+                return false;
+            }
+            if (info.data_block_count != 4) {
+                return false;
+            }
+            if (info.video_count != 3) {
+                return false;
+            }
+            if (info.videos[0].vic != 4 || !info.videos[0].native ||
+                info.videos[1].vic != 16 || info.videos[1].native ||
+                info.videos[2].vic != 31 || info.videos[2].native) {
+                return false;
+            }
+            if (!cta_has_vic(info, 16) || cta_has_vic(info, 95) ||
+                cta_native_vic(info) != 4) {
+                return false;
+            }
+            if (info.audio_count != 2) {
+                return false;
+            }
+            if (info.audios[0].format_code != 1 || info.audios[0].max_channels != 2 ||
+                info.audios[0].sample_rates != 0x07 || info.audios[0].detail != 0x07) {
+                return false;
+            }
+            if (info.audios[1].format_code != 2 || info.audios[1].max_channels != 6 ||
+                info.audios[1].detail != 0x50) {
+                return false;
+            }
+            if (!info.speaker_present || info.speaker_map != 0x4F) {
+                return false;
+            }
+            if (!info.hdmi_present || info.hdmi_phys_address != 0x1000 || !info.hdmi_ai ||
+                !info.hdmi_dc_36 || info.hdmi_dc_30 || !info.hdmi_dc_y444 ||
+                info.hdmi_max_tmds_mhz != 200) {
+                return false;
+            }
+            CtaInfo non_cta;
+            if (cta_parse(edid, non_cta) || non_cta.present) {
+                return false;
+            }
+            if (cta_parse(nullptr, non_cta)) {
+                return false;
+            }
+            static hcpp::u8 foreign[128];
+            for (hcpp::u32 i = 0; i < 128; ++i) {
+                foreign[i] = 0;
+            }
+            foreign[0] = 0x70;
+            if (cta_parse(foreign, non_cta) || non_cta.present) {
+                return false;
+            }
+            return true;
+        }
+
+        bool dpi_selftest() noexcept {
+            if (dpi_table_count() != 17 || dpi_table[0] != 96 ||
+                dpi_table[dpi_table_count() - 1] != 480) {
+                return false;
+            }
+            if (dpi_exact(1920, 1080, 521) != 107 || dpi_for(1920, 1080, 521) != 96) {
+                return false;
+            }
+            if (dpi_exact(2560, 1440, 600) != 124 || dpi_for(2560, 1440, 600) != 120) {
+                return false;
+            }
+            if (dpi_for(3840, 2160, 600) != 192) {
+                return false;
+            }
+            if (dpi_for(1920, 1080, 0) != 96 || dpi_exact(0, 0, 300) != 96) {
+                return false;
+            }
+            if (dpi_quantize(96) != 96 || dpi_quantize(480) != 480 ||
+                dpi_quantize(4000) != 480 || dpi_quantize(10) != 96) {
+                return false;
+            }
+            if (scale_factor_for(96) != DpiScale::X100 ||
+                scale_factor_for(119) != DpiScale::X100 ||
+                scale_factor_for(120) != DpiScale::X125 ||
+                scale_factor_for(144) != DpiScale::X150 ||
+                scale_factor_for(191) != DpiScale::X150 ||
+                scale_factor_for(192) != DpiScale::X200 ||
+                scale_factor_for(480) != DpiScale::X200) {
+                return false;
+            }
+            if (scale_percent_for(150) != 150 || scale_q16_for(200) != 131072) {
+                return false;
+            }
+            return true;
+        }
+
     }  // namespace
+
+    bool display2_selftest() noexcept {
+        static hcpp::u8 edid[128];
+        static hcpp::u8 cta[128];
+        build_synthetic_edid(edid);
+        build_synthetic_cta(cta);
+        const hcpp::display::EdidInfo base = hcpp::display::parse_edid_base(edid);
+        if (!base.header_valid || !base.checksum_ok || base.extension_count != 1) {
+            serial::write_line("disp id=fail");
+            return false;
+        }
+        if (!output_id_selftest(edid)) {
+            serial::write_line("disp id=fail");
+            return false;
+        }
+        serial::write("disp outputs=");
+        serial::write_dec32(idscreen_count());
+        serial::write("\r\n");
+        if (!cta_selftest(edid, cta)) {
+            serial::write_line("disp cta=fail");
+            return false;
+        }
+        serial::write_line("disp cta=ok");
+        if (!dpi_selftest()) {
+            serial::write_line("disp dpi=fail");
+            return false;
+        }
+        serial::write_line("disp dpi=ok");
+        serial::write_line("disp id ok");
+        return true;
+    }
 
     bool display_selftest() noexcept {
         serial::write("disp modes=");

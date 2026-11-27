@@ -19,6 +19,7 @@
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/db/hypedb.hpp"
+#include "kernel/display/idscreen.h"
 #include "kernel/display/selftest.h"
 #include "kernel/hello/hello.h"
 #include "kernel/input/keyring.h"
@@ -125,6 +126,12 @@ namespace {
 
         serial::write("monitor name=");
         serial::write_line(report.edid.monitor_name[0] != '\0' ? report.edid.monitor_name : "unknown");
+        const hype::display::OutputId output_id = hype::display::idscreen_register(edid_data, 0);
+        serial::write("output id=");
+        serial::write_hex64(output_id);
+        serial::write(" connector=0 outputs=");
+        serial::write_dec32(hype::display::idscreen_count());
+        serial::write("\r\n");
         serial::write("monitor manufacturer=");
         serial::write(report.edid.manufacturer);
         serial::write(" product=");
@@ -349,6 +356,8 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_line(hcpp::ecdsa_selftest() ? "ok" : "failed");
     const bool display_core_ok = hype::display::display_selftest();
     report("display core selftest=", display_core_ok);
+    const bool display2_ok = hype::display::display2_selftest();
+    report("display id/dpi/cta selftest=", display2_ok);
     if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
         serial::write_line("sqlite=ok");
         serial::write("db selftest=");
