@@ -14,8 +14,9 @@ namespace hype::audio {
         hcpp::u8 dma16;
     };
 
-    const IsaAudioDevice *isau_devices() noexcept;
-    hcpp::size_t isau_device_count() noexcept;
-    AudioCard isau_card(const IsaAudioDevice &device) noexcept;
+    const IsaAudioDevice *audioisa_devices() noexcept;
+    hcpp::size_t audioisa_device_count() noexcept;
+    AudioCard audioisa_card(const IsaAudioDevice &device) noexcept;
+    bool isa_selftest() noexcept;
 
 }  // namespace hype::audio
