@@ -130,6 +130,7 @@ namespace hype::audio::hda {
         hcpp::u8 dac_node;
         hcpp::u8 pin_node;
         hcpp::u8 connect_index;
+        hcpp::u16 format;
         hcpp::u32 buffer_phys;
         hcpp::u32 buffer_bytes;
         hcpp::u32 bdl_phys;
@@ -187,5 +188,13 @@ namespace hype::audio::hda {
                         hcpp::u8 &gain, bool &mute) noexcept;
     bool hda_topology_walk(HdaController &controller, hcpp::u8 codec,
                            HdaTopology &topology) noexcept;
+
+    constexpr hcpp::u16 hda_format_invalid = 0xFFFFu;
+    hcpp::u16 hda_format_word(hcpp::u32 rate, hcpp::u8 channels, hcpp::u8 bits) noexcept;
+    bool hda_stream_open(HdaController &controller, hcpp::u8 codec, HdaPlayback &playback,
+                         hcpp::u16 format, hcpp::u32 period_bytes,
+                         hcpp::u16 bdl_entries) noexcept;
+    bool hda_stream_run(HdaController &controller, HdaPlayback &playback) noexcept;
+    bool hda_stream_halt(HdaController &controller, HdaPlayback &playback) noexcept;
 
 }  // namespace hype::audio::hda
