@@ -20,7 +20,7 @@
 #include "kernel/display/idscreen.h"
 #include "kernel/display/msthub.h"
 #include "kernel/display/multidisplay-mode.h"
-#include "kernel/display/multidisplay-swich.h"
+#include "kernel/display/multidisplay-switch.h"
 #include "kernel/display/multidisplay.h"
 #include "kernel/display/pal.h"
 #include "kernel/display/scrnmap.h"
