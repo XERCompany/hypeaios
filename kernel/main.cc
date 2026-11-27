@@ -595,18 +595,6 @@ namespace {
                         mp3_file.rate = mp3_buf.format.sample_rate;
                         mp3_file.pos = 0;
                         mp3_file_decoded = true;
-                        const hcpp::u32 pcm_out =
-                            mp3_buf.frames * mp3_buf.format.channels * 2;
-                        hype::vfs::fs_delete(mp3_test_path);
-                        if (hype::vfs::fs_write(
-                                "HYPEOS://U/music/test.pcm", mp3_buf.data,
-                                pcm_out < 300 * 1024 ? pcm_out : 300 * 1024) ==
-                            hype::vfs::FsStatus::Ok) {
-                            serial::write_line("mp3 pcm=flushed");
-                            hype::vfs::hypeblob_sync();
-                        } else {
-                            serial::write_line("mp3 pcm=nospace");
-                        }
                     } else {
                         serial::write_line("mp3 dec=fail");
                     }
