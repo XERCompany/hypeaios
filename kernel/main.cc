@@ -463,6 +463,7 @@ namespace {
         serial::write_line(vfs_selftest.io_ok ? "ok" : "fail");
         report("vfs selftest=", vfs_ok && vfs_seeded &&
                                    hype::vfs::fs_disk_count() == 3);
+        report("audio api selftest=", hype::audio::audio_api_selftest());
         if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
             serial::write_line("sqlite=ok");
             serial::write("db selftest=");

@@ -1,3 +1,4 @@
+#include "hcpp/memory.hpp"
 #include "kernel/audio/alacdecoder.h"
 #include "kernel/audio/alacencdoer.h"
 #include "kernel/audio/alsaau.h"
@@ -10,7 +11,11 @@
 #include "kernel/audio/audioparse.h"
 #include "kernel/audio/dvdeca.h"
 #include "kernel/audio/waveform.h"
+#include "kernel/codecapps/arena.h"
+#include "kernel/codecapps/registry.h"
+#include "kernel/memory/pmm.h"
 #include "kernel/serial.hpp"
+#include "kernel/vfs/hypefs.h"
 
 extern "C" void hype_audio_pcm_copy(void *dst, const void *src, hcpp::u64 bytes) noexcept;
 
@@ -19,6 +24,12 @@ namespace hype::audio {
         constexpr hcpp::u32 max_streams = 4;
         constexpr hcpp::u32 max_clients = 8;
         constexpr hcpp::u32 stage_capacity = 16 * 1024;
+        constexpr hcpp::size_t max_decoders = 24;
+
+        struct DecoderSlot {
+            AudioDecoderEntry entry;
+            codec::CodecId bridged;
+        };
 
         struct AudioStream {
             bool used;
@@ -31,7 +42,7 @@ namespace hype::audio {
         AudioStream streams[max_streams];
         AudioClient clients[max_clients];
         hcpp::u32 client_count;
-        AudioDecoderEntry decoders[max_audio_cards];
+        DecoderSlot decoders[max_decoders];
         hcpp::size_t decoder_count;
         AudioFunctionNode function_nodes[max_audio_cards * audiofudev_max_nodes];
         hcpp::u8 function_node_counts[max_audio_cards];
@@ -55,6 +66,79 @@ namespace hype::audio {
         bool alac_probe(const void *data, hcpp::u32 bytes) noexcept {
             AlacConfig config{};
             return alac_parse_cookie(data, bytes, config);
+        }
+
+        bool codec_audio_probe(const void *data, hcpp::u32 bytes) noexcept {
+            const codec::CodecDescriptor *descriptor =
+                codec::codec_info(codec::codec_probe(static_cast<const hcpp::u8 *>(data), bytes));
+            return descriptor != nullptr && descriptor->kind == codec::CodecKind::Audio;
+        }
+
+        codec::CodecId dvdeca_codec_id(AudioCodecId id) noexcept {
+            switch (id) {
+                case AudioCodecId::WavPcm:
+                    return codec::CodecId::Wav;
+                case AudioCodecId::Alac:
+                    return codec::CodecId::Alac;
+                case AudioCodecId::Mp2:
+                    return codec::CodecId::Mp3;
+                case AudioCodecId::Flac:
+                    return codec::CodecId::Flac;
+                case AudioCodecId::Vorbis:
+                    return codec::CodecId::Vorbis;
+                case AudioCodecId::Opus:
+                    return codec::CodecId::Opus;
+                case AudioCodecId::Aac:
+                    return codec::CodecId::Aac;
+                default:
+                    return codec::CodecId::Unknown;
+            }
+        }
+
+        AudioCodecId dvdeca_audio_id(codec::CodecId id) noexcept {
+            switch (id) {
+                case codec::CodecId::Wav:
+                case codec::CodecId::Adpcm:
+                    return AudioCodecId::WavPcm;
+                case codec::CodecId::Alac:
+                    return AudioCodecId::Alac;
+                case codec::CodecId::Mp3:
+                    return AudioCodecId::Mp2;
+                case codec::CodecId::Flac:
+                    return AudioCodecId::Flac;
+                case codec::CodecId::Vorbis:
+                    return AudioCodecId::Vorbis;
+                case codec::CodecId::Opus:
+                    return AudioCodecId::Opus;
+                case codec::CodecId::Aac:
+                    return AudioCodecId::Aac;
+                default:
+                    return AudioCodecId::Other;
+            }
+        }
+
+        void dvdeca_sync() noexcept {
+            const hcpp::size_t total = codec::codec_count();
+            for (hcpp::size_t i = 0; i < total; ++i) {
+                const codec::CodecDescriptor *descriptor = codec::codec_at(i);
+                if (descriptor == nullptr || descriptor->kind != codec::CodecKind::Audio) {
+                    continue;
+                }
+                bool seen = false;
+                for (hcpp::size_t j = 0; j < decoder_count; ++j) {
+                    if (decoders[j].bridged == descriptor->id) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (seen || decoder_count >= max_decoders) {
+                    continue;
+                }
+                DecoderSlot &slot = decoders[decoder_count++];
+                slot.entry = {dvdeca_audio_id(descriptor->id), descriptor->name,
+                              codec_audio_probe};
+                slot.bridged = descriptor->id;
+            }
         }
     }
 
@@ -172,6 +256,16 @@ namespace hype::audio {
         master_volume = percent > 100 ? 100 : percent;
     }
 
+    hcpp::u8 audio_volume_get() noexcept { return master_volume; }
+
+    bool audio_volume_set(hcpp::u8 percent) noexcept {
+        if (percent > 100) {
+            return false;
+        }
+        master_volume = percent;
+        return true;
+    }
+
     hcpp::u32 waveform_render_sine(hcpp::i16 *dst, hcpp::u32 frames, hcpp::u32 freq_hz, hcpp::u32 rate,
                                    hcpp::u8 channels) noexcept {
         if (dst == nullptr || frames == 0 || channels == 0) {
@@ -226,31 +320,135 @@ namespace hype::audio {
         return ok;
     }
 
-    int alsa_pcm_open(const AlsaPcmConfig &config) noexcept {
+    bool audio_play_file(const char *path) noexcept {
+        vfs::FsStat stat{};
+        if (path == nullptr ||
+            vfs::fs_stat(path, stat) != vfs::FsStatus::Ok ||
+            (stat.flags & vfs::FS_DIR) != 0 || stat.size == 0) {
+            return false;
+        }
+        const hcpp::size_t pages =
+            (stat.size + memory::page_size - 1) / memory::page_size;
+        codec::Arena arena{};
+        if (pages == 0 || !codec::arena_from_pmm(arena, pages)) {
+            return false;
+        }
+        hcpp::u8 *data = static_cast<hcpp::u8 *>(codec::arena_alloc(arena, stat.size, 8));
+        hcpp::u32 got = 0;
+        bool ok = data != nullptr &&
+                  vfs::fs_read(path, data, stat.size, &got) == vfs::FsStatus::Ok &&
+                  got == stat.size;
+        if (ok) {
+            const codec::CodecId id = codec::codec_probe(data, got);
+            codec::PcmBuf pcm{};
+            ok = codec::codec_decode(id, data, got, &pcm, arena) == codec::CodecStatus::Ok &&
+                 pcm.data != nullptr && pcm.frames != 0 &&
+                 audio_play_buffer(pcm.format, pcm.data,
+                                   static_cast<hcpp::u32>(pcm.frames));
+        }
+        codec::arena_release_pmm(arena, pages);
+        return ok;
+    }
+
+    int snd_pcm_open(const AlsaPcmConfig &config) noexcept {
         AudioStreamId stream = audio_stream_invalid;
         if (!audio_stream_open(config.format, stream)) {
-            return alsa_error;
+            return snd_pcm_invalid;
         }
         return static_cast<int>(stream);
     }
 
-    int alsa_pcm_writei(int handle, const void *frames, hcpp::u32 frame_count) noexcept {
+    int snd_pcm_writei(SndPcmHandle handle, const void *frames, hcpp::u32 frame_count) noexcept {
         return audio_stream_write(static_cast<AudioStreamId>(handle), frames, frame_count)
                    ? static_cast<int>(frame_count)
                    : alsa_error;
     }
 
-    int alsa_pcm_prepare(int handle) noexcept {
+    int snd_pcm_prepare(SndPcmHandle handle) noexcept {
         return stream_by_id(static_cast<AudioStreamId>(handle)) != nullptr ? 0 : alsa_error;
     }
 
-    void alsa_pcm_close(int handle) noexcept {
+    int snd_pcm_drain(SndPcmHandle handle) noexcept {
+        AudioStream *target = stream_by_id(static_cast<AudioStreamId>(handle));
+        if (target == nullptr) {
+            return alsa_error;
+        }
+        target->ring.read_pos = target->ring.write_pos;
+        return 0;
+    }
+
+    int snd_pcm_close(SndPcmHandle handle) noexcept {
+        if (stream_by_id(static_cast<AudioStreamId>(handle)) == nullptr) {
+            return alsa_error;
+        }
         audio_stream_close(static_cast<AudioStreamId>(handle));
+        return 0;
+    }
+
+    int snd_card_count() noexcept { return static_cast<int>(chip_count()); }
+
+    int alsa_pcm_open(const AlsaPcmConfig &config) noexcept {
+        return snd_pcm_open(config);
+    }
+
+    int alsa_pcm_writei(int handle, const void *frames, hcpp::u32 frame_count) noexcept {
+        return snd_pcm_writei(handle, frames, frame_count);
+    }
+
+    int alsa_pcm_prepare(int handle) noexcept {
+        return snd_pcm_prepare(handle);
+    }
+
+    void alsa_pcm_close(int handle) noexcept {
+        snd_pcm_close(handle);
+    }
+
+    bool riff_walk_begin(RiffWalker &walker, const void *data, hcpp::u32 size) noexcept {
+        const auto *bytes = static_cast<const hcpp::u8 *>(data);
+        walker = {};
+        if (bytes == nullptr || size < 12) {
+            return false;
+        }
+        const auto read32 = [&](hcpp::u32 at) noexcept -> hcpp::u32 {
+            return static_cast<hcpp::u32>(bytes[at]) | (static_cast<hcpp::u32>(bytes[at + 1]) << 8) |
+                   (static_cast<hcpp::u32>(bytes[at + 2]) << 16) |
+                   (static_cast<hcpp::u32>(bytes[at + 3]) << 24);
+        };
+        if (read32(0) != audio_tag("RIFF")) {
+            return false;
+        }
+        const hcpp::u32 riff_end = 8 + read32(4);
+        walker.base = bytes;
+        walker.offset = 12;
+        walker.end = riff_end < size ? riff_end : size;
+        return true;
+    }
+
+    bool riff_next_chunk(RiffWalker &walker, RiffChunk &chunk) noexcept {
+        if (walker.base == nullptr || walker.offset + 8 > walker.end) {
+            return false;
+        }
+        const auto *bytes = walker.base;
+        const auto read32 = [&](hcpp::u32 at) noexcept -> hcpp::u32 {
+            return static_cast<hcpp::u32>(bytes[at]) | (static_cast<hcpp::u32>(bytes[at + 1]) << 8) |
+                   (static_cast<hcpp::u32>(bytes[at + 2]) << 16) |
+                   (static_cast<hcpp::u32>(bytes[at + 3]) << 24);
+        };
+        chunk.fourcc = read32(walker.offset);
+        chunk.size = read32(walker.offset + 4);
+        chunk.data_offset = walker.offset + 8;
+        if (chunk.size > walker.end || chunk.data_offset > walker.end - chunk.size) {
+            return false;
+        }
+        walker.offset = chunk.data_offset + chunk.size + (chunk.size & 1);
+        return true;
     }
 
     bool wav_parse(const void *buffer, hcpp::u32 size, WavInfo &info) noexcept {
         const auto *bytes = static_cast<const hcpp::u8 *>(buffer);
-        if (bytes == nullptr || size < 12) {
+        info = {};
+        RiffWalker walker{};
+        if (!riff_walk_begin(walker, buffer, size)) {
             return false;
         }
         const auto read32 = [&](hcpp::u32 at) noexcept -> hcpp::u32 {
@@ -261,55 +459,86 @@ namespace hype::audio {
         const auto read16 = [&](hcpp::u32 at) noexcept -> hcpp::u16 {
             return static_cast<hcpp::u16>(bytes[at] | (bytes[at + 1] << 8));
         };
-        if (read32(0) != audio_tag("RIFF") || read32(8) != audio_tag("WAVE")) {
+        if (read32(8) != audio_tag("WAVE")) {
             return false;
         }
-        hcpp::u32 offset = 12;
         bool fmt_seen = false;
-        while (offset + 8 <= size) {
-            const hcpp::u32 tag = read32(offset);
-            const hcpp::u32 chunk = read32(offset + 4);
-            if (chunk > size || offset + 8 + chunk > size) {
-                break;
-            }
-            if (tag == audio_tag("fmt ") && chunk >= 16) {
-                info.audio_format_tag = read16(offset + 8);
-                info.format.channels = static_cast<hcpp::u8>(read16(offset + 10));
-                info.format.sample_rate = read32(offset + 12);
-                info.bits_per_sample = read16(offset + 22);
+        RiffChunk chunk{};
+        while (riff_next_chunk(walker, chunk)) {
+            if (chunk.fourcc == audio_tag("fmt ") && chunk.size >= 16) {
+                info.audio_format_tag = read16(chunk.data_offset);
+                info.format.channels = static_cast<hcpp::u8>(read16(chunk.data_offset + 2));
+                info.format.sample_rate = read32(chunk.data_offset + 4);
+                info.bits_per_sample = read16(chunk.data_offset + 14);
                 info.format.sample_format = info.bits_per_sample == 16 ? AudioSampleFormat::S16Le
                                             : info.bits_per_sample == 8  ? AudioSampleFormat::U8
                                                                        : AudioSampleFormat::Float32;
                 fmt_seen = true;
-            } else if (tag == audio_tag("data") && fmt_seen) {
-                info.sample_data = bytes + offset + 8;
-                info.data_offset = offset + 8;
-                info.sample_bytes = chunk;
+            } else if (chunk.fourcc == audio_tag("LIST") && chunk.size >= 4 &&
+                       read32(chunk.data_offset) == audio_tag("INFO")) {
+                const hcpp::u32 list_end = chunk.data_offset + chunk.size;
+                hcpp::u32 sub = chunk.data_offset + 4;
+                while (sub + 8 <= list_end) {
+                    const hcpp::u32 sub_tag = read32(sub);
+                    const hcpp::u32 sub_size = read32(sub + 4);
+                    if (sub_size > list_end - sub - 8) {
+                        break;
+                    }
+                    ++info.tags.tag_count;
+                    char *dest = sub_tag == audio_tag("INAM")   ? info.tags.title
+                                 : sub_tag == audio_tag("IART") ? info.tags.artist
+                                 : sub_tag == audio_tag("ICMT") ? info.tags.comment
+                                                                : nullptr;
+                    if (dest != nullptr) {
+                        const hcpp::u32 limit = wav_tag_text_max - 1;
+                        const hcpp::u32 count = sub_size < limit ? sub_size : limit;
+                        for (hcpp::u32 i = 0; i < count; ++i) {
+                            dest[i] = static_cast<char>(bytes[sub + 8 + i]);
+                        }
+                        dest[count] = '\0';
+                    }
+                    sub += 8 + sub_size + (sub_size & 1);
+                }
+            } else if (chunk.fourcc == audio_tag("data") && fmt_seen) {
+                info.sample_data = bytes + chunk.data_offset;
+                info.data_offset = chunk.data_offset;
+                info.sample_bytes = chunk.size;
                 return true;
             }
-            offset += 8 + chunk + (chunk & 1);
         }
         return false;
     }
 
     bool dvdeca_register(const AudioDecoderEntry &entry) noexcept {
-        if (decoder_count >= max_audio_cards || entry.probe == nullptr) {
+        if (decoder_count >= max_decoders || entry.probe == nullptr) {
             return false;
         }
-        decoders[decoder_count++] = entry;
+        const codec::CodecId mapped = dvdeca_codec_id(entry.codec);
+        DecoderSlot &slot = decoders[decoder_count++];
+        slot.entry = entry;
+        slot.bridged = mapped;
+        if (mapped != codec::CodecId::Unknown && codec::codec_info(mapped) == nullptr) {
+            codec::codec_register({entry.name, codec::CodecKind::Audio, mapped,
+                                   codec::codec_flag_decode, nullptr,
+                                   codec::codec_stub_decode, codec::codec_stub_encode});
+        }
         return true;
     }
 
     const AudioDecoderEntry *dvdeca_find(AudioCodecId codec) noexcept {
+        dvdeca_sync();
         for (hcpp::size_t i = 0; i < decoder_count; ++i) {
-            if (decoders[i].codec == codec) {
-                return &decoders[i];
+            if (decoders[i].entry.codec == codec) {
+                return &decoders[i].entry;
             }
         }
         return nullptr;
     }
 
-    hcpp::size_t dvdeca_count() noexcept { return decoder_count; }
+    hcpp::size_t dvdeca_count() noexcept {
+        dvdeca_sync();
+        return decoder_count;
+    }
 
     void dvdeca_register_builtin() noexcept {
         dvdeca_register({AudioCodecId::WavPcm, "wav/pcm", wav_probe});
@@ -792,6 +1021,64 @@ namespace hype::audio {
         } else {
             serial::write("alac=unsupported\r\n");
         }
+        return ok;
+    }
+
+    bool audio_api_selftest() noexcept {
+        static const hcpp::u8 tagged_wav[] = {
+            'R', 'I', 'F', 'F', 0x5E, 0x00, 0x00, 0x00, 'W', 'A', 'V', 'E',
+            'f', 'm', 't', ' ', 0x10, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x01, 0x00, 0x40, 0x1F, 0x00, 0x00,
+            0x80, 0x3E, 0x00, 0x00, 0x02, 0x00, 0x10, 0x00,
+            'L', 'I', 'S', 'T', 0x2A, 0x00, 0x00, 0x00, 'I', 'N', 'F', 'O',
+            'I', 'N', 'A', 'M', 0x04, 0x00, 0x00, 0x00, 'P', '1', '1', 0x00,
+            'I', 'A', 'R', 'T', 0x06, 0x00, 0x00, 0x00, 'D', 'e', 'v', 'i', 'n', 0x00,
+            'I', 'C', 'M', 'T', 0x04, 0x00, 0x00, 0x00, 'O', 'k', '!', 0x00,
+            'd', 'a', 't', 'a', 0x08, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xFF, 0x7F, 0x00, 0x80, 0x34, 0x12
+        };
+        bool ok = true;
+        WavInfo tagged{};
+        const bool parsed = wav_parse(tagged_wav, sizeof(tagged_wav), tagged);
+        const hcpp::u32 tag_count = parsed ? tagged.tags.tag_count : 0;
+        serial::write("riff tags=");
+        serial::write_dec32(tag_count);
+        serial::write("\r\n");
+        if (!parsed || tag_count != 3 || tagged.tags.title[0] != 'P' ||
+            tagged.tags.artist[0] != 'D' || tagged.tags.comment[0] != 'O' ||
+            tagged.format.channels != 1 || tagged.format.sample_rate != 8000 ||
+            tagged.sample_bytes != 8) {
+            ok = false;
+        }
+        const char *test_path = "HYPEOS://U/home/apitest.wav";
+        bool api_ok =
+            vfs::fs_write(test_path, tagged_wav, sizeof(tagged_wav)) == vfs::FsStatus::Ok &&
+            audio_play_file(test_path);
+        serial::write("audio api=");
+        serial::write_line(api_ok ? "ok" : "fail");
+        ok = ok && api_ok;
+        const AlsaPcmConfig pcm_config{{audio_default_rate, 2, AudioSampleFormat::S16Le}, 256, 4};
+        const int pcm = snd_pcm_open(pcm_config);
+        hcpp::i16 silence[256 * 2]{};
+        const bool abi_ok = pcm >= 0 && snd_pcm_prepare(pcm) == 0 &&
+                            snd_pcm_writei(pcm, silence, 256) == 256 &&
+                            snd_pcm_drain(pcm) == 0 && snd_pcm_close(pcm) == 0 &&
+                            snd_card_count() > 0;
+        serial::write("alsa abi=");
+        serial::write_line(abi_ok ? "ok" : "fail");
+        ok = ok && abi_ok;
+        const hcpp::u8 before = audio_volume_get();
+        ok = ok && audio_volume_set(55) && audio_volume_get() == 55 &&
+             !audio_volume_set(200);
+        audio_volume_set(before);
+        dvdeca_register_builtin();
+        const hcpp::size_t decoders_registered = dvdeca_count();
+        serial::write("dvdeca reg=");
+        serial::write_dec32(static_cast<hcpp::u32>(decoders_registered));
+        serial::write("\r\n");
+        ok = ok && decoders_registered >= 3 &&
+             dvdeca_find(AudioCodecId::WavPcm) != nullptr &&
+             dvdeca_find(AudioCodecId::Alac) != nullptr;
         return ok;
     }
 

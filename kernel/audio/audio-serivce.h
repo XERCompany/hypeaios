@@ -12,5 +12,6 @@ namespace hype::audio {
     const AudioCard *chip(hcpp::size_t index) noexcept;
     const AudioCard *primary_chip() noexcept;
     bool audio_format_selftest() noexcept;
+    bool audio_api_selftest() noexcept;
 
 }  // namespace hype::audio
