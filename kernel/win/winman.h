@@ -11,7 +11,7 @@ namespace hype::win {
     constexpr hcpp::i32 wm_chrome_height = 28;
     constexpr hcpp::i32 wm_cascade_step = 40;
 
-    enum class WinState : hcpp::u8 { Normal = 0, Focused = 1 };
+    enum class WinState : hcpp::u8 { Normal = 0, Focused = 1, Minimized = 2 };
 
     struct Win {
         hcpp::u32 id = 0;
@@ -26,6 +26,7 @@ namespace hype::win {
     hcpp::u32 wm_open(const char* app_name, hype::ui::Rect frame) noexcept;
     bool wm_close(hcpp::u32 id) noexcept;
     bool wm_focus(hcpp::u32 id) noexcept;
+    bool wm_set_minimized(hcpp::u32 id, bool minimized) noexcept;
     void wm_paint(hcpp::graphics::Framebuffer& fb) noexcept;
     void wm_invalidate(hype::ui::Rect region) noexcept;
     void wm_invalidate_all() noexcept;
@@ -39,6 +40,7 @@ namespace hype::win {
     bool wm_menu_visible() noexcept;
     hcpp::u32 wm_count() noexcept;
     const Win* wm_window(hcpp::u32 id) noexcept;
+    const Win* wm_window_at(hcpp::u32 index) noexcept;
     const Win* wm_focused() noexcept;
     bool wm_selftest() noexcept;
 

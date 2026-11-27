@@ -6,6 +6,7 @@
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/deskbar.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/text_render.h"
@@ -291,7 +292,8 @@ namespace hype::win {
         hcpp::u32 collect_order(hcpp::u32* order, bool ascending) noexcept {
             hcpp::u32 n = 0;
             for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
-                if (slots[i].id != 0) {
+                if (slots[i].id != 0 &&
+                    slots[i].state != WinState::Minimized) {
                     order[n++] = i;
                 }
             }
@@ -381,10 +383,41 @@ namespace hype::win {
             }
         }
         if (w->state != WinState::Focused) {
+            if (w->state == WinState::Minimized) {
+                damage_add(w->frame);
+            }
             w->state = WinState::Focused;
             damage_add(chrome_band(w->frame));
         }
         w->z = ++z_counter;
+        return true;
+    }
+
+    bool wm_set_minimized(hcpp::u32 id, bool minimized) noexcept {
+        Win* w = slot_for(id);
+        if (w == nullptr) {
+            return false;
+        }
+        if (minimized) {
+            if (w->state == WinState::Minimized) {
+                return true;
+            }
+            const bool was_focused = w->state == WinState::Focused;
+            w->state = WinState::Minimized;
+            damage_add(w->frame);
+            if (was_focused) {
+                hcpp::u32 top_order[wm_max_windows];
+                const hcpp::u32 n = collect_order(top_order, false);
+                if (n > 0) {
+                    wm_focus(slots[top_order[0]].id);
+                }
+            }
+            return true;
+        }
+        if (w->state == WinState::Minimized) {
+            w->state = WinState::Normal;
+            damage_add(w->frame);
+        }
         return true;
     }
 
@@ -495,10 +528,13 @@ namespace hype::win {
                 if (item == 0) {
                     serial::write_line("wm move=stub");
                 } else if (item == 1) {
-                    serial::write_line("wm minimize=stub");
+                    wm_set_minimized(target, true);
                 }
                 wm_menu_close();
             }
+            return true;
+        }
+        if (hype::ui::deskbar_handle_mouse(x, y, pressed)) {
             return true;
         }
         hcpp::u32 order[wm_max_windows];
@@ -546,6 +582,19 @@ namespace hype::win {
     }
 
     const Win* wm_window(hcpp::u32 id) noexcept { return slot_for(id); }
+
+    const Win* wm_window_at(hcpp::u32 index) noexcept {
+        for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
+            if (slots[i].id == 0) {
+                continue;
+            }
+            if (index == 0) {
+                return &slots[i];
+            }
+            --index;
+        }
+        return nullptr;
+    }
 
     const Win* wm_focused() noexcept {
         for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
