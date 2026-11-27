@@ -32,4 +32,14 @@ namespace hype::codec {
         return CodecStatus::Ok;
     }
 
+    bool audio_wav_query_tags(const hcpp::u8 *input, hcpp::size_t input_size,
+                              audio::WavTags &tags) noexcept {
+        audio::WavInfo info{};
+        if (input == nullptr || input_size > 0xFFFFFFFFu ||
+            !audio::wav_parse(input, static_cast<hcpp::u32>(input_size), info))
+            return false;
+        tags = info.tags;
+        return true;
+    }
+
 }  // namespace hype::codec
