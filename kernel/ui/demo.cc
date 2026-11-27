@@ -335,7 +335,7 @@ namespace hype::ui {
         paint_codec_image(canvas, window_rect);
         if (hype::font::hypefont_ready()) {
             draw_text_sdf_shadow(canvas, window_rect.right() - 168,
-                                 window_rect.y + 12, "HypeAI SDF", 14,
+                                 window_rect.y + 12, "HypeAI TTF", 14,
                                  canvas.color(theme.accent), 2, 3);
         }
 
