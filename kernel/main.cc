@@ -53,6 +53,7 @@
 #include "kernel/session/session.h"
 #include "kernel/svc/revsvc.h"
 #include "kernel/time/rtc.h"
+#include "kernel/ui/deskbar.h"
 #include "kernel/ui/selftest.h"
 #include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefile.h"
@@ -927,7 +928,11 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_line("cursor poll=active");
     for (;;) {
         const bool ptr_dirty = hype::input::cursor_poll();
-        if (hype::session::session_logged_in() && hype::win::wm_dirty()) {
+        const bool shell_active = hype::session::session_logged_in();
+        if (shell_active) {
+            hype::ui::deskbar_idle();
+        }
+        if (shell_active && hype::win::wm_dirty()) {
             hype::input::cursor_erase(framebuffer);
             hype::win::desk_paint(framebuffer);
             hype::input::cursor_draw(framebuffer);

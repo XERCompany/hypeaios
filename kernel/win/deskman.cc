@@ -4,6 +4,7 @@
 #include "kernel/hxrt/apps/speedstart.h"
 #include "kernel/win/deskbg.h"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/deskbar.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 #include "kernel/win/winman.h"
@@ -39,18 +40,17 @@ namespace hype::win {
             0, 0, static_cast<hcpp::i32>(fb.width()),
             static_cast<hcpp::i32>(fb.height())};
         const hype::ui::Rect clip = wm_damage_clip(screen);
-        if (clip.empty()) {
-            wm_paint(fb);
-            return wm_count();
-        }
-        hype::ui::Canvas canvas(fb);
-        const hype::ui::Theme& theme = hype::ui::theme_active();
-        canvas.set_clip(clip);
-        if (!desk_bg_paint_clip(fb, clip)) {
-            hype::gfx::gfx_gradient_v(canvas, screen, theme.bg,
-                                      hype::ui::rui_shade(theme.bg, 10));
+        if (!clip.empty()) {
+            hype::ui::Canvas canvas(fb);
+            const hype::ui::Theme& theme = hype::ui::theme_active();
+            canvas.set_clip(clip);
+            if (!desk_bg_paint_clip(fb, clip)) {
+                hype::gfx::gfx_gradient_v(canvas, screen, theme.bg,
+                                          hype::ui::rui_shade(theme.bg, 10));
+            }
         }
         wm_paint(fb);
+        hype::ui::deskbar_paint(fb, clip);
         if (first) {
             hype::hxrt::ss_selftest();
         }
