@@ -5,10 +5,16 @@
 #include "kernel/ui/box.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
+#include "kernel/ui/focus.h"
 #include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
+#include "kernel/ui/widgets/checkbox.h"
 #include "kernel/ui/widgets/dialog.h"
+#include "kernel/ui/widgets/label.h"
+#include "kernel/ui/widgets/radiogroup.h"
+#include "kernel/ui/widgets/switch.h"
+#include "kernel/ui/widgets/tabs.h"
 
 namespace hype::ui {
 
@@ -328,6 +334,130 @@ namespace hype::ui {
 
         const bool ok = open_ok && close_ok && alert_ok;
         serial::write_line(ok ? "ui2 overlay ok" : "ui2 overlay fail");
+        return ok;
+    }
+
+    bool focus_selftest() noexcept {
+        static WidgetTree tree;
+        static Flex column{FlexDirection::Column};
+        static Checkbox check{"alpha"};
+        static Switch toggle{"beta"};
+        static RadioGroup radio;
+        static Tabs tabs;
+        static Label page_one{"page one"};
+        static Label page_two{"page two"};
+        static FocusManager focus;
+        static hcpp::u32 change_events = 0;
+        static bool built = false;
+
+        if (!built) {
+            column.set_padding(Insets::uniform(8));
+            column.set_spacing(6);
+            column.set_cross_align(CrossAlign::Stretch);
+
+            radio.add_option("red");
+            radio.add_option("green");
+            radio.add_option("blue");
+            tabs.add_tab("first", &page_one);
+            tabs.add_tab("second", &page_two);
+            tabs.set_on_change(
+                [](Tabs&, hcpp::size_t, void* ctx) noexcept {
+                    ++*static_cast<hcpp::u32*>(ctx);
+                },
+                &change_events);
+
+            column.add_child(&check);
+            column.add_child(&toggle);
+            column.add_child(&radio);
+            column.add_child(&tabs);
+            tree.set_root(&column);
+
+            focus.add(&check);
+            focus.add(&toggle);
+            focus.add(&radio);
+            focus.add(&tabs);
+            built = true;
+        }
+
+        check.set_checked(false);
+        toggle.set_on(false);
+        radio.select(0);
+        tabs.activate(0);
+        change_events = 0;
+        focus.focus_at(0);
+        tree.layout_root(Rect{0, 0, 320, 240});
+
+        bool ok = focus.count() == 4 && focus.focus_index() == 0 &&
+                  focus.focused() == static_cast<Focusable*>(&check);
+        const bool order_ok =
+            ok && focus.handle_key(keys::tab) && focus.focus_index() == 1 &&
+            focus.handle_key(keys::tab) && focus.focus_index() == 2 &&
+            focus.handle_key(keys::tab) && focus.focus_index() == 3 &&
+            focus.handle_key(keys::tab) && focus.focus_index() == 0 &&
+            focus.handle_key(keys::backtab) && focus.focus_index() == 3 &&
+            focus.handle_key(keys::tab) && focus.focus_index() == 0;
+
+        const bool check_ok =
+            focus.handle_key(keys::space) && check.checked() &&
+            focus.handle_key(keys::space) && !check.checked() &&
+            focus.handle_key(keys::enter) && check.checked();
+
+        focus.handle_key(keys::tab);
+        const bool switch_ok =
+            focus.focused() == static_cast<Focusable*>(&toggle) &&
+            focus.handle_key(keys::space) && toggle.on() &&
+            toggle.position() == Switch::knob_steps &&
+            focus.handle_key(keys::space) && !toggle.on() &&
+            toggle.position() == 0;
+
+        focus.handle_key(keys::tab);
+        const bool radio_ok =
+            focus.focused() == static_cast<Focusable*>(&radio) &&
+            radio.option_count() == 3 &&
+            focus.handle_key(keys::down) && radio.selected() == 1 &&
+            focus.handle_key(keys::space) && radio.selected() == 2 &&
+            focus.handle_key(keys::up) && radio.selected() == 1 &&
+            focus.handle_key(keys::enter) && radio.selected() == 2;
+
+        focus.handle_key(keys::tab);
+        const bool tabs_ok =
+            focus.focused() == static_cast<Focusable*>(&tabs) &&
+            tabs.tab_count() == 2 &&
+            focus.handle_key(keys::right) && tabs.active() == 1 &&
+            page_two.is_visible() && !page_one.is_visible() &&
+            change_events == 1 &&
+            focus.handle_key(keys::left) && tabs.active() == 0 &&
+            page_one.is_visible() && change_events == 2;
+
+        focus.handle_key(keys::right);
+        const bool wrap_ok = tabs.active() == 1;
+
+        static hcpp::u8 pixels[320 * 240 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 320, 240, 320 * 4, 32, 8, 16,
+                                           8, 8, 8, 0);
+        bool ring_ok = false;
+        hcpp::u32 ring_pixel = 0;
+        if (target.valid()) {
+            Canvas canvas(target);
+            canvas.fill_rect(Rect{0, 0, 320, 240},
+                             canvas.color(theme_active().bg));
+            tree.layout_root(Rect{0, 0, 320, 240});
+            tree.paint_tree(canvas);
+            const Rect tb = tabs.bounds();
+            ring_pixel =
+                target.get_pixel(tb.x + 6, tb.y - 2);
+            ring_ok = ring_pixel == canvas.color(theme_active().ring);
+        }
+
+        serial::write("ui2 focus order=");
+        serial::write_dec32(static_cast<hcpp::u32>(focus.count()));
+        serial::write("\r\n");
+        serial::write("ui2 tabs sel=");
+        serial::write_dec32(static_cast<hcpp::u32>(tabs.active()));
+        serial::write("\r\n");
+        ok = order_ok && check_ok && switch_ok && radio_ok && tabs_ok &&
+             wrap_ok && ring_ok;
+        serial::write_line(ok ? "ui2 sel ok" : "ui2 sel fail");
         return ok;
     }
 
