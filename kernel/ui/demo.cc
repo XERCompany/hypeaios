@@ -5,10 +5,12 @@
 #include "kernel/interrupts/idt.h"
 #include "kernel/serial.hpp"
 #include "kernel/font/hypefont.h"
+#include "kernel/gfx/hypegfx.h"
 #include "kernel/ui/anim.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/demo_image_blob.h"
 #include "kernel/ui/flex.h"
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/selftest.h"
 #include "kernel/ui/text_render.h"
@@ -189,6 +191,7 @@ namespace hype::ui {
             column.set_cross_align(CrossAlign::Stretch);
 
             greeting.set_text("\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82, HypeAI OS");
+            greeting.set_text_size(16);
             status.set_text("fonts loaded, flex layout active, utf8 decoded");
             status.set_color(LabelColor::Muted);
 
@@ -323,7 +326,8 @@ namespace hype::ui {
         const Theme& theme = theme_active();
         const Rect screen{0, 0, static_cast<hcpp::i32>(framebuffer.width()),
                           static_cast<hcpp::i32>(framebuffer.height())};
-        canvas.fill_rect(screen, canvas.color(theme.bg));
+        hype::gfx::gfx_gradient_v(canvas, screen, theme.bg,
+                                  rui_shade(theme.bg, 10));
 
         const Rect window_rect = centered_window(screen, 720, 460);
 
@@ -336,6 +340,7 @@ namespace hype::ui {
         serial::write("rui text=");
         serial::write_line(hype::font::hypefont_ready() ? "ttf" : "bitmap");
         serial::write_line("rui elev=ok");
+        serial::write_line("ui polish=ok");
         paint_codec_image(canvas, window_rect);
         if (hype::font::hypefont_ready()) {
             draw_text_sdf_shadow(canvas, window_rect.right() - 168,

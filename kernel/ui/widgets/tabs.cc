@@ -1,5 +1,7 @@
 #include "kernel/ui/widgets/tabs.h"
 
+#include "kernel/font/hypefont.h"
+#include "kernel/font/hypetext.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -151,6 +153,8 @@ namespace hype::ui {
         canvas.draw_line(b.x, b.y + strip - 1, b.right() - 1, b.y + strip - 1,
                          canvas.color(theme.border));
         const hcpp::i32 tab_w = b.w / static_cast<hcpp::i32>(count_);
+        const hcpp::u32 label_px = theme.text_size + 1;
+        const bool ttf = hype::font::hypefont_ready() && label_px >= 10;
         for (hcpp::size_t i = 0; i < count_; ++i) {
             const hcpp::i32 tx = b.x + static_cast<hcpp::i32>(i) * tab_w;
             const bool current = i == active_;
@@ -159,7 +163,31 @@ namespace hype::ui {
                     Rect{tx + 6, b.y + strip - 3, tab_w - 12, 3}, 1,
                     canvas.color(theme.accent));
             }
-            if (face == nullptr || labels_[i].empty()) {
+            if (labels_[i].empty()) {
+                continue;
+            }
+            const hcpp::u32 label_rgb = current ? theme.fg : theme.muted_fg;
+            if (ttf) {
+                const hcpp::i32 text_w =
+                    hype::font::text_measure(labels_[i], label_px);
+                hcpp::i32 text_x = tx + (tab_w - text_w) / 2;
+                if (text_x < tx + 4) {
+                    text_x = tx + 4;
+                }
+                const hcpp::i32 line = static_cast<hcpp::i32>(
+                    hype::font::text_line_height(label_px));
+                hcpp::i32 top = b.y + (strip - 4 - line) / 2;
+                if (top < b.y) {
+                    top = b.y;
+                }
+                hype::font::text_draw_clip(
+                    canvas.target(), text_x, top, labels_[i],
+                    canvas.color(label_rgb), label_px,
+                    canvas.clip().intersection(
+                        Rect{tx + 4, b.y, tab_w - 8, strip - 3}));
+                continue;
+            }
+            if (face == nullptr) {
                 continue;
             }
             const Size text = text_extent(labels_[i], *face);
@@ -172,8 +200,7 @@ namespace hype::ui {
                 offset = 0;
             }
             canvas.draw_text(text_x, b.y + offset + face->baseline, labels_[i],
-                             canvas.color(current ? theme.fg : theme.muted_fg),
-                             *face);
+                             canvas.color(label_rgb), *face);
         }
         if (focused_) {
             draw_focus_ring(canvas, b);

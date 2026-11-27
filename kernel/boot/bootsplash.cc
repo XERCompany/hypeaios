@@ -2,6 +2,8 @@
 
 #include "hcpp/fonts/font.hpp"
 #include "hcpp/graphics/text.hpp"
+#include "kernel/font/hypefont.h"
+#include "kernel/font/hypetext.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
@@ -12,6 +14,9 @@ namespace hype::boot {
     namespace {
 
         constexpr hcpp::u32 wordmark_scale = 4;
+        constexpr hcpp::u32 wordmark_ttf_px = 56;
+        constexpr hcpp::u8 wordmark_ttf_weight = 96;
+        constexpr hcpp::u32 label_ttf_px = 14;
         constexpr hcpp::u32 bar_height = 8;
         constexpr hcpp::u32 bar_max_width = 420;
         constexpr hcpp::u32 spinner_dots = 8;
@@ -35,6 +40,11 @@ namespace hype::boot {
             hcpp::u32 spin_fallback = 0;
             hcpp::i32 spin_cx = 0;
             hcpp::i32 spin_cy = 0;
+            hcpp::u32 wordmark_x = 0;
+            hcpp::u32 wordmark_y = 0;
+            hcpp::u32 wordmark_w = 0;
+            hcpp::u32 wordmark_h = 0;
+            bool wordmark_ttf = false;
         };
 
         SplashState state{};
@@ -80,10 +90,61 @@ namespace hype::boot {
             boot_draw_text(*state.fb, state.bar_x, label_y, name, state.muted_fg, 1);
         }
 
+        void paint_wordmark() noexcept {
+            hcpp::graphics::Framebuffer& fb = *state.fb;
+            if (font::hypefont_ready()) {
+                const hcpp::i32 text_w =
+                    font::text_measure("HYPEAI OS", wordmark_ttf_px);
+                const hcpp::i32 text_h = static_cast<hcpp::i32>(
+                    font::text_line_height(wordmark_ttf_px));
+                state.wordmark_w =
+                    text_w > 0 ? static_cast<hcpp::u32>(text_w) : 0;
+                state.wordmark_h = text_h > 0 ? static_cast<hcpp::u32>(text_h)
+                                              : wordmark_ttf_px;
+                state.wordmark_x = fb.width() > state.wordmark_w
+                                       ? (fb.width() - state.wordmark_w) / 2
+                                       : 0;
+                state.wordmark_y =
+                    fb.height() > state.wordmark_h
+                        ? fb.height() * 2 / 5 - state.wordmark_h / 2
+                        : 0;
+                font::text_draw_styled(fb, static_cast<hcpp::i32>(state.wordmark_x),
+                                       static_cast<hcpp::i32>(state.wordmark_y),
+                                       "HYPEAI OS", state.fg, wordmark_ttf_px,
+                                       wordmark_ttf_weight, false);
+                state.wordmark_ttf = true;
+                serial::write_line("boot font=ttf");
+                return;
+            }
+            const hcpp::fonts::FontFace* face = hcpp::fonts::default_font();
+            state.wordmark_w =
+                face != nullptr
+                    ? static_cast<hcpp::u32>(
+                          ui::text_extent("HYPEAI OS", *face).width) *
+                          wordmark_scale
+                    : 0;
+            state.wordmark_h =
+                (face != nullptr ? face->height : 16) * wordmark_scale;
+            state.wordmark_x = fb.width() > state.wordmark_w
+                                   ? (fb.width() - state.wordmark_w) / 2
+                                   : 0;
+            state.wordmark_y = fb.height() > state.wordmark_h
+                                   ? fb.height() * 2 / 5 - state.wordmark_h / 2
+                                   : 0;
+            boot_draw_text(fb, state.wordmark_x, state.wordmark_y, "HYPEAI OS",
+                           state.fg, wordmark_scale);
+        }
+
     }  // namespace
 
     void boot_draw_text(hcpp::graphics::Framebuffer& fb, hcpp::u32 x, hcpp::u32 y,
                         hcpp::StringView text, hcpp::u32 color, hcpp::u32 scale) noexcept {
+        if (font::hypefont_ready()) {
+            font::text_draw(fb, static_cast<hcpp::i32>(x),
+                            static_cast<hcpp::i32>(y), text, color,
+                            scale * label_ttf_px);
+            return;
+        }
         hcpp::graphics::draw_text(fb, x, y, text, color, scale);
     }
 
@@ -108,18 +169,11 @@ namespace hype::boot {
             fb.fill_rect(0, y, fb.width(), 1, bg_row_color(y));
         }
 
-        const hcpp::fonts::FontFace* font = hcpp::fonts::default_font();
-        hcpp::u32 wordmark_w = 0;
-        if (font != nullptr) {
-            wordmark_w = static_cast<hcpp::u32>(ui::text_extent("HYPEAI OS", *font).width) *
-                         wordmark_scale;
+        state.wordmark_ttf = false;
+        if (!font::hypefont_ready()) {
+            font::font_init();
         }
-        const hcpp::u32 wordmark_h = (font != nullptr ? font->height : 16) * wordmark_scale;
-        const hcpp::u32 wordmark_x =
-            fb.width() > wordmark_w ? (fb.width() - wordmark_w) / 2 : 0;
-        const hcpp::u32 wordmark_y =
-            fb.height() > wordmark_h ? (fb.height() * 2 / 5) - wordmark_h / 2 : 0;
-        boot_draw_text(fb, wordmark_x, wordmark_y, "HYPEAI OS", state.fg, wordmark_scale);
+        paint_wordmark();
 
         state.bar_w = fb.width() - 80 < bar_max_width ? fb.width() - 80 : bar_max_width;
         state.bar_x = (fb.width() - state.bar_w) / 2;
@@ -152,6 +206,12 @@ namespace hype::boot {
         ++state.stage;
         paint_bar();
         paint_label(name);
+        if (!state.wordmark_ttf && state.wordmark_w != 0 &&
+            font::hypefont_ready()) {
+            fill_bg_region(state.wordmark_x, state.wordmark_y, state.wordmark_w,
+                           state.wordmark_h);
+            paint_wordmark();
+        }
         boot_splash_spinner();
         serial::write("boot splash stage=");
         serial::write_dec32(state.stage);
@@ -203,6 +263,9 @@ namespace hype::boot {
             state.fb->fill_rect(0, y, state.fb->width(), 1, bg_row_color(y));
         }
         state.fb = nullptr;
+        if (!state.wordmark_ttf) {
+            serial::write_line("boot font=bitmap");
+        }
         serial::write_line("boot splash=done");
     }
 
