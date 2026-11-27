@@ -6,7 +6,7 @@
 #include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
-#include "kernel/ui/overlays/toast.h"
+#include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
 #include "kernel/ui/widgets/button.h"
@@ -37,7 +37,7 @@ namespace hype::ui::flowlogin {
         Label method_label;
         TextInput secret;
         Button sign_in;
-        ToastHost toasts;
+        OverlayHost overlays;
         WidgetTree tree;
         bool built = false;
 
@@ -118,7 +118,7 @@ namespace hype::ui::flowlogin {
         const Rect window_rect = centered_window(screen, 440, 300);
         tree.layout_root(window_rect);
         tree.paint_tree(canvas);
-        toasts.paint(canvas, screen);
+        overlays.paint_overlays(canvas, screen);
     }
 
     hcpp::u32 show(hcpp::graphics::Framebuffer& framebuffer) noexcept {
@@ -133,7 +133,8 @@ namespace hype::ui::flowlogin {
         screen_state = State::Shown;
         secret.clear();
         secret.set_focused(true);
-        toasts.clear();
+        overlays.close();
+        overlays.toasts().clear();
         users::login_reset();
         if (session_uid != 0) {
             users::login_begin(session_uid);
@@ -146,6 +147,12 @@ namespace hype::ui::flowlogin {
     bool handle_char(char ascii) noexcept {
         if (screen_state != State::Shown) {
             return false;
+        }
+        if (overlays.handle_key(ascii)) {
+            if (screen_fb != nullptr && screen_state == State::Shown) {
+                repaint(*screen_fb);
+            }
+            return true;
         }
         bool consumed = true;
         if (ascii == '\n' || ascii == '\r') {
@@ -183,27 +190,27 @@ namespace hype::ui::flowlogin {
                 break;
             case hello::HelloResult::LockedOut:
                 secret.clear();
-                toasts.show("locked out", ToastKind::Error, "sign in");
+                overlays.toasts().show("locked out", ToastKind::Error, "sign in");
                 users::login_denied();
                 serial::write_line("ui login fail=locked");
                 break;
             case hello::HelloResult::BadSecret:
                 secret.clear();
-                toasts.show("wrong pin \xE2\x80\x94 try again",
+                overlays.toasts().show("wrong pin \xE2\x80\x94 try again",
                             ToastKind::Error, "sign in");
                 users::login_denied();
                 serial::write_line("ui login fail=toast");
                 break;
             case hello::HelloResult::NotEnrolled:
                 secret.clear();
-                toasts.show("credential not enrolled", ToastKind::Warning,
+                overlays.toasts().show("credential not enrolled", ToastKind::Warning,
                             "sign in");
                 users::login_denied();
                 serial::write_line("ui login fail=toast");
                 break;
             case hello::HelloResult::NoCamera:
                 secret.clear();
-                toasts.show("no camera present", ToastKind::Warning,
+                overlays.toasts().show("no camera present", ToastKind::Warning,
                             "sign in");
                 users::login_denied();
                 serial::write_line("ui login fail=toast");

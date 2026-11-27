@@ -47,6 +47,11 @@ namespace hype::ui {
 
     void Widget::paint(Canvas& canvas) noexcept { (void)canvas; }
 
+    bool Widget::handle_key(char ascii) noexcept {
+        (void)ascii;
+        return false;
+    }
+
     void Widget::layout_tree(const Rect& rect) noexcept {
         if (!visible_) {
             return;

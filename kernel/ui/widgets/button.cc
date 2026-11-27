@@ -49,10 +49,15 @@ namespace hype::ui {
             return;
         }
         const Theme& theme = theme_active();
-        const hcpp::u32 fill_rgb =
-            style_ == ButtonStyle::Accent ? theme.primary : theme.secondary;
-        const hcpp::u32 text_rgb =
-            style_ == ButtonStyle::Accent ? theme.primary_fg : theme.fg;
+        hcpp::u32 fill_rgb = theme.secondary;
+        hcpp::u32 text_rgb = theme.fg;
+        if (style_ == ButtonStyle::Accent) {
+            fill_rgb = theme.primary;
+            text_rgb = theme.primary_fg;
+        } else if (style_ == ButtonStyle::Destructive) {
+            fill_rgb = theme.destructive;
+            text_rgb = theme.primary_fg;
+        }
         const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_md);
         canvas.fill_rounded_rect(box, radius, canvas.color(fill_rgb));
         canvas.stroke_rounded_rect(box, radius, canvas.color(theme.border));

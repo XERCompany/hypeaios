@@ -6,7 +6,7 @@
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/demo_image_blob.h"
 #include "kernel/ui/flex.h"
-#include "kernel/ui/overlays/toast.h"
+#include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/selftest.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
@@ -85,6 +85,9 @@ namespace hype::ui {
         if (!focus_selftest()) {
             return 0;
         }
+        if (!overlay_selftest()) {
+            return 0;
+        }
         if (!framebuffer.valid()) {
             return 0;
         }
@@ -96,7 +99,7 @@ namespace hype::ui {
         static Flex buttons{FlexDirection::Row};
         static Button apply;
         static Button cancel;
-        static ToastHost toasts;
+        static OverlayHost overlays;
         static WidgetTree tree;
         static bool built = false;
 
@@ -142,11 +145,11 @@ namespace hype::ui {
         tree.paint_tree(canvas);
         paint_codec_image(canvas, window_rect);
 
-        if (toasts.count() == 0) {
-            toasts.show("desktop painted \xE2\x80\x94 widgets online",
-                        ToastKind::Success, "HypeAI OS");
+        if (overlays.toasts().count() == 0) {
+            overlays.toasts().show("desktop painted \xE2\x80\x94 widgets online",
+                                   ToastKind::Success, "HypeAI OS");
         }
-        toasts.paint(canvas, screen);
+        overlays.paint_overlays(canvas, screen);
 
         return widget_count(window);
     }

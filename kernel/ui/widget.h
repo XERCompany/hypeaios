@@ -15,6 +15,7 @@ namespace hype::ui {
         virtual Size measure(Size available) noexcept;
         virtual void layout(const Rect& rect) noexcept;
         virtual void paint(Canvas& canvas) noexcept;
+        virtual bool handle_key(char ascii) noexcept;
 
         void layout_tree(const Rect& rect) noexcept;
         void paint_tree(Canvas& canvas) noexcept;
