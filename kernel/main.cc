@@ -38,10 +38,12 @@
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
 #include "kernel/svc/revsvc.h"
-#include "kernel/ui/demo.h"
 #include "kernel/ui/flowlogin.h"
+#include "kernel/ui/selftest.h"
 #include "kernel/vfs/hypefs.h"
 #include "kernel/video/videov4lv.h"
+#include "kernel/win/deskman.h"
+#include "kernel/win/winman.h"
 
 using InitArrayFunction = void (*)();
 extern "C" InitArrayFunction __init_array_start[];
@@ -514,6 +516,17 @@ namespace {
         serial::write("/66 pixels=");
         serial::write_dec32(cyrillic_pixels);
         serial::write("\r\n");
+        const bool kit_ok = hype::ui::selftest() &&
+                            hype::ui::canvas2_selftest() &&
+                            hype::ui::theme2_selftest() &&
+                            hype::ui::focus_selftest() &&
+                            hype::ui::overlay_selftest() &&
+                            hype::ui::feedback_selftest() &&
+                            hype::ui::data_selftest() &&
+                            hype::ui::anim_selftest() &&
+                            hype::ui::entry_selftest();
+        report("ui kit selftests=", kit_ok);
+        report("wm selftest=", hype::win::wm_selftest());
     }
 
 }  // namespace
@@ -629,23 +642,22 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     if (hype::ui::flowlogin::authenticated() ||
         hype::ui::flowlogin::state() ==
             hype::ui::flowlogin::State::Unavailable) {
-        const hcpp::u32 ui_widgets = hype::ui::demo(framebuffer);
-        if (ui_widgets > 0) {
-            serial::write("ui demo=painted widgets=");
-            serial::write_dec32(ui_widgets);
+        const hcpp::u32 shell_wins = hype::win::desk_paint(framebuffer);
+        if (shell_wins > 0) {
+            serial::write("ui shell=painted wins=");
+            serial::write_dec32(shell_wins);
             serial::write("\r\n");
         } else {
-            serial::write_line("ui demo=failed");
+            serial::write_line("ui shell=failed");
         }
     } else {
-        serial::write_line("ui demo=blocked");
+        serial::write_line("ui shell=blocked");
     }
     const bool codec_integrated =
         hype::codec::codec_count() ==
             static_cast<hcpp::size_t>(hype::codec::CodecId::Count) - 1 -
                 hype::codec::codec_reserved_ids &&
-        codec_probe_ok && image_selftest_ok && jpeg_selftest_ok && png_selftest_ok &&
-        hype::ui::demo_codec_image_painted();
+        codec_probe_ok && image_selftest_ok && jpeg_selftest_ok && png_selftest_ok;
     report("codec integrated=", codec_integrated);
     serial::write_line("HypeAICode++ runtime active");
     const hcpp::u64 pit_start = hype::interrupts::pit_ticks();
