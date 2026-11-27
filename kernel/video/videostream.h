@@ -13,10 +13,17 @@ namespace hype::video {
         VideoStreamBuffer buffers[video_stream_max_buffers];
         hcpp::size_t count;
         bool streaming;
+        VideoFrame frames[video_stream_max_buffers];
+        hcpp::size_t head;
+        hcpp::size_t pending;
+        hcpp::u32 dropped;
     };
     bool stream_initialize(VideoStream&, hcpp::u32, hcpp::size_t) noexcept;
     bool stream_start(VideoStream&) noexcept;
     bool stream_stop(VideoStream&) noexcept;
     bool stream_queue(VideoStream&, hcpp::u32, hcpp::size_t) noexcept;
     VideoStreamBuffer* stream_dequeue(VideoStream&) noexcept;
+    bool stream_push(VideoStream&, const VideoFrame&) noexcept;
+    bool stream_pop(VideoStream&, VideoFrame&) noexcept;
+    hcpp::size_t stream_pending(const VideoStream&) noexcept;
 }  // namespace hype::video
