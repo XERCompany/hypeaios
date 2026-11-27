@@ -14,7 +14,7 @@ namespace hype::hxrt {
                 return;
             }
             hype::ui::Canvas canvas(*ctx.fb);
-            canvas.set_clip(ctx.region);
+            canvas.set_clip(ctx.paint_clip());
             const hype::ui::Theme& theme = hype::ui::theme_active();
             const hype::ui::Rect& box = ctx.region;
             hype::ui::rui_panel(canvas, box, hype::ui::rui_elev_window);

@@ -42,6 +42,21 @@ namespace hype::win {
         hcpp::u32 menu_win = 0;
         Point menu_anchor{};
         Rect menu_screen{0, 0, 1024, 768};
+        Rect damage{};
+        bool damaged = false;
+        bool damage_full = false;
+
+        void damage_add(const Rect& region) noexcept {
+            if (region.empty()) {
+                return;
+            }
+            damage = damaged ? damage.united(region) : region;
+            damaged = true;
+        }
+
+        Rect chrome_band(const Rect& frame) noexcept {
+            return {frame.x, frame.y, frame.w, wm_chrome_height + 12};
+        }
 
         void copy_name(char* dst, const char* src) noexcept {
             hcpp::size_t i = 0;
@@ -316,6 +331,7 @@ namespace hype::win {
         w.ctx = hxrt::AppCtx{};
         w.ctx.region = w.content_rect;
         wm_focus(w.id);
+        damage_add(frame);
         return w.id;
     }
 
@@ -332,7 +348,9 @@ namespace hype::win {
         if (menu_win == id) {
             wm_menu_close();
         }
+        const Rect gone = w->frame;
         *w = Win{};
+        damage_add(gone);
         if (was_focused) {
             hcpp::u32 top_order[wm_max_windows];
             const hcpp::u32 n = collect_order(top_order, false);
@@ -349,11 +367,15 @@ namespace hype::win {
             return false;
         }
         for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
-            if (slots[i].id != 0) {
+            if (slots[i].id != 0 && slots[i].state == WinState::Focused) {
+                damage_add(chrome_band(slots[i].frame));
                 slots[i].state = WinState::Normal;
             }
         }
-        w->state = WinState::Focused;
+        if (w->state != WinState::Focused) {
+            w->state = WinState::Focused;
+            damage_add(chrome_band(w->frame));
+        }
         w->z = ++z_counter;
         return true;
     }
@@ -362,21 +384,35 @@ namespace hype::win {
         if (!fb.valid()) {
             return;
         }
-        Canvas canvas(fb);
         const Rect screen{0, 0, static_cast<hcpp::i32>(fb.width()),
                           static_cast<hcpp::i32>(fb.height())};
         menu_screen = screen;
-        canvas.set_clip(screen);
+        const Rect clip = damage_full || overlays.is_open()
+                              ? screen
+                              : damage.intersection(screen);
+        damage = Rect{};
+        damaged = false;
+        damage_full = false;
+        if (clip.empty()) {
+            return;
+        }
+        Canvas canvas(fb);
+        canvas.set_clip(clip);
         hcpp::u32 order[wm_max_windows];
         const hcpp::u32 n = collect_order(order, true);
         const Theme& theme = hype::ui::theme_active();
         for (hcpp::u32 k = 0; k < n; ++k) {
             Win& w = slots[order[k]];
+            if (!w.frame.intersects(clip)) {
+                continue;
+            }
             paint_chrome(canvas, w);
             const Rect region = w.content_rect.intersection(screen);
+            const Rect content_clip = region.intersection(clip);
             w.ctx.fb = &fb;
             w.ctx.region = region;
-            if (!region.empty() &&
+            w.ctx.clip = content_clip;
+            if (!content_clip.empty() &&
                 !hxrt::hxrt_exec(w.app_name, w.ctx)) {
                 canvas.fill_rect(region, canvas.color(theme.card));
                 paint_label(canvas, region.x + 16, region.y + 16,
@@ -384,6 +420,21 @@ namespace hype::win {
             }
         }
         overlays.paint_overlays(canvas, screen);
+    }
+
+    void wm_invalidate(hype::ui::Rect region) noexcept {
+        damage_add(region);
+    }
+
+    void wm_invalidate_all() noexcept { damage_full = true; }
+
+    bool wm_dirty() noexcept { return damaged || damage_full; }
+
+    hype::ui::Rect wm_damage_clip(hype::ui::Rect bounds) noexcept {
+        if (!wm_dirty()) {
+            return {};
+        }
+        return damage_full ? bounds : damage.intersection(bounds);
     }
 
     bool wm_menu_open(hcpp::u32 id) noexcept {
@@ -398,10 +449,16 @@ namespace hype::win {
             Size{menu_width,
                  menu_pad * 2 +
                      static_cast<hcpp::i32>(menu_item_count) * menu_item_h});
-        return overlays.open(&menu_widget);
+        if (!overlays.open(&menu_widget)) {
+            menu_win = 0;
+            return false;
+        }
+        damage_full = true;
+        return true;
     }
 
     void wm_menu_close() noexcept {
+        damage_full = true;
         overlays.close();
         menu_win = 0;
     }
@@ -456,6 +513,7 @@ namespace hype::win {
         if (overlays.is_open()) {
             const bool consumed = overlays.handle_key(ascii);
             if (!overlays.is_open()) {
+                damage_full = true;
                 menu_win = 0;
             }
             return consumed;
@@ -517,12 +575,23 @@ namespace hype::win {
         }
         serial::write("wm menu=");
         serial::write_line(menu_ok ? "ok" : "fail");
+        bool dirty_ok = wm_dirty();
+        {
+            static hcpp::u8 probe_mem[64 * 48 * 4];
+            hcpp::graphics::Framebuffer probe_fb(probe_mem, 64, 48, 64 * 4, 32,
+                                                 8, 16, 8, 8, 8, 0);
+            wm_paint(probe_fb);
+            dirty_ok = dirty_ok && !wm_dirty();
+        }
+        serial::write("wm dirty=");
+        serial::write_line(dirty_ok ? "ok" : "fail");
         for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
             if (slots[i].id != 0) {
                 wm_close(slots[i].id);
             }
         }
-        return open_ok && close_ok && z_ok && menu_ok && wm_count() == 0;
+        return open_ok && close_ok && z_ok && menu_ok && dirty_ok &&
+               wm_count() == 0;
     }
 
 }

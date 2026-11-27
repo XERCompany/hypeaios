@@ -3,6 +3,7 @@
 #include "hcpp/graphics/framebuffer.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/codecapps/codec.h"
+#include "kernel/ui/geometry.h"
 
 namespace hype::win {
 
@@ -16,6 +17,8 @@ namespace hype::win {
     DeskBgMode desk_bg_mode() noexcept;
     bool desk_bg_ready() noexcept;
     bool desk_bg_paint(hcpp::graphics::Framebuffer& fb) noexcept;
+    bool desk_bg_paint_clip(hcpp::graphics::Framebuffer& fb,
+                            hype::ui::Rect clip) noexcept;
     hcpp::u32 desk_bg_sample(hcpp::u32 x, hcpp::u32 y) noexcept;
 
 }

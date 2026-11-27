@@ -4,6 +4,7 @@
 #include "kernel/codecapps/image/imageutil.h"
 #include "kernel/display/scaler.h"
 #include "kernel/memory/pmm.h"
+#include "kernel/win/winman.h"
 
 namespace hype::win {
 
@@ -101,10 +102,14 @@ namespace hype::win {
             return false;
         }
         bg_mode = DeskBgMode::Image;
+        wm_invalidate_all();
         return true;
     }
 
-    void desk_bg_reset() noexcept { bg_mode = DeskBgMode::Gradient; }
+    void desk_bg_reset() noexcept {
+        bg_mode = DeskBgMode::Gradient;
+        wm_invalidate_all();
+    }
 
     DeskBgMode desk_bg_mode() noexcept { return bg_mode; }
 
@@ -120,7 +125,8 @@ namespace hype::win {
         return wall_px[static_cast<hcpp::size_t>(y) * desk_bg_wall_width + x];
     }
 
-    bool desk_bg_paint(hcpp::graphics::Framebuffer& fb) noexcept {
+    bool desk_bg_paint_clip(hcpp::graphics::Framebuffer& fb,
+                            hype::ui::Rect clip) noexcept {
         if (!fb.valid() || !desk_bg_ready()) {
             return false;
         }
@@ -128,6 +134,14 @@ namespace hype::win {
         const hcpp::u32 fh = fb.height();
         if (fw == 0 || fh == 0) {
             return false;
+        }
+        const hype::ui::Rect screen{0, 0, static_cast<hcpp::i32>(fw),
+                                    static_cast<hcpp::i32>(fh)};
+        const hype::ui::Rect area = clip.empty()
+                                        ? screen
+                                        : clip.intersection(screen);
+        if (area.empty()) {
+            return true;
         }
         const hcpp::u32 scale =
             cover_scale_q16(desk_bg_wall_width, desk_bg_wall_height, fw, fh);
@@ -141,11 +155,13 @@ namespace hype::win {
         if (eff_h > desk_bg_wall_height) eff_h = desk_bg_wall_height;
         const hcpp::u32 off_x = (desk_bg_wall_width - eff_w) / 2;
         const hcpp::u32 off_y = (desk_bg_wall_height - eff_h) / 2;
-        for (hcpp::u32 y = 0; y < fh; ++y) {
+        for (hcpp::u32 y = static_cast<hcpp::u32>(area.y);
+             y < static_cast<hcpp::u32>(area.bottom()); ++y) {
             const hcpp::u32 sy = off_y + (y * eff_h) / fh;
             const hcpp::u32* row =
                 wall_px + static_cast<hcpp::size_t>(sy) * desk_bg_wall_width;
-            for (hcpp::u32 x = 0; x < fw; ++x) {
+            for (hcpp::u32 x = static_cast<hcpp::u32>(area.x);
+                 x < static_cast<hcpp::u32>(area.right()); ++x) {
                 const hcpp::u32 sx = off_x + (x * eff_w) / fw;
                 const hcpp::u32 px = row[sx];
                 fb.put_pixel(x, y,
@@ -155,6 +171,10 @@ namespace hype::win {
             }
         }
         return true;
+    }
+
+    bool desk_bg_paint(hcpp::graphics::Framebuffer& fb) noexcept {
+        return desk_bg_paint_clip(fb, hype::ui::Rect{});
     }
 
 }

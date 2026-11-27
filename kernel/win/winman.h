@@ -27,6 +27,10 @@ namespace hype::win {
     bool wm_close(hcpp::u32 id) noexcept;
     bool wm_focus(hcpp::u32 id) noexcept;
     void wm_paint(hcpp::graphics::Framebuffer& fb) noexcept;
+    void wm_invalidate(hype::ui::Rect region) noexcept;
+    void wm_invalidate_all() noexcept;
+    bool wm_dirty() noexcept;
+    hype::ui::Rect wm_damage_clip(hype::ui::Rect bounds) noexcept;
     bool wm_handle_mouse(hcpp::i32 x, hcpp::i32 y, bool pressed) noexcept;
     bool wm_handle_key(char ascii) noexcept;
     bool wm_test_click(hcpp::i32 x, hcpp::i32 y) noexcept;

@@ -81,6 +81,13 @@ namespace hype::input {
         return cursprite_draw(fb, ptr_x(), ptr_y());
     }
 
+    hcpp::u32 cursor_erase(hcpp::graphics::Framebuffer &fb) noexcept {
+        if (!fb.valid()) {
+            return 0;
+        }
+        return cursprite_erase(fb);
+    }
+
     CurStat cursor_stat() noexcept { return ptr_stat(); }
 
     bool input_selftest(hcpp::graphics::Framebuffer &fb) noexcept {

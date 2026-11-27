@@ -153,7 +153,7 @@ namespace hype::hxrt {
             last_region = ctx.region;
             rebuild_order();
             Canvas canvas(*ctx.fb);
-            canvas.set_clip(ctx.region);
+            canvas.set_clip(ctx.paint_clip());
             const Theme& theme = hype::ui::theme_active();
             const Rect& box = ctx.region;
             canvas.fill_rect(box, canvas.color(theme.card));
