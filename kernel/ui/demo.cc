@@ -88,6 +88,9 @@ namespace hype::ui {
         if (!overlay_selftest()) {
             return 0;
         }
+        if (!feedback_selftest()) {
+            return 0;
+        }
         if (!framebuffer.valid()) {
             return 0;
         }
