@@ -10,6 +10,7 @@ qemu-system-x86_64 \
   -vga std \
   -drive format=raw,file=build/hypeai-os.img \
   -device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
+  -device AC97,audiodev=snd0 \
   -serial file:build/test-serial.log \
   -monitor unix:build/qemu-monitor.sock,server,nowait \
   -pidfile build/qemu.pid \
@@ -76,6 +77,7 @@ if ! grep -q "HYPEAI OS BOOT OK" <<<"$output"; then
     -machine pc -vga std \
     -drive format=raw,file=build/hypeai-os.img \
     -device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
+    -device AC97,audiodev=snd0 \
     -serial stdio -display none -no-reboot 2>&1 || true)"
 fi
 printf '%s\n' "$output"
@@ -124,4 +126,7 @@ grep -q "hda init=ok" <<<"$output"
 grep -q "hda codec vid=" <<<"$output"
 grep -q "audio stream=run" <<<"$output"
 grep -q "audio playback=ok" <<<"$output"
+grep -q "ac97 dev=ok" <<<"$output"
+grep -q "ac97 civ>0" <<<"$output"
+grep -q "ac97 vol=ok" <<<"$output"
 echo "QEMU boot, memory, ACPI, interrupt, keyboard and framebuffer test passed"

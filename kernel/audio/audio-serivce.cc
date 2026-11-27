@@ -1,5 +1,6 @@
 #include "kernel/audio/audio-serivce.h"
 
+#include "kernel/audio/audioac97.h"
 #include "kernel/audio/audiopci.h"
 #include "kernel/audio/izau.h"
 #include "kernel/serial.hpp"
@@ -90,6 +91,7 @@ namespace hype::audio {
                 bringup_hda_card(i);
             }
         }
+        ac97::ac97_selftest();
         probed = true;
         service_ready = true;
         serial::write("audio service=ready probed=");
