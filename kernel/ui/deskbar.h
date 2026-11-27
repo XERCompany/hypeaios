@@ -26,4 +26,14 @@ namespace hype::ui {
     void deskbar_open_start() noexcept;
     void deskbar_close_start() noexcept;
 
+    // Shell notification entry point: copies `title`/`msg` into tray-owned
+    // storage, pushes a ToastHost card (bottom-right, above the taskbar),
+    // bumps the bell's unread badge and prints the serial markers
+    // "toast push=<title>" / "tray unread=N".
+    void deskbar_notify(const char* title, const char* msg) noexcept;
+
+    // Quick-settings flyout state (speaker/net tray glyph toggles it).
+    bool deskbar_qs_open() noexcept;
+    void deskbar_close_qs() noexcept;
+
 }

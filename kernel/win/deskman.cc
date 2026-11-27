@@ -19,7 +19,11 @@ namespace hype::win {
     }
 
     hcpp::u32 desk_open_app(const char* name) noexcept {
-        return wm_open(name, hype::ui::Rect{});
+        const hcpp::u32 id = wm_open(name, hype::ui::Rect{});
+        if (id != 0) {
+            hype::ui::deskbar_notify("Launched", name);
+        }
+        return id;
     }
 
     hcpp::u32 desk_window_count() noexcept { return wm_count(); }

@@ -60,6 +60,9 @@ namespace hype::ui {
             if (toast.remaining == 0) {
                 continue;
             }
+            if (toast.age < 0xFFFFu) {
+                ++toast.age;
+            }
             if (kept != i) {
                 toasts_[kept] = toast;
             }
@@ -93,8 +96,13 @@ namespace hype::ui {
             const hcpp::i32 card_h = 2 * pad + line * (titled ? 2 : 1) +
                                      (titled ? gap : 0);
             cursor_y -= card_h;
-            const Rect card{screen.right() - margin - card_w, cursor_y, card_w,
-                            card_h};
+            // Slide in from the right edge over the first ~8 paint frames.
+            const hcpp::i32 slide =
+                toast.age < 8
+                    ? static_cast<hcpp::i32>(8 - toast.age) * 12
+                    : 0;
+            const Rect card{screen.right() - margin - card_w + slide,
+                            cursor_y, card_w, card_h};
 
             rui_card(canvas, card);
             if (rui_dark_surface()) {

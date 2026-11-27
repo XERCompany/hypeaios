@@ -29,6 +29,8 @@ namespace hype::ui {
             hcpp::StringView message;
             ToastKind kind = ToastKind::Info;
             hcpp::u32 remaining = 0;
+            // Paint-frame age driving the slide-in from the screen edge.
+            hcpp::u32 age = 0;
         };
 
         Toast toasts_[max_toasts];

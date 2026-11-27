@@ -1,13 +1,18 @@
 #include "kernel/ui/deskbar.h"
 
+#include "kernel/audio/pullmix.h"
 #include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/hxrt.h"
+#include "kernel/input/curstat.h"
+#include "kernel/input/ptrmv.h"
+#include "kernel/net/net.h"
 #include "kernel/serial.hpp"
 #include "kernel/time/rtc.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/hyperui.h"
+#include "kernel/ui/overlays/toast.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
 #include "kernel/win/deskman.h"
@@ -24,8 +29,27 @@ namespace hype::ui {
         constexpr hcpp::i32 start_w = 84;
         constexpr hcpp::i32 task_w = 148;
         constexpr hcpp::i32 task_gap = 4;
-        constexpr hcpp::i32 tray_w = 116;
+        constexpr hcpp::i32 tray_w = 128;
         constexpr hcpp::i32 clock_w = 44;
+        // Tray cell layout (offsets inside tray_rect): speaker, net bars,
+        // notification bell (with unread badge), then the right-anchored
+        // clock cell.
+        constexpr hcpp::i32 tray_speaker_x = 2;
+        constexpr hcpp::i32 tray_net_x = 20;
+        constexpr hcpp::i32 tray_bell_x = 38;
+        constexpr hcpp::i32 tray_cell_w = 18;
+        constexpr hcpp::i32 tray_bell_w = 24;
+        // Quick-settings flyout (bottom-right anchored above the bar).
+        constexpr hcpp::i32 qs_w = 300;
+        constexpr hcpp::i32 qs_h = 220;
+        constexpr hcpp::i32 qs_pad = 12;
+        constexpr hcpp::i32 qs_head_h = 24;
+        constexpr hcpp::i32 qs_row_h = 36;
+        constexpr hcpp::i32 qs_net_h = 28;
+        constexpr hcpp::i32 qs_btn_h = 30;
+        constexpr hcpp::i32 qs_anim_ticks = 6;
+        constexpr hcpp::i32 qs_anim_px = 6;  // px of slide per tick
+        constexpr hcpp::i32 toast_col_w = 352;
         constexpr hcpp::i32 menu_w = 180;
         constexpr hcpp::i32 menu_pad = 4;
         constexpr hcpp::i32 menu_item_h = 24;
@@ -46,6 +70,26 @@ namespace hype::ui {
         hcpp::u32 win_snap[hype::win::wm_max_windows];
         hcpp::u32 win_snap_count = 0;
 
+        // Quick-settings state.
+        bool qs_open = false;
+        hcpp::u32 qs_age = qs_anim_ticks;
+        hcpp::u8 qs_drag = 0;  // 0 none, 1 volume, 2 brightness
+        hcpp::i32 qs_vol = -1;      // 0..100, -1 = sync from pullmix on open
+        hcpp::i32 qs_bright = 75;   // stub: visual + marker only
+
+        // Shell toasts + bell unread badge. ToastHost stores StringViews,
+        // so the text lives in this fixed ring while a card is alive.
+        struct ToastText {
+            char title[32];
+            char msg[96];
+        };
+        ToastHost toasts;
+        ToastText toast_text[ToastHost::max_toasts];
+        hcpp::u32 toast_next = 0;
+        hcpp::u32 unread = 0;
+        hcpp::u32 net_last_ip = 0;
+        bool net_ip_seen = false;
+
         void invalidate(const Rect& region) noexcept {
             if (!region.empty()) {
                 hype::win::wm_invalidate(region);
@@ -60,6 +104,133 @@ namespace hype::ui {
         Rect clock_rect() noexcept {
             const Rect tray = tray_rect();
             return {tray.right() - clock_w, tray.y, clock_w, tray.h};
+        }
+
+        Rect speaker_zone() noexcept {
+            const Rect tray = tray_rect();
+            return {tray.x + tray_speaker_x, tray.y, tray_cell_w, tray.h};
+        }
+
+        Rect net_zone() noexcept {
+            const Rect tray = tray_rect();
+            return {tray.x + tray_net_x, tray.y, tray_cell_w, tray.h};
+        }
+
+        Rect bell_zone() noexcept {
+            const Rect tray = tray_rect();
+            return {tray.x + tray_bell_x, tray.y, tray_bell_w, tray.h};
+        }
+
+        // Column above the taskbar where toast cards stack; invalidated as
+        // one rect so slide-in motion never leaves stale pixels.
+        Rect toast_region() noexcept {
+            if (bar.empty()) {
+                return {};
+            }
+            return {bar.right() - toast_col_w, 0, toast_col_w, bar.y - 2};
+        }
+
+        // Quick-settings panel at its final anchor (bottom-right above bar).
+        Rect compute_qs() noexcept {
+            if (bar.empty()) {
+                return {};
+            }
+            Rect r{bar.right() - bar_pad - qs_w, bar.y - 6 - qs_h, qs_w, qs_h};
+            if (r.y < 2) {
+                r.y = 2;
+            }
+            return r;
+        }
+
+        // Panel rect at the current slide-in animation position.
+        Rect qs_rect_now() noexcept {
+            if (!qs_open) {
+                return {};
+            }
+            Rect r = compute_qs();
+            const hcpp::u32 left =
+                qs_age < qs_anim_ticks ? qs_anim_ticks - qs_age : 0;
+            r.y += static_cast<hcpp::i32>(left) * qs_anim_px;
+            return r;
+        }
+
+        // Damage for the open/close animation: final rect grown downward
+        // by the full travel so every intermediate frame is repainted.
+        Rect qs_anim_region() noexcept {
+            Rect r = compute_qs();
+            r.h += qs_anim_ticks * qs_anim_px;
+            return r;
+        }
+
+        Rect qs_vol_row(const Rect& panel) noexcept {
+            return {panel.x + qs_pad, panel.y + qs_pad + qs_head_h,
+                    panel.w - 2 * qs_pad, qs_row_h};
+        }
+
+        Rect qs_bright_row(const Rect& panel) noexcept {
+            const Rect vol = qs_vol_row(panel);
+            return {vol.x, vol.bottom(), vol.w, qs_row_h};
+        }
+
+        Rect qs_net_row(const Rect& panel) noexcept {
+            const Rect br = qs_bright_row(panel);
+            return {br.x, br.bottom() + 8, br.w, qs_net_h};
+        }
+
+        Rect qs_lock_btn(const Rect& panel) noexcept {
+            const hcpp::i32 w = (panel.w - 2 * qs_pad - 8) / 2;
+            return {panel.x + qs_pad, panel.bottom() - qs_pad - qs_btn_h, w,
+                    qs_btn_h};
+        }
+
+        Rect qs_power_btn(const Rect& panel) noexcept {
+            const Rect lock = qs_lock_btn(panel);
+            return {lock.right() + 8, lock.y, lock.w, lock.h};
+        }
+
+        // Slider track + its (fatter) hit zone inside a 36px row.
+        Rect qs_track(const Rect& row) noexcept {
+            return {row.x + 24, row.y + row.h / 2 - 3, row.w - 24 - 42, 6};
+        }
+
+        Rect qs_track_hit(const Rect& row) noexcept {
+            return {row.x + 18, row.y, row.w - 18, row.h};
+        }
+
+        void copy_text(char* dst, hcpp::size_t cap,
+                       const char* src) noexcept {
+            hcpp::size_t i = 0;
+            if (src != nullptr) {
+                while (i + 1 < cap && src[i] != '\0') {
+                    dst[i] = src[i];
+                    ++i;
+                }
+            }
+            dst[i] = '\0';
+        }
+
+        hcpp::size_t fmt_u32(char* dst, hcpp::u32 value) noexcept {
+            char tmp[10];
+            hcpp::size_t n = 0;
+            do {
+                tmp[n++] = static_cast<char>('0' + value % 10);
+                value /= 10;
+            } while (value != 0 && n < sizeof(tmp));
+            for (hcpp::size_t i = 0; i < n; ++i) {
+                dst[i] = tmp[n - 1 - i];
+            }
+            dst[n] = '\0';
+            return n;
+        }
+
+        hcpp::i32 clamp_pct(hcpp::i32 v) noexcept {
+            if (v < 0) {
+                return 0;
+            }
+            if (v > 100) {
+                return 100;
+            }
+            return v;
         }
 
         Rect task_btn_rect(hcpp::u32 index) noexcept {
@@ -138,10 +309,76 @@ namespace hype::ui {
             if (hype::win::wm_menu_visible()) {
                 hype::win::wm_menu_close();
             }
+            if (qs_open) {
+                deskbar_close_qs();
+            }
             build_menu_order();
             start_open = true;
             serial::write_line("start menu=open");
             invalidate(compute_menu().united(bar));
+        }
+
+        void open_qs() noexcept {
+            if (qs_open) {
+                return;
+            }
+            // One flyout at a time, like the real shells.
+            if (start_open) {
+                deskbar_close_start();
+            }
+            if (hype::win::wm_menu_visible()) {
+                hype::win::wm_menu_close();
+            }
+            if (hype::win::wm_ctx_visible()) {
+                hype::win::wm_ctx_close();
+            }
+            if (qs_vol < 0) {
+                // First open: adopt the mixer master gain (Q8, 256 = 100%).
+                qs_vol = clamp_pct(
+                    (static_cast<hcpp::i32>(
+                         hype::audio::pullmix_master_gain()) *
+                     100) /
+                    256);
+            }
+            qs_open = true;
+            qs_age = 0;
+            serial::write_line("tray qs=open");
+            invalidate(qs_anim_region().united(speaker_zone()));
+        }
+
+        hcpp::i32 slider_pct_at(hcpp::i32 x, const Rect& row) noexcept {
+            const Rect track = qs_track(row);
+            if (track.w <= 0) {
+                return 0;
+            }
+            return clamp_pct((x - track.x) * 100 / track.w);
+        }
+
+        void apply_volume(hcpp::i32 pct) noexcept {
+            pct = clamp_pct(pct);
+            if (pct == qs_vol) {
+                return;
+            }
+            qs_vol = pct;
+            // pullmix master gain is Q8: 256 == unity (100%).
+            hype::audio::pullmix_set_master_gain(
+                static_cast<hcpp::u16>(pct * 256 / 100));
+            serial::write("qs vol=");
+            serial::write_dec32(static_cast<hcpp::u32>(pct));
+            serial::write("\r\n");
+            invalidate(qs_vol_row(qs_rect_now()));
+        }
+
+        void apply_bright(hcpp::i32 pct) noexcept {
+            pct = clamp_pct(pct);
+            if (pct == qs_bright) {
+                return;
+            }
+            qs_bright = pct;
+            serial::write("qs bright=");
+            serial::write_dec32(static_cast<hcpp::u32>(pct));
+            serial::write("\r\n");
+            invalidate(qs_bright_row(qs_rect_now()));
         }
 
         void paint_label(Canvas& canvas, hcpp::i32 x, hcpp::i32 y,
@@ -209,25 +446,58 @@ namespace hype::ui {
             }
         }
 
-        void paint_tray(Canvas& canvas, const Theme& theme) noexcept {
-            const Rect tray = tray_rect();
-            const hcpp::i32 cy = tray.y + tray.h / 2;
-            const hcpp::u32 glyph = canvas.color(theme.muted_fg);
-            // Speaker placeholder glyph.
-            const hcpp::i32 sx = tray.x + 6;
-            canvas.fill_rect(Rect{sx, cy - 3, 4, 6}, glyph);
-            canvas.draw_line(sx + 4, cy - 2, sx + 9, cy - 6, glyph);
-            canvas.draw_line(sx + 4, cy + 2, sx + 9, cy + 6, glyph);
-            canvas.draw_line(sx + 9, cy - 6, sx + 9, cy + 6, glyph);
-            canvas.draw_line(sx + 11, cy - 2, sx + 12, cy, glyph);
-            canvas.draw_line(sx + 12, cy, sx + 11, cy + 2, glyph);
-            // Signal/net bars placeholder glyph.
-            const hcpp::i32 nx = sx + 18;
+        void paint_speaker_glyph(Canvas& canvas, hcpp::i32 gx,
+                                 hcpp::i32 cy, hcpp::u32 glyph) noexcept {
+            canvas.fill_rect(Rect{gx, cy - 3, 4, 6}, glyph);
+            canvas.draw_line(gx + 4, cy - 2, gx + 9, cy - 6, glyph);
+            canvas.draw_line(gx + 4, cy + 2, gx + 9, cy + 6, glyph);
+            canvas.draw_line(gx + 9, cy - 6, gx + 9, cy + 6, glyph);
+            canvas.draw_line(gx + 11, cy - 2, gx + 12, cy, glyph);
+            canvas.draw_line(gx + 12, cy, gx + 11, cy + 2, glyph);
+        }
+
+        void paint_net_glyph(Canvas& canvas, hcpp::i32 gx, hcpp::i32 cy,
+                             hcpp::u32 glyph, bool online) noexcept {
+            const hcpp::i32 bars = online ? 4 : 1;
             for (hcpp::i32 k = 0; k < 4; ++k) {
+                const hcpp::i32 h = (k + 1) * 2;
                 canvas.fill_rect(
-                    Rect{nx + k * 4, cy + 5 - (k + 1) * 2, 3, (k + 1) * 2},
-                    glyph);
+                    Rect{gx + k * 4, cy + 5 - h, 3, h},
+                    k < bars ? glyph : canvas.color(theme_active().muted));
             }
+        }
+
+        void paint_bell_glyph(Canvas& canvas, const Theme& theme,
+                              const Rect& zone) noexcept {
+            const hcpp::i32 cx = zone.x + 9;
+            const hcpp::i32 cy = zone.y + zone.h / 2;
+            const hcpp::u32 glyph = canvas.color(theme.muted_fg);
+            // Dome + skirt + clapper.
+            canvas.fill_circle(cx, cy - 2, 4, glyph);
+            canvas.fill_rect(Rect{cx - 5, cy - 1, 10, 5}, glyph);
+            canvas.fill_rect(Rect{cx - 6, cy + 4, 12, 2}, glyph);
+            canvas.fill_rect(Rect{cx - 1, cy + 7, 3, 2}, glyph);
+            if (unread == 0) {
+                return;
+            }
+            // Unread badge: destructive dot with a single-digit count.
+            const hcpp::i32 bx = zone.right() - 6;
+            const hcpp::i32 by = zone.y + 6;
+            canvas.fill_circle(bx, by, 6, canvas.color(theme.destructive));
+            char digit[2] = {
+                static_cast<char>('0' + (unread > 9 ? 9 : unread)), '\0'};
+            paint_label(canvas, bx - 3, by - 6, hcpp::StringView{digit, 1},
+                        theme.primary_fg, 11);
+        }
+
+        void paint_tray(Canvas& canvas, const Theme& theme) noexcept {
+            const hcpp::u32 glyph = canvas.color(theme.muted_fg);
+            const Rect spk = speaker_zone();
+            paint_speaker_glyph(canvas, spk.x + 3, spk.y + spk.h / 2, glyph);
+            const Rect net = net_zone();
+            paint_net_glyph(canvas, net.x + 1, net.y + net.h / 2, glyph,
+                            hype::net::net_ip() != 0);
+            paint_bell_glyph(canvas, theme, bell_zone());
             // Clock "HH:MM".
             char clk[6]{"--:--"};
             if (clock_hour != 0xFF) {
@@ -291,6 +561,109 @@ namespace hype::ui {
             }
         }
 
+        void paint_slider(Canvas& canvas, const Theme& theme,
+                          const Rect& row, hcpp::i32 pct) noexcept {
+            const Rect track = qs_track(row);
+            const hcpp::i32 cy = track.y + track.h / 2;
+            const hcpp::i32 fill = track.w * clamp_pct(pct) / 100;
+            canvas.fill_rounded_rect(track, 3, canvas.color(theme.muted));
+            if (fill > 0) {
+                canvas.fill_rounded_rect(
+                    Rect{track.x, track.y, fill, track.h}, 3,
+                    canvas.color(theme.accent));
+            }
+            const hcpp::i32 kx = track.x + fill;
+            canvas.fill_circle(kx, cy, 6, canvas.color(theme.accent));
+            canvas.fill_circle(kx, cy, 3,
+                               canvas.color(rui_lift(theme.accent, 2)));
+            char pct_text[5];
+            const hcpp::size_t n =
+                fmt_u32(pct_text, static_cast<hcpp::u32>(clamp_pct(pct)));
+            pct_text[n] = '%';
+            pct_text[n + 1] = '\0';
+            paint_label(canvas, row.right() - 36, label_top(row),
+                        hcpp::StringView{pct_text}, theme.card_fg, 13);
+        }
+
+        void paint_sun_glyph(Canvas& canvas, const Theme& theme,
+                             const Rect& row) noexcept {
+            const hcpp::i32 cx = row.x + 9;
+            const hcpp::i32 cy = row.y + row.h / 2;
+            const hcpp::u32 glyph = canvas.color(theme.muted_fg);
+            canvas.fill_circle(cx, cy, 4, glyph);
+            canvas.draw_line(cx - 8, cy, cx - 6, cy, glyph);
+            canvas.draw_line(cx + 6, cy, cx + 8, cy, glyph);
+            canvas.draw_line(cx, cy - 8, cx, cy - 6, glyph);
+            canvas.draw_line(cx, cy + 6, cx, cy + 8, glyph);
+        }
+
+        void paint_qs(Canvas& canvas, const Theme& theme,
+                      const Rect& panel) noexcept {
+            rui_panel(canvas, panel, rui_elev_panel);
+            const Rect head{panel.x + qs_pad, panel.y + qs_pad,
+                            panel.w - 2 * qs_pad, qs_head_h};
+            canvas.fill_circle(head.x + 8, head.y + head.h / 2, 4,
+                               canvas.color(theme.accent));
+            paint_label(canvas, head.x + 20, label_top(head),
+                        "Quick settings", theme.card_fg, 13);
+
+            const Rect vol = qs_vol_row(panel);
+            paint_speaker_glyph(canvas, vol.x + 4, vol.y + vol.h / 2,
+                                canvas.color(theme.muted_fg));
+            paint_slider(canvas, theme, vol, qs_vol < 0 ? 100 : qs_vol);
+
+            const Rect br = qs_bright_row(panel);
+            paint_sun_glyph(canvas, theme, br);
+            paint_slider(canvas, theme, br, qs_bright);
+
+            // Divider, then the Network status row.
+            canvas.fill_rect(
+                Rect{panel.x + qs_pad, br.bottom() + 3,
+                     panel.w - 2 * qs_pad, 1},
+                canvas.color(theme.border));
+            const Rect net = qs_net_row(panel);
+            paint_net_glyph(canvas, net.x + 1, net.y + net.h / 2,
+                            canvas.color(theme.muted_fg),
+                            hype::net::net_ip() != 0);
+            paint_label(canvas, net.x + 24, label_top(net), "Network",
+                        theme.card_fg, 13);
+            char status[24];
+            const hcpp::u32 ip = hype::net::net_ip();
+            if (ip != 0) {
+                hcpp::size_t o = 0;
+                for (hcpp::i32 i = 0; i < 4; ++i) {
+                    if (i != 0) {
+                        status[o++] = '.';
+                    }
+                    o += fmt_u32(status + o, (ip >> (24 - i * 8)) & 0xFFu);
+                }
+                status[o] = '\0';
+            } else {
+                copy_text(status, sizeof(status),
+                          hype::net::net_ready() ? "connecting" : "offline");
+            }
+            paint_label(canvas, net.right() - 88, label_top(net),
+                        hcpp::StringView{status}, theme.muted_fg, 13);
+
+            // Lock / Power buttons (no session-lock or ACPI API yet — the
+            // actions report through serial markers).
+            const Rect lock = qs_lock_btn(panel);
+            const Rect power = qs_power_btn(panel);
+            rui_control_bg(canvas, lock, theme.secondary, theme.border);
+            paint_label(canvas, lock.x + (lock.w - 24) / 2, label_top(lock),
+                        "Lock", theme.card_fg, 13);
+            rui_control_bg(canvas, power, theme.secondary,
+                           theme.destructive);
+            paint_label(canvas, power.x + (power.w - 36) / 2,
+                        label_top(power), "Power", theme.card_fg, 13);
+
+            if (rui_dark_surface()) {
+                hype::gfx::gfx_inner_glow_edge(
+                    canvas, panel.inset(Insets::uniform(1)),
+                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
+            }
+        }
+
         void print_clock() noexcept {
             serial::write("tray clock=");
             serial::write_char(static_cast<char>('0' + clock_hour / 10));
@@ -305,6 +678,59 @@ namespace hype::ui {
 
     void deskbar_idle() noexcept {
         ++idle_ticks;
+        // Slider drags: the WM only delivers press edges to the bar, so the
+        // grab is tracked here from raw pointer state while the button
+        // stays held.
+        if (qs_drag != 0) {
+            if ((hype::input::ptr_buttons() &
+                 hype::input::ptr_button_left) != 0) {
+                const Rect panel = qs_rect_now();
+                const Rect row = qs_drag == 1 ? qs_vol_row(panel)
+                                              : qs_bright_row(panel);
+                const hcpp::i32 pct =
+                    slider_pct_at(hype::input::ptr_x(), row);
+                if (qs_drag == 1) {
+                    apply_volume(pct);
+                } else {
+                    apply_bright(pct);
+                }
+            } else {
+                qs_drag = 0;
+            }
+        }
+        // Panel slide-in: repaint the grown rect each tick so the vacated
+        // sliver below the moving panel is never left stale.
+        if (qs_open && qs_age < qs_anim_ticks) {
+            ++qs_age;
+            invalidate(qs_anim_region());
+        }
+        // Toast TTL counts down inside ToastHost::paint — keep the stack
+        // column damaged while any card is alive so expiry and the
+        // slide-in both animate.
+        if (toasts.count() > 0) {
+            invalidate(toast_region());
+        }
+        // DHCP watch: one toast per new lease. The first observation only
+        // seeds the baseline so a pre-login lease doesn't fire at boot.
+        const hcpp::u32 ip = hype::net::net_ip();
+        if (!net_ip_seen) {
+            net_last_ip = ip;
+            net_ip_seen = true;
+        } else if (ip != net_last_ip) {
+            net_last_ip = ip;
+            if (ip != 0) {
+                char msg[32] = "ip=";
+                hcpp::size_t o = 3;
+                for (hcpp::i32 i = 0; i < 4; ++i) {
+                    if (i != 0) {
+                        msg[o++] = '.';
+                    }
+                    o += fmt_u32(msg + o, (ip >> (24 - i * 8)) & 0xFFu);
+                }
+                msg[o] = '\0';
+                deskbar_notify("Network connected", msg);
+            }
+        }
         if (!clock_announced || (idle_ticks & rtc_poll_mask) == 0) {
             hype::time::RtcTime now{};
             if (hype::time::rtc_now(now)) {
@@ -354,9 +780,15 @@ namespace hype::ui {
         start_btn = {bar.x + bar_pad, bar.y + bar_pad, start_w,
                      bar.h - bar_pad * 2};
         const Rect menu = compute_menu();
+        const Rect qs = qs_rect_now();
         const Rect area = bar.intersection(clip);
         const Rect menu_area = menu.intersection(clip);
-        if (area.empty() && menu_area.empty()) {
+        const Rect qs_area = qs.intersection(clip);
+        const Rect toast_area = toasts.count() > 0
+                                    ? toast_region().intersection(clip)
+                                    : Rect{};
+        if (area.empty() && menu_area.empty() && qs_area.empty() &&
+            toast_area.empty()) {
             return;
         }
         Canvas canvas(fb);
@@ -385,6 +817,14 @@ namespace hype::ui {
         if (!menu_area.empty()) {
             paint_menu(canvas, theme, menu);
         }
+        if (!qs_area.empty()) {
+            paint_qs(canvas, theme, qs);
+        }
+        // Toasts sit in the band above the bar, topmost of the shell UI.
+        if (toasts.count() > 0 && !toast_region().empty()) {
+            const Rect band{screen.x, screen.y, screen.w, bar.y - 2};
+            toasts.paint(canvas, band);
+        }
         if (!painted_once) {
             painted_once = true;
             serial::write_line("deskbar ok");
@@ -411,11 +851,61 @@ namespace hype::ui {
             deskbar_close_start();
             return true;
         }
+        const bool was_qs = qs_open;
+        if (qs_open) {
+            const Rect panel = qs_rect_now();
+            if (panel.contains(p)) {
+                if (qs_track_hit(qs_vol_row(panel)).contains(p)) {
+                    qs_drag = 1;
+                    apply_volume(
+                        slider_pct_at(p.x, qs_vol_row(panel)));
+                    return true;
+                }
+                if (qs_track_hit(qs_bright_row(panel)).contains(p)) {
+                    qs_drag = 2;
+                    apply_bright(
+                        slider_pct_at(p.x, qs_bright_row(panel)));
+                    return true;
+                }
+                if (qs_lock_btn(panel).contains(p)) {
+                    serial::write_line("power action=lock");
+                    deskbar_close_qs();
+                    return true;
+                }
+                if (qs_power_btn(panel).contains(p)) {
+                    serial::write_line("power action=shutdown");
+                    deskbar_close_qs();
+                    return true;
+                }
+                return true;
+            }
+            // Click outside dismisses the flyout, then the same click is
+            // free to hit the bar/tray zones below.
+            deskbar_close_qs();
+        }
         if (bar.empty() || !bar.contains(p)) {
             return false;
         }
         if (start_btn.contains(p)) {
             open_start();
+            return true;
+        }
+        if (tray_rect().contains(p)) {
+            if (speaker_zone().contains(p) || net_zone().contains(p)) {
+                if (!was_qs) {
+                    open_qs();
+                }
+                return true;
+            }
+            if (bell_zone().contains(p)) {
+                if (unread != 0) {
+                    unread = 0;
+                    serial::write_line("tray unread=0");
+                    invalidate(bell_zone());
+                }
+                return true;
+            }
+            // Clock cell / padding: consume without action.
             return true;
         }
         const hcpp::i32 limit = tray_rect().x - task_gap;
@@ -433,6 +923,7 @@ namespace hype::ui {
             }
             if (w->state == WinState::Focused) {
                 hype::win::wm_set_minimized(w->id, true);
+                deskbar_notify("Minimized", w->app_name);
             } else {
                 hype::win::wm_set_minimized(w->id, false);
                 hype::win::wm_focus(w->id);
@@ -441,6 +932,40 @@ namespace hype::ui {
             return true;
         }
         return true;
+    }
+
+    void deskbar_notify(const char* title, const char* msg) noexcept {
+        ToastText& slot = toast_text[toast_next];
+        toast_next = (toast_next + 1) %
+                     static_cast<hcpp::u32>(ToastHost::max_toasts);
+        copy_text(slot.title, sizeof(slot.title), title);
+        copy_text(slot.msg, sizeof(slot.msg), msg);
+        if (toasts.count() >= ToastHost::max_toasts) {
+            toasts.dismiss(0);
+        }
+        toasts.show(hcpp::StringView{slot.msg}, ToastKind::Info,
+                    hcpp::StringView{slot.title});
+        ++unread;
+        serial::write("toast push=");
+        serial::write(slot.title);
+        serial::write("\r\n");
+        serial::write("tray unread=");
+        serial::write_dec32(unread);
+        serial::write("\r\n");
+        invalidate(toast_region().united(bell_zone()));
+    }
+
+    bool deskbar_qs_open() noexcept { return qs_open; }
+
+    void deskbar_close_qs() noexcept {
+        if (!qs_open) {
+            return;
+        }
+        const Rect gone = qs_rect_now();
+        qs_open = false;
+        qs_drag = 0;
+        serial::write_line("tray qs=close");
+        invalidate(gone.united(speaker_zone()));
     }
 
     bool deskbar_start_open() noexcept { return start_open; }
