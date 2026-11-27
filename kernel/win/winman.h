@@ -23,6 +23,21 @@ namespace hype::win {
         hype::hxrt::AppCtx ctx{};
     };
 
+    // Generic right-click context menu (desktop shell + icon menus).
+    // Items with wm_ctx_separator render as a 1 px divider; items with
+    // wm_ctx_disabled render muted and never dispatch.
+    constexpr hcpp::u8 wm_ctx_separator = 1;
+    constexpr hcpp::u8 wm_ctx_disabled = 2;
+    constexpr hcpp::u32 wm_ctx_max_items = 8;
+
+    struct WmCtxItem {
+        const char* label;
+        hcpp::u32 id;
+        hcpp::u8 flags;
+    };
+
+    using WmCtxPick = void (*)(hcpp::u32 id, void* user) noexcept;
+
     hcpp::u32 wm_open(const char* app_name, hype::ui::Rect frame) noexcept;
     bool wm_close(hcpp::u32 id) noexcept;
     bool wm_focus(hcpp::u32 id) noexcept;
@@ -33,11 +48,16 @@ namespace hype::win {
     bool wm_dirty() noexcept;
     hype::ui::Rect wm_damage_clip(hype::ui::Rect bounds) noexcept;
     bool wm_handle_mouse(hcpp::i32 x, hcpp::i32 y, bool pressed) noexcept;
+    bool wm_handle_mouse_r(hcpp::i32 x, hcpp::i32 y) noexcept;
     bool wm_handle_key(char ascii) noexcept;
     bool wm_test_click(hcpp::i32 x, hcpp::i32 y) noexcept;
     bool wm_menu_open(hcpp::u32 id) noexcept;
     void wm_menu_close() noexcept;
     bool wm_menu_visible() noexcept;
+    bool wm_ctx_open(hcpp::i32 x, hcpp::i32 y, const WmCtxItem* items,
+                     hcpp::u32 count, WmCtxPick pick, void* user) noexcept;
+    void wm_ctx_close() noexcept;
+    bool wm_ctx_visible() noexcept;
     hcpp::u32 wm_count() noexcept;
     const Win* wm_window(hcpp::u32 id) noexcept;
     const Win* wm_window_at(hcpp::u32 index) noexcept;

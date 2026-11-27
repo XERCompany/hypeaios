@@ -12,6 +12,7 @@
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget.h"
+#include "kernel/win/deskicons.h"
 
 namespace hype::win {
 
@@ -30,6 +31,9 @@ namespace hype::win {
         constexpr hcpp::i32 menu_item_h = 22;
         constexpr hcpp::i32 menu_pad = 4;
         constexpr hcpp::u32 menu_item_count = 3;
+        constexpr hcpp::i32 ctx_menu_width = 180;
+        constexpr hcpp::i32 ctx_item_h = 28;
+        constexpr hcpp::i32 ctx_sep_h = 9;
         constexpr hcpp::i32 cascade_w = 520;
         constexpr hcpp::i32 cascade_h = 340;
         constexpr hcpp::u32 cascade_wrap = 6;
@@ -44,6 +48,12 @@ namespace hype::win {
         hcpp::u32 menu_win = 0;
         Point menu_anchor{};
         Rect menu_screen{0, 0, 1024, 768};
+        WmCtxItem ctx_items[wm_ctx_max_items];
+        hcpp::u32 ctx_count = 0;
+        Point ctx_anchor{};
+        WmCtxPick ctx_pick = nullptr;
+        void* ctx_user = nullptr;
+        bool ctx_active = false;
         Rect damage{};
         bool damaged = false;
         bool damage_full = false;
@@ -204,6 +214,110 @@ namespace hype::win {
         };
 
         WinMenu menu_widget;
+
+        hcpp::i32 ctx_row_h(const WmCtxItem& item) noexcept {
+            return (item.flags & wm_ctx_separator) != 0 ? ctx_sep_h
+                                                        : ctx_item_h;
+        }
+
+        Rect ctx_rect_now() noexcept {
+            hcpp::i32 h = menu_pad * 2;
+            for (hcpp::u32 i = 0; i < ctx_count; ++i) {
+                h += ctx_row_h(ctx_items[i]);
+            }
+            Rect r{ctx_anchor.x, ctx_anchor.y, ctx_menu_width, h};
+            if (r.right() > menu_screen.right() - 2) {
+                r.x = menu_screen.right() - 2 - r.w;
+            }
+            if (r.bottom() > menu_screen.bottom() - 2) {
+                r.y = menu_screen.bottom() - 2 - r.h;
+            }
+            if (r.x < menu_screen.x + 2) {
+                r.x = menu_screen.x + 2;
+            }
+            if (r.y < menu_screen.y + 2) {
+                r.y = menu_screen.y + 2;
+            }
+            return r;
+        }
+
+        // Returns the item index under `p`, including separator rows so
+        // callers can tell "inside the menu" from "outside".
+        hcpp::i32 ctx_item_at(Point p) noexcept {
+            const Rect r = ctx_rect_now();
+            if (!r.contains(p)) {
+                return -1;
+            }
+            hcpp::i32 row_y = r.y + menu_pad;
+            for (hcpp::u32 i = 0; i < ctx_count; ++i) {
+                const hcpp::i32 h = ctx_row_h(ctx_items[i]);
+                if (p.y >= row_y && p.y < row_y + h) {
+                    return static_cast<hcpp::i32>(i);
+                }
+                row_y += h;
+            }
+            return -1;
+        }
+
+        class CtxMenu : public hype::ui::Widget {
+        public:
+            Size measure(Size available) noexcept override {
+                (void)available;
+                return preferred_size();
+            }
+
+            void layout(const Rect& rect) noexcept override {
+                (void)rect;
+                set_bounds(ctx_rect_now());
+            }
+
+            void paint(Canvas& canvas) noexcept override {
+                const Rect box = bounds();
+                if (box.empty()) {
+                    return;
+                }
+                const Theme& theme = hype::ui::theme_active();
+                hype::ui::rui_panel(canvas, box, hype::ui::rui_elev_panel);
+                const hcpp::i32 line = hype::font::hypefont_ready()
+                                           ? hype::font::text_line_height(13)
+                                           : 16;
+                hcpp::i32 row_y = box.y + menu_pad;
+                for (hcpp::u32 i = 0; i < ctx_count; ++i) {
+                    const WmCtxItem& item = ctx_items[i];
+                    const hcpp::i32 h = ctx_row_h(item);
+                    const Rect row{box.x + 1, row_y, box.w - 2, h};
+                    if ((item.flags & wm_ctx_separator) != 0) {
+                        canvas.fill_rect(
+                            Rect{row.x + 8, row.y + h / 2, row.w - 16, 1},
+                            canvas.color(theme.border));
+                    } else {
+                        canvas.fill_rect(
+                            row, canvas.color(hype::ui::rui_lift(
+                                     theme.card, hype::ui::rui_elev_panel)));
+                        hcpp::i32 top = row.y + (row.h - line) / 2;
+                        if (top < row.y) {
+                            top = row.y;
+                        }
+                        paint_label(
+                            canvas, row.x + 10, top,
+                            item.label != nullptr ? item.label : "",
+                            (item.flags & wm_ctx_disabled) != 0
+                                ? theme.muted_fg
+                                : theme.card_fg,
+                            13);
+                    }
+                    row_y += h;
+                }
+                if (hype::ui::rui_dark_surface()) {
+                    hype::gfx::gfx_inner_glow_edge(
+                        canvas, box.inset(hype::ui::Insets::uniform(1)),
+                        static_cast<hcpp::i32>(theme.radius_lg),
+                        theme.accent);
+                }
+            }
+        };
+
+        CtxMenu ctx_widget;
 
         void paint_chrome(Canvas& canvas, const Win& w) noexcept {
             const Theme& theme = hype::ui::theme_active();
@@ -492,6 +606,8 @@ namespace hype::win {
         const Rect btn = menu_btn_rect(*w);
         menu_anchor = {btn.x, btn.bottom() + 2};
         menu_win = id;
+        ctx_active = false;
+        ctx_count = 0;
         menu_widget.set_preferred_size(
             Size{menu_width,
                  menu_pad * 2 +
@@ -508,10 +624,65 @@ namespace hype::win {
         damage_full = true;
         overlays.close();
         menu_win = 0;
+        ctx_active = false;
+        ctx_count = 0;
     }
 
     bool wm_menu_visible() noexcept {
         return menu_win != 0 && overlays.is_open();
+    }
+
+    bool wm_ctx_open(hcpp::i32 x, hcpp::i32 y, const WmCtxItem* items,
+                     hcpp::u32 count, WmCtxPick pick, void* user) noexcept {
+        if (items == nullptr || count == 0 || pick == nullptr) {
+            return false;
+        }
+        if (count > wm_ctx_max_items) {
+            count = wm_ctx_max_items;
+        }
+        // Both menus share the single overlay slot: drop the window menu.
+        if (overlays.is_open()) {
+            overlays.close();
+        }
+        menu_win = 0;
+        for (hcpp::u32 i = 0; i < count; ++i) {
+            ctx_items[i] = items[i];
+        }
+        ctx_count = count;
+        ctx_anchor = {x, y};
+        ctx_pick = pick;
+        ctx_user = user;
+        hcpp::i32 h = menu_pad * 2;
+        for (hcpp::u32 i = 0; i < ctx_count; ++i) {
+            h += ctx_row_h(ctx_items[i]);
+        }
+        ctx_widget.set_preferred_size(Size{ctx_menu_width, h});
+        if (!overlays.open(&ctx_widget)) {
+            ctx_count = 0;
+            return false;
+        }
+        ctx_active = true;
+        damage_full = true;
+        serial::write("ctx menu=open items=");
+        serial::write_dec32(ctx_count);
+        serial::write("\r\n");
+        return true;
+    }
+
+    void wm_ctx_close() noexcept {
+        if (!ctx_active) {
+            return;
+        }
+        damage_full = true;
+        overlays.close();
+        ctx_active = false;
+        ctx_count = 0;
+        ctx_pick = nullptr;
+        ctx_user = nullptr;
+    }
+
+    bool wm_ctx_visible() noexcept {
+        return ctx_active && overlays.is_open();
     }
 
     bool wm_handle_mouse(hcpp::i32 x, hcpp::i32 y, bool pressed) noexcept {
@@ -519,6 +690,25 @@ namespace hype::win {
             return false;
         }
         const Point p{x, y};
+        if (wm_ctx_visible()) {
+            const hcpp::i32 item = ctx_item_at(p);
+            if (item >= 0) {
+                const WmCtxItem it = ctx_items[item];
+                if ((it.flags &
+                     (wm_ctx_separator | wm_ctx_disabled)) == 0 &&
+                    ctx_pick != nullptr) {
+                    const hcpp::u32 id = it.id;
+                    WmCtxPick pick = ctx_pick;
+                    void* user = ctx_user;
+                    wm_ctx_close();
+                    pick(id, user);
+                }
+                // Separator/disabled rows keep the menu open.
+                return true;
+            }
+            wm_ctx_close();
+            return true;
+        }
         if (wm_menu_visible()) {
             const hcpp::u32 target = menu_win;
             const hcpp::i32 item = menu_item_at(p);
@@ -552,7 +742,43 @@ namespace hype::win {
             }
             return wm_focus(w.id);
         }
-        return false;
+        // No window and no taskbar zone claimed the press: the click
+        // landed on empty desktop — offer it to the icon band.
+        return desk_icons_handle_click(x, y);
+    }
+
+    bool wm_handle_mouse_r(hcpp::i32 x, hcpp::i32 y) noexcept {
+        const Point p{x, y};
+        if (wm_ctx_visible()) {
+            wm_ctx_close();
+            return true;
+        }
+        if (wm_menu_visible()) {
+            wm_menu_close();
+            return true;
+        }
+        // Right-click inside a window frame opens that window's system
+        // menu, same overlay path as the chrome menu button.
+        hcpp::u32 order[wm_max_windows];
+        const hcpp::u32 n = collect_order(order, false);
+        for (hcpp::u32 k = 0; k < n; ++k) {
+            Win& w = slots[order[k]];
+            if (!w.frame.contains(p)) {
+                continue;
+            }
+            wm_focus(w.id);
+            wm_menu_open(w.id);
+            return true;
+        }
+        // The taskbar band consumes right-presses without a menu.
+        const Rect bar{menu_screen.x,
+                       menu_screen.bottom() - hype::ui::deskbar_height,
+                       menu_screen.w, hype::ui::deskbar_height};
+        if (bar.contains(p)) {
+            return true;
+        }
+        // Empty desktop: icon menu on a cell, desktop menu otherwise.
+        return desk_icons_handle_rclick(x, y);
     }
 
     bool wm_test_click(hcpp::i32 x, hcpp::i32 y) noexcept {
@@ -565,6 +791,8 @@ namespace hype::win {
             if (!overlays.is_open()) {
                 damage_full = true;
                 menu_win = 0;
+                ctx_active = false;
+                ctx_count = 0;
             }
             return consumed;
         }

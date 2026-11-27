@@ -3,6 +3,7 @@
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/apps/speedstart.h"
 #include "kernel/win/deskbg.h"
+#include "kernel/win/deskicons.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/hyperui.h"
@@ -48,6 +49,9 @@ namespace hype::win {
                 hype::gfx::gfx_gradient_v(canvas, screen, theme.bg,
                                           hype::ui::rui_shade(theme.bg, 10));
             }
+            // Desktop icon band: above wallpaper, below windows. Painted
+            // only inside the damage clip so untouched cells stay cheap.
+            desk_icons_paint(fb, clip);
         }
         wm_paint(fb);
         hype::ui::deskbar_paint(fb, clip);

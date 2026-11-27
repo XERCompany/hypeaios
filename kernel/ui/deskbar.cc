@@ -445,6 +445,12 @@ namespace hype::ui {
 
     bool deskbar_start_open() noexcept { return start_open; }
 
+    void deskbar_open_start() noexcept {
+        if (!start_open) {
+            open_start();
+        }
+    }
+
     void deskbar_close_start() noexcept {
         if (!start_open) {
             return;

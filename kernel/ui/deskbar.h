@@ -23,6 +23,7 @@ namespace hype::ui {
     bool deskbar_handle_mouse(hcpp::i32 x, hcpp::i32 y, bool pressed) noexcept;
 
     bool deskbar_start_open() noexcept;
+    void deskbar_open_start() noexcept;
     void deskbar_close_start() noexcept;
 
 }

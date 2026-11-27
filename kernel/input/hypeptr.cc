@@ -68,6 +68,23 @@ namespace hype::input {
                     ptr_mark_dirty();
                 }
             }
+            if ((rising & ptr_button_right) != 0) {
+                serial::write("ptr rclick=");
+                serial::write_dec32(static_cast<hcpp::u32>(x));
+                serial::write_char(',');
+                serial::write_dec32(static_cast<hcpp::u32>(y));
+                serial::write(" hit=");
+                if (!hype::session::session_logged_in()) {
+                    serial::write_line("locked");
+                    return;
+                }
+                if (hype::win::wm_handle_mouse_r(x, y)) {
+                    serial::write_line("wm");
+                    ptr_mark_dirty();
+                } else {
+                    serial::write_line("none");
+                }
+            }
         }
 
     }
@@ -88,6 +105,7 @@ namespace hype::input {
         serial::write(" pkt=");
         serial::write_dec32(msaux_packet_size());
         serial::write("\r\n");
+        serial::write_line("rbtn wired=ok");
         return ok;
     }
 
