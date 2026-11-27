@@ -286,6 +286,7 @@ namespace hype::ui {
         const bool set_ok = theme_active().bg == light.bg;
         theme_set(theme_dark());
         const bool restore_ok = theme_active().bg == dark.bg;
+        serial::write_line(restore_ok ? "theme dark=ok" : "theme dark=fail");
 
         serial::write("ui2 theme tokens=");
         serial::write_dec32(tokens);

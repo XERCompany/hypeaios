@@ -65,6 +65,77 @@ namespace hype::gfx {
                                        static_cast<hcpp::u8>(blue * inverse / 255)));
         }
 
+        // Multiplicative shade toward a tint color: always darkens (tint < 255
+        // per channel) so even a warm-dark shadow stays a shadow over dark
+        // backgrounds, while keeping a subtle warm bias instead of pure black.
+        void blend_tint(hcpp::graphics::Framebuffer& fb, hcpp::i32 x, hcpp::i32 y,
+                        hcpp::u8 tint_r, hcpp::u8 tint_g, hcpp::u8 tint_b,
+                        hcpp::u32 alpha) noexcept {
+            if (alpha == 0) {
+                return;
+            }
+            if (alpha > 255) {
+                alpha = 255;
+            }
+            const hcpp::u32 dst =
+                fb.get_pixel(static_cast<hcpp::u32>(x), static_cast<hcpp::u32>(y));
+            hcpp::u8 red = 0;
+            hcpp::u8 green = 0;
+            hcpp::u8 blue = 0;
+            fb.decode_rgb(dst, red, green, blue);
+            fb.put_pixel(static_cast<hcpp::u32>(x), static_cast<hcpp::u32>(y),
+                         fb.encode_rgb(
+                             static_cast<hcpp::u8>(
+                                 red * (65025 - alpha * (255 - tint_r)) /
+                                 65025),
+                             static_cast<hcpp::u8>(
+                                 green * (65025 - alpha * (255 - tint_g)) /
+                                 65025),
+                             static_cast<hcpp::u8>(
+                                 blue * (65025 - alpha * (255 - tint_b)) /
+                                 65025)));
+        }
+
+        // Additive ("plus-lighter") blend used for inner glow edges and the
+        // faint top highlight on premium dark cards.
+        void blend_add(hcpp::graphics::Framebuffer& fb, hcpp::i32 x, hcpp::i32 y,
+                       hcpp::u8 add_r, hcpp::u8 add_g, hcpp::u8 add_b,
+                       hcpp::u32 alpha) noexcept {
+            if (alpha == 0) {
+                return;
+            }
+            const hcpp::u32 dst =
+                fb.get_pixel(static_cast<hcpp::u32>(x), static_cast<hcpp::u32>(y));
+            hcpp::u8 red = 0;
+            hcpp::u8 green = 0;
+            hcpp::u8 blue = 0;
+            fb.decode_rgb(dst, red, green, blue);
+            fb.put_pixel(static_cast<hcpp::u32>(x), static_cast<hcpp::u32>(y),
+                         fb.encode_rgb(
+                             static_cast<hcpp::u8>(clamp_i32(
+                                 red + add_r * alpha / 255, 0, 255)),
+                             static_cast<hcpp::u8>(clamp_i32(
+                                 green + add_g * alpha / 255, 0, 255)),
+                             static_cast<hcpp::u8>(clamp_i32(
+                                 blue + add_b * alpha / 255, 0, 255))));
+        }
+
+        // Horizontal inset of a rounded rect at a given scanline row.
+        hcpp::i32 row_inset(Rect rect, hcpp::i32 radius, hcpp::i32 row) noexcept {
+            const hcpp::i32 top_center = rect.y + radius;
+            const hcpp::i32 bottom_center = rect.bottom() - radius - 1;
+            hcpp::i32 distance = 0;
+            if (row < top_center) {
+                distance = top_center - row;
+            } else if (row > bottom_center) {
+                distance = row - bottom_center;
+            }
+            if (distance <= 0) {
+                return 0;
+            }
+            return radius - isqrt_i32(radius * radius - distance * distance);
+        }
+
         void box_blur(hcpp::u8* dst, hcpp::u8* tmp, hcpp::i32 w, hcpp::i32 h,
                       hcpp::i32 radius) noexcept {
             const hcpp::i32 window = 2 * radius + 1;
@@ -155,6 +226,12 @@ namespace hype::gfx {
 
     void gfx_soft_shadow(Canvas& canvas, Rect rect, hcpp::i32 radius, hcpp::i32 blur,
                          hcpp::u8 alpha) noexcept {
+        gfx_soft_shadow_tinted(canvas, rect, radius, blur, alpha, 0x000000);
+    }
+
+    void gfx_soft_shadow_tinted(Canvas& canvas, Rect rect, hcpp::i32 radius,
+                                hcpp::i32 blur, hcpp::u8 alpha,
+                                hcpp::u32 tint_rgb) noexcept {
         if (rect.empty() || alpha == 0) {
             return;
         }
@@ -163,7 +240,7 @@ namespace hype::gfx {
             return;
         }
         blur = clamp_i32(blur, 0, 48);
-        const hcpp::i32 offset_y = 1 + blur / 4;
+        const hcpp::i32 offset_y = 2 + blur / 3;
         Rect region = rect.inset(Insets::uniform(-blur)).translated(Point{0, offset_y});
         const Rect bounds{0, 0, static_cast<hcpp::i32>(fb.width()),
                           static_cast<hcpp::i32>(fb.height())};
@@ -226,13 +303,18 @@ namespace hype::gfx {
             }
         }
 
+        hcpp::u8 tr = 0;
+        hcpp::u8 tg = 0;
+        hcpp::u8 tb = 0;
+        unpack_rgb(tint_rgb, tr, tg, tb);
         for (hcpp::i32 y = 0; y < region.h; ++y) {
             for (hcpp::i32 x = 0; x < region.w; ++x) {
                 const hcpp::u32 coverage = mask_a[y * region.w + x];
                 if (coverage == 0) {
                     continue;
                 }
-                blend_dark(fb, region.x + x, region.y + y, coverage * alpha / 255);
+                blend_tint(fb, region.x + x, region.y + y, tr, tg, tb,
+                           coverage * alpha / 255);
             }
         }
     }
@@ -257,6 +339,76 @@ namespace hype::gfx {
                 }
                 blend_dark(fb, x, y,
                            static_cast<hcpp::u32>(strength * (blur - d) / blur));
+            }
+        }
+    }
+
+    // Premium dark-card edge: an accent inner shadow rising from the bottom
+    // edge (clipped to the rounded shape) plus a faint white top highlight.
+    void gfx_inner_glow_edge(Canvas& canvas, Rect rect, hcpp::i32 radius,
+                             hcpp::u32 accent_rgb) noexcept {
+        if (rect.empty()) {
+            return;
+        }
+        hcpp::graphics::Framebuffer& fb = canvas.target();
+        if (!fb.valid()) {
+            return;
+        }
+        const Rect area = rect.intersection(canvas.clip());
+        if (area.empty()) {
+            return;
+        }
+        const hcpp::i32 r = clamp_radius(rect, radius);
+        hcpp::u8 ar = 0;
+        hcpp::u8 ag = 0;
+        hcpp::u8 ab = 0;
+        unpack_rgb(accent_rgb, ar, ag, ab);
+
+        const hcpp::i32 depth = clamp_i32(rect.h / 4, 10, 36);
+        const hcpp::i32 glow_top = rect.bottom() - depth;
+        const hcpp::i32 y0 = area.y > glow_top ? area.y : glow_top;
+        for (hcpp::i32 y = y0; y < area.bottom(); ++y) {
+            const hcpp::i32 d = rect.bottom() - 1 - y;
+            const hcpp::i32 rise = depth - d;
+            hcpp::u32 alpha = static_cast<hcpp::u32>(rise * rise * 140) /
+                              static_cast<hcpp::u32>(depth * depth);
+            if (d <= 1) {
+                alpha += 110;
+            }
+            if (alpha > 220) {
+                alpha = 220;
+            }
+            const hcpp::i32 inset = (r > 0 ? row_inset(rect, r, y) : 0) + 1;
+            hcpp::i32 sx = rect.x + inset;
+            if (sx < area.x) {
+                sx = area.x;
+            }
+            hcpp::i32 sr = rect.right() - inset;
+            if (sr > area.right()) {
+                sr = area.right();
+            }
+            for (hcpp::i32 x = sx; x < sr; ++x) {
+                blend_add(fb, x, y, ar, ag, ab, alpha);
+            }
+        }
+
+        for (hcpp::i32 k = 0; k < 2; ++k) {
+            const hcpp::i32 y = rect.y + 1 + k;
+            if (y < area.y || y >= area.bottom()) {
+                continue;
+            }
+            const hcpp::i32 inset = (r > 0 ? row_inset(rect, r, y) : 0) + 2;
+            hcpp::i32 sx = rect.x + inset;
+            if (sx < area.x) {
+                sx = area.x;
+            }
+            hcpp::i32 sr = rect.right() - inset;
+            if (sr > area.right()) {
+                sr = area.right();
+            }
+            const hcpp::u32 alpha = k == 0 ? 30u : 14u;
+            for (hcpp::i32 x = sx; x < sr; ++x) {
+                blend_add(fb, x, y, 255, 255, 255, alpha);
             }
         }
     }
@@ -481,7 +633,21 @@ namespace hype::gfx {
             fb.get_pixel(4, 4) == fb.get_pixel(2, 2);
         serial::write_line(glow_ok ? "gfx glow=ok" : "gfx glow=fail");
 
-        return shadow_ok && grad_ok && elev_ok && glow_ok;
+        canvas.fill_rect(Rect{0, 0, 96, 96}, canvas.color(0x101010));
+        gfx_inner_glow_edge(canvas, Rect{24, 24, 48, 48}, 8, 0x2365FF);
+        hcpp::u8 er = 0;
+        hcpp::u8 eg = 0;
+        hcpp::u8 eb = 0;
+        fb.decode_rgb(fb.get_pixel(48, 70), er, eg, eb);
+        const hcpp::u32 edge_luma = pixel_luma(fb, fb.get_pixel(48, 70));
+        const hcpp::u32 top_luma = pixel_luma(fb, fb.get_pixel(48, 25));
+        const bool edge_ok =
+            static_cast<hcpp::i32>(eb) > 120 &&
+            edge_luma > pixel_luma(fb, fb.get_pixel(48, 40)) &&
+            top_luma > pixel_luma(fb, fb.get_pixel(4, 4)) + 40;
+        serial::write_line(edge_ok ? "gfx edge=ok" : "gfx edge=fail");
+
+        return shadow_ok && grad_ok && elev_ok && glow_ok && edge_ok;
     }
 
 }  // namespace hype::gfx

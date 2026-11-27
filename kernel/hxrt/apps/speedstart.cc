@@ -1,5 +1,6 @@
 #include "kernel/hxrt/apps/speedstart.h"
 
+#include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/apps/builtins.h"
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/serial.hpp"
@@ -122,6 +123,9 @@ namespace hype::hxrt {
             hype::ui::rui_rounded_gradient(
                 canvas, icon, static_cast<hcpp::i32>(theme.radius_md),
                 hype::ui::rui_lift(theme.primary, 1), theme.primary);
+            hype::gfx::gfx_inner_glow_edge(
+                canvas, icon, static_cast<hcpp::i32>(theme.radius_md),
+                theme.ring);
             char mono[2] = {upper(app->name[0]),
                             app->name[1] != '\0' ? upper(app->name[1]) : ' '};
             canvas.draw_text(icon.x + (icon.w - 16) / 2,

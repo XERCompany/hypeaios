@@ -11,7 +11,7 @@ namespace hype::ui {
         const Theme& theme = theme_active();
         const Rect ring{bounds.x - 2, bounds.y - 2, bounds.w + 4, bounds.h + 4};
         canvas.stroke_rounded_rect(ring,
-                                   static_cast<hcpp::i32>(theme.radius_md) + 2,
+                                   static_cast<hcpp::i32>(theme.radius_sm) + 2,
                                    canvas.color(theme.ring));
     }
 
