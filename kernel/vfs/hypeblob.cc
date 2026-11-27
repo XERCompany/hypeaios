@@ -13,12 +13,35 @@ namespace {
     constexpr hcpp::u32 entry_size = 80;
     constexpr hcpp::u32 header_sector_max = 16;  // room for 64 entries
     constexpr hcpp::u32 read_chunk = 128;        // sectors per ATA command
+    constexpr hcpp::u32 write_chunk = 128;
     constexpr hcpp::u32 path_capacity = 160;
+    constexpr hcpp::u32 dir_list_cap = 64;
+    constexpr hcpp::u32 walk_max_depth = hype::vfs::hypepath_max_components;
+
+    // Sync-time cap for the on-disk region. tools/mkimage.py writes the blob
+    // at LBA 4129 followed by sparse zeros out to ~1.1 GiB, so 4 MiB stays
+    // far inside the image while covering the full memfs (~2.5 MiB).
+    constexpr hcpp::u64 region_max_bytes = 4ull << 20;
 
     // Static buffers: the payload is read once at boot, so BSS scratch space
-    // is fine and avoids touching the heap.
+    // is fine and avoids touching the heap. io_buf has a spare sector so
+    // sync can zero-pad a file's tail sector without overflowing.
     hcpp::u8 header_buf[header_sector_max * sector_size];
-    hcpp::u8 io_buf[max_file_bytes];
+    hcpp::u8 io_buf[max_file_bytes + sector_size];
+    hcpp::u8 verify_buf[sector_size];
+
+    // Files queued for serialization and one listing array per walk depth.
+    struct PendingFile {
+        char name[name_length];  // blob entry name ("u/apps/x.hxer")
+        char path[hype::vfs::hypepath_max_length];  // full vfs path
+        hcpp::u64 offset;        // sector-aligned blob offset, set at layout
+        hcpp::u32 size;
+    };
+
+    PendingFile pending[max_entries];
+    hype::vfs::FsStat dir_listing[walk_max_depth * dir_list_cap];
+    hcpp::u32 pending_count = 0;
+    bool blob_mounted = false;
 
     hcpp::u32 le32(const hcpp::u8* p) noexcept {
         return static_cast<hcpp::u32>(p[0]) |
@@ -30,6 +53,33 @@ namespace {
     hcpp::u64 le64(const hcpp::u8* p) noexcept {
         return static_cast<hcpp::u64>(le32(p)) |
                (static_cast<hcpp::u64>(le32(p + 4)) << 32);
+    }
+
+    void put32(hcpp::u8* p, hcpp::u32 v) noexcept {
+        p[0] = static_cast<hcpp::u8>(v & 0xFF);
+        p[1] = static_cast<hcpp::u8>((v >> 8) & 0xFF);
+        p[2] = static_cast<hcpp::u8>((v >> 16) & 0xFF);
+        p[3] = static_cast<hcpp::u8>((v >> 24) & 0xFF);
+    }
+
+    void put64(hcpp::u8* p, hcpp::u64 v) noexcept {
+        put32(p, static_cast<hcpp::u32>(v));
+        put32(p + 4, static_cast<hcpp::u32>(v >> 32));
+    }
+
+    // Appends `src` to the NUL-terminated `dst` (current length `len`),
+    // keeping one byte for the terminator. Returns false on overflow.
+    bool append(char* dst, hcpp::u32 cap, hcpp::u32& len,
+                const char* src) noexcept {
+        for (hcpp::u32 i = 0; src[i] != '\0'; ++i) {
+            if (len + 1 >= cap) {
+                dst[len] = '\0';
+                return false;
+            }
+            dst[len++] = src[i];
+        }
+        dst[len] = '\0';
+        return true;
     }
 
     bool read_sectors(hcpp::u64 offset, hcpp::u32 bytes, hcpp::u8* out) noexcept {
@@ -45,6 +95,46 @@ namespace {
             lba += count;
             out += count * sector_size;
             remaining -= count;
+        }
+        return true;
+    }
+
+    // Writes `bytes` (must be sector-aligned) at blob offset `offset`.
+    bool write_sectors(hcpp::u64 offset, const hcpp::u8* data,
+                       hcpp::u32 bytes) noexcept {
+        hcpp::u64 lba = hype::vfs::hypeblob_data_lba + offset / sector_size;
+        hcpp::u32 remaining = bytes / sector_size;
+        while (remaining != 0) {
+            const hcpp::u32 count =
+                remaining < write_chunk ? remaining : write_chunk;
+            if (!hype::ata::ata_write_sectors(static_cast<hcpp::u32>(lba),
+                                              data,
+                                              static_cast<hcpp::u8>(count))) {
+                return false;
+            }
+            lba += count;
+            data += count * sector_size;
+            remaining -= count;
+        }
+        return true;
+    }
+
+    // Read-after-write verify: re-reads every written sector at blob offset
+    // `offset` and compares it against `data` byte for byte.
+    bool verify_sectors(hcpp::u64 offset, const hcpp::u8* data,
+                        hcpp::u32 bytes) noexcept {
+        const hcpp::u64 lba =
+            hype::vfs::hypeblob_data_lba + offset / sector_size;
+        const hcpp::u32 sectors = bytes / sector_size;
+        for (hcpp::u32 s = 0; s < sectors; ++s) {
+            if (!hype::ata::ata_pio_read(static_cast<hcpp::u32>(lba + s),
+                                         verify_buf, 1)) {
+                return false;
+            }
+            if (hcpp::compare(verify_buf, data + s * sector_size,
+                              sector_size) != 0) {
+                return false;
+            }
         }
         return true;
     }
@@ -104,6 +194,53 @@ namespace {
         return hype::vfs::fs_write(path, data, size) == hype::vfs::FsStatus::Ok;
     }
 
+    // Recursive memfs walk for hypeblob_sync(). `dir_path` is a full vfs
+    // path ("HYPEOS://U/wallpapers"), `prefix` the blob-name prefix
+    // accumulated so far ("u/wallpapers/"). Each file becomes a PendingFile
+    // whose blob name mirrors the mount routing rules above.
+    void collect_dir(const char* dir_path, const char* prefix,
+                     hcpp::u32 depth) noexcept {
+        if (depth >= walk_max_depth || pending_count >= max_entries) return;
+        hype::vfs::FsStat* listing = dir_listing + depth * dir_list_cap;
+        const hcpp::u32 count =
+            hype::vfs::fs_list(dir_path, listing, dir_list_cap);
+        const hcpp::u32 bound = count < dir_list_cap ? count : dir_list_cap;
+        for (hcpp::u32 i = 0; i < bound && pending_count < max_entries; ++i) {
+            const hype::vfs::FsStat& st = listing[i];
+            if ((st.flags & hype::vfs::FS_SYS) != 0) continue;
+            char child_path[hype::vfs::hypepath_max_length];
+            hcpp::u32 len = 0;
+            if (!append(child_path, sizeof(child_path), len, dir_path) ||
+                !append(child_path, sizeof(child_path), len, "/") ||
+                !append(child_path, sizeof(child_path), len, st.name)) {
+                continue;
+            }
+            char child_name[name_length];
+            len = 0;
+            if (!append(child_name, sizeof(child_name), len, prefix) ||
+                !append(child_name, sizeof(child_name), len, st.name)) {
+                continue;
+            }
+            if ((st.flags & hype::vfs::FS_DIR) != 0) {
+                if (!append(child_name, sizeof(child_name), len, "/")) {
+                    continue;
+                }
+                collect_dir(child_path, child_name, depth + 1);
+                continue;
+            }
+            if (st.size == 0 || st.size > max_file_bytes) continue;
+            if (!name_valid(child_name)) continue;
+            PendingFile& item = pending[pending_count];
+            len = 0;
+            append(item.name, sizeof(item.name), len, child_name);
+            len = 0;
+            append(item.path, sizeof(item.path), len, child_path);
+            item.offset = 0;
+            item.size = st.size;
+            ++pending_count;
+        }
+    }
+
 }
 
 namespace hype::vfs {
@@ -112,6 +249,10 @@ namespace hype::vfs {
         BlobMount out{};
         out.ata_ok = hype::ata::ata_present();
         if (!out.ata_ok) return out;
+
+        // Logs "ata model=... sectors=N"; informational only.
+        hype::ata::AtaInfo ident{};
+        hype::ata::ata_identify(ident);
 
         if (!hype::ata::ata_pio_read(hypeblob_data_lba, header_buf, 1)) {
             return out;
@@ -122,11 +263,14 @@ namespace hype::vfs {
 
         const hcpp::u32 count = le32(header_buf + 8);
         const hcpp::u32 header_sectors = le32(header_buf + 12);
-        if (count == 0 || count > max_entries || header_sectors == 0 ||
+        if (count > max_entries || header_sectors == 0 ||
             header_sectors > header_sector_max ||
             16 + count * entry_size > header_sectors * sector_size) {
             return out;
         }
+        // A valid header (even a 0-entry one) means the region is ours to
+        // rewrite: enable hypeblob_sync() from here on.
+        blob_mounted = true;
         if (header_sectors > 1 &&
             !hype::ata::ata_pio_read(hypeblob_data_lba + 1,
                                      header_buf + sector_size,
@@ -153,6 +297,90 @@ namespace hype::vfs {
             }
         }
         return out;
+    }
+
+    bool hypeblob_sync() noexcept {
+        // Guard: never write before a valid on-disk blob has been seen, so
+        // boot-time fs_write()s (hxer installs, seeds) cannot clobber the
+        // region before mount.
+        if (!blob_mounted || !hype::ata::ata_present()) return false;
+
+        // Collect persistable files. U:* -> "u/<path>", T:* -> "t/<path>",
+        // S:/data subtree -> "<path>" (the mount routing's inverse). Other
+        // S: files are FS_SYS or boot-regenerated and are skipped.
+        pending_count = 0;
+        collect_dir("HYPEOS://U", "u/", 0);
+        collect_dir("HYPEOS://S/data", "", 0);
+        collect_dir("HYPEOS://T", "t/", 0);
+
+        // Layout pass, matching tools/mkimage.py: entries at offset 16,
+        // bodies sector-aligned starting after the header. Truncate the
+        // entry list until it fits the region cap.
+        hcpp::u32 used = pending_count;
+        hcpp::u32 header_sectors;
+        hcpp::u64 cursor;
+        for (;;) {
+            header_sectors =
+                (16 + used * entry_size + sector_size - 1) / sector_size;
+            cursor = static_cast<hcpp::u64>(header_sectors) * sector_size;
+            hcpp::u32 fit = 0;
+            for (hcpp::u32 i = 0; i < used; ++i) {
+                const hcpp::u64 end =
+                    cursor + (static_cast<hcpp::u64>(pending[i].size) +
+                              sector_size - 1) /
+                                 sector_size * sector_size;
+                if (end > region_max_bytes) break;
+                pending[i].offset = cursor;
+                cursor = end;
+                ++fit;
+            }
+            if (fit == used) break;
+            used = fit;
+        }
+
+        bool ok = true;
+        // Bodies first, header last: a crash mid-sync leaves the previous
+        // header intact rather than pointing at half-written data.
+        for (hcpp::u32 i = 0; i < used && ok; ++i) {
+            const PendingFile& item = pending[i];
+            hcpp::u32 got = 0;
+            if (hype::vfs::fs_read(item.path, io_buf, max_file_bytes, &got) !=
+                    hype::vfs::FsStatus::Ok ||
+                got != item.size) {
+                ok = false;
+                break;
+            }
+            const hcpp::u32 sectors =
+                (item.size + sector_size - 1) / sector_size;
+            hcpp::set(io_buf + item.size, 0,
+                      sectors * sector_size - item.size);
+            ok = write_sectors(item.offset, io_buf,
+                               sectors * sector_size) &&
+                 verify_sectors(item.offset, io_buf,
+                                sectors * sector_size);
+        }
+
+        if (ok) {
+            hcpp::set(header_buf, 0,
+                      header_sectors * sector_size);
+            hcpp::copy(header_buf, "HYPEDATA", 8);
+            put32(header_buf + 8, used);
+            put32(header_buf + 12, header_sectors);
+            for (hcpp::u32 i = 0; i < used; ++i) {
+                hcpp::u8* entry = header_buf + 16 + i * entry_size;
+                hcpp::u32 len = 0;
+                append(reinterpret_cast<char*>(entry), name_length, len,
+                       pending[i].name);
+                put64(entry + name_length, pending[i].offset);
+                put64(entry + name_length + 8, pending[i].size);
+            }
+            ok = write_sectors(0, header_buf,
+                               header_sectors * sector_size) &&
+                 verify_sectors(0, header_buf,
+                                header_sectors * sector_size);
+        }
+        if (!hype::ata::ata_flush_cache()) ok = false;
+        return ok;
     }
 
 }

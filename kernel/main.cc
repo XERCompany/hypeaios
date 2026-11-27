@@ -511,6 +511,18 @@ namespace {
             serial::write_line(db_error);
             serial::write_line("hello selftest=skipped no-db");
         }
+        // Persistence check: write a probe file, then serialize the whole
+        // persistable memfs (U:*, S:/data, T:*) back to the HYPEDATA blob.
+        // hypeblob_sync() re-reads every written sector and compares it
+        // before reporting success, so ok here means the disk holds it.
+        static const char sync_probe[] = "hypeblob sync probe\n";
+        hype::vfs::fs_write("HYPEOS://U/home/sync-probe.txt", sync_probe,
+                            sizeof(sync_probe));
+        const bool sync_ok = hype::vfs::hypeblob_sync();
+        serial::write("ata write=");
+        serial::write(sync_ok ? "ok" : "fail");
+        serial::write(" sync=");
+        serial::write_line(sync_ok ? "ok" : "fail");
     }
 
     bool svc_gfx_start() noexcept {

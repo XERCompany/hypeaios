@@ -4,6 +4,7 @@
 #include "kernel/hxrt/hxpack.h"
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/serial.hpp"
+#include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefs.h"
 
 namespace {
@@ -132,7 +133,13 @@ namespace hype::vfs {
                            leaf) == 0) {
             return false;
         }
-        return fs_write(path, blob, blob_size) == FsStatus::Ok;
+        const bool written = fs_write(path, blob, blob_size) == FsStatus::Ok;
+        if (written) {
+            // Persist the new .hxer pack to the HYPEDATA blob. No-op until
+            // the blob has been mounted, so boot-time installs are cheap.
+            hypeblob_sync();
+        }
+        return written;
     }
 
     bool hypefile_load(const char* path) noexcept {
@@ -254,6 +261,9 @@ namespace hype::vfs {
         serial::write_line(out.guard_ok ? "ok" : "fail");
 
         hype::hxrt::hxrt_unregister("hxf_probe");
+        // The install above synced hxf_probe into the blob; rewrite it now
+        // that the probe file is deleted so no ghost entry persists.
+        hypeblob_sync();
         return out.pack_ok && out.file_ok && out.guard_ok;
     }
 
