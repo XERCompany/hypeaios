@@ -105,3 +105,19 @@ User direction (2026-11-27): remove demo entirely; registration/login session; `
 | S8 | Session — registration flow + login gate; services start in background behind greeter; demo.cc removed | S2,S4 |
 | S9 | `hypefile` — .hxer/.hxersys file entries in memfs at HYPEOS://S/apps/, delete guard on .hxersys | S3,S1 |
 
+## P10 — Input & Cursor
+
+OS-class mouse cursor (Windows/Linux style): PS/2 mouse (8042 polling or IRQ12), hardware-style cursor sprite over wm_paint, hit path to winman. File names in user style (cryptic): `ptrmv`, `curstat`, `msaux`, `hypeptr`, `cursprite`.
+
+## P11 — CodecApps expansion (all formats, own code)
+
+Re-scan web docs for every image/audio/video codec; PCI media-decode chip docs (Intel GPU media engine is out of reach in QEMU — keep SW path + descriptors ready). Extend kernel/audio + kernel/video modules; per-file internet research by filename, expand each module's functions.
+
+## P12 — HypeAI ASIO + audio/video core
+
+Own ASIO-class driver contract: <10ms, 32–128 frame periods on HDA DMA ring, pull-mixer, exclusive stream. kernel/audio completion (mixer/SRC), kernel/video module (playback pipeline through display engine).
+
+## P13 — Big image (>1GB)
+
+Image must exceed 1GB: mkiso.py gets a data partition/blob payload (apps, wallpapers, fonts, docs) + VFS reads it; more builtin apps/services to justify size.
+

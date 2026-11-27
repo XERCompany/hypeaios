@@ -1,6 +1,7 @@
 #include "kernel/win/deskman.h"
 
 #include "kernel/gfx/hypegfx.h"
+#include "kernel/hxrt/apps/speedstart.h"
 #include "kernel/win/deskbg.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/hyperui.h"
@@ -25,10 +26,13 @@ namespace hype::win {
         if (!fb.valid()) {
             return 0;
         }
-        if (!desk_built) {
+        const bool first = !desk_built;
+        if (first) {
             desk_built = true;
-            desk_open_app("HxAbout");
-            desk_open_app("HxSettings");
+            const hcpp::i32 fw = static_cast<hcpp::i32>(fb.width());
+            const hcpp::i32 fh = static_cast<hcpp::i32>(fb.height());
+            wm_open("SpeedStart",
+                    hype::ui::Rect{(fw - 520) / 2, (fh - 420) / 2, 520, 420});
         }
         hype::ui::Canvas canvas(fb);
         const hype::ui::Theme& theme = hype::ui::theme_active();
@@ -41,6 +45,9 @@ namespace hype::win {
                                       hype::ui::rui_shade(theme.bg, 10));
         }
         wm_paint(fb);
+        if (first) {
+            hype::hxrt::ss_selftest();
+        }
         return wm_count();
     }
 

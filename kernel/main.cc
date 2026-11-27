@@ -31,6 +31,7 @@
 #include "kernel/gfx/gfxbench.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
+#include "kernel/hxrt/apps/builtins.h"
 #include "kernel/hxrt/apps/dxbg.h"
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/input/keyring.h"
@@ -41,6 +42,7 @@
 #include "kernel/svc/revsvc.h"
 #include "kernel/ui/flowlogin.h"
 #include "kernel/ui/selftest.h"
+#include "kernel/vfs/hypefile.h"
 #include "kernel/vfs/hypefs.h"
 #include "kernel/video/videov4lv.h"
 #include "kernel/win/deskman.h"
@@ -421,6 +423,20 @@ namespace {
         serial::write_dec32(hype::vfs::fs_disk_count());
         serial::write(" seed=");
         serial::write_line(vfs_seeded ? "ok" : "fail");
+        hcpp::u32 hxer_files = 0;
+        if (vfs_seeded) {
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::speedstart_app()) ? 1
+                                                                        : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::hxsettings_app()) ? 1
+                                                                        : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::hxabout_app()) ? 1 : 0;
+        }
+        serial::write("vfs hxer=");
+        serial::write_dec32(hxer_files);
+        serial::write("\r\n");
         hype::vfs::FsSelftest vfs_selftest{};
         const bool vfs_ok = hype::vfs::fs_selftest(vfs_selftest);
         serial::write("vfs path=");
@@ -486,11 +502,19 @@ namespace {
         serial::write_dec32(started);
         serial::write("\r\n");
         report("svc selftest=", hype::svc::svc_selftest());
+        report("revdbg selftest=", hype::hxrt::revdbg_selftest());
     }
 
     void stage_hxrt() noexcept {
         hype::hxrt::hxrt_boot();
         report("dxbg selftest=", hype::hxrt::dxbg_selftest());
+        serial::write("hxer sync=");
+        serial::write_dec32(hype::vfs::hypefile_sync());
+        serial::write("\r\n");
+        hype::vfs::HypefileSelftest hypefile_selftest{};
+        const bool hypefile_ok =
+            hype::vfs::hypefile_selftest(hypefile_selftest);
+        report("hypefile selftest=", hypefile_ok);
     }
 
     void stage_ui() noexcept {
