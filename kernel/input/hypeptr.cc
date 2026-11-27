@@ -97,8 +97,12 @@ namespace hype::input {
         MsauxPacket packets[16];
         const hcpp::u8 before = ptr_buttons();
         const hcpp::u32 n = msaux_poll(packets, 16);
+        bool moved = false;
         for (hcpp::u32 i = 0; i < n; ++i) {
             ptr_apply(packets[i]);
+            if (packets[i].dx != 0 || packets[i].dy != 0) {
+                moved = true;
+            }
             if (packets[i].wheel != 0) {
                 route_wheel(packets[i].wheel);
             }
@@ -107,6 +111,13 @@ namespace hype::input {
         const hcpp::u8 after = ptr_buttons();
         if (before != after) {
             route_buttons(before, after, ptr_x(), ptr_y());
+        }
+        // Motion events keep the WM drag engine and caption-button hot
+        // tracking alive; the press/release edges still route through
+        // route_buttons above.
+        if (moved && hype::session::session_logged_in() &&
+            hype::win::wm_handle_move(ptr_x(), ptr_y())) {
+            ptr_mark_dirty();
         }
         return ptr_take_dirty();
     }
