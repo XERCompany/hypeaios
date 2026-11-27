@@ -1,7 +1,7 @@
 #pragma once
 
 #include "hcpp/types.hpp"
-#include "kernel/audio/izau.h"
+#include "kernel/audio/hda.h"
 
 namespace hype::display {
 
@@ -93,25 +93,25 @@ namespace hype::display {
         return true;
     }
 
-    inline bool displayhda_route(audio::hda::IzauController& controller,
+    inline bool displayhda_route(audio::hda::HdaController& controller,
                                  const DisplayAudioRoute& route) noexcept {
         if (controller.mmio == 0) {
             return false;
         }
         hcpp::u32 response = 0;
-        if (!audio::hda::izau_codec_verb(controller, route.codec, route.widget,
+        if (!audio::hda::hda_codec_verb(controller, route.codec, route.widget,
                                   audio::hda::verb_set_converter_stream >> 8,
                                   static_cast<hcpp::u8>((route.stream_id << 4) |
                                                         (route.channel & 0x0F)),
                                   response)) {
             return false;
         }
-        return audio::hda::izau_codec_command(
+        return audio::hda::hda_codec_command(
             controller, route.codec, route.widget,
             audio::hda::verb_set_stream_format | audio::hda::fmt_48k_s16_2ch, response);
     }
 
-    inline bool displayhda_route(audio::hda::IzauController& controller, hcpp::u32 output_id,
+    inline bool displayhda_route(audio::hda::HdaController& controller, hcpp::u32 output_id,
                                  hcpp::u32 stream_id) noexcept {
         if (!displayhda_route(output_id, stream_id)) {
             return false;
