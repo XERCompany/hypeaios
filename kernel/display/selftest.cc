@@ -565,7 +565,7 @@ namespace hype::display {
             if (!displayhda_unroute(0) || displayhda_find_route(0) != nullptr) {
                 return false;
             }
-            audio::hda::IzauController empty{};
+            audio::hda::HdaController empty{};
             if (displayhda_route(empty, *route)) {
                 return false;
             }

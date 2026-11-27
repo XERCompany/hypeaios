@@ -508,6 +508,10 @@ namespace {
         return hype::audio::ac97::ac97_ready();
     }
 
+    bool svc_video_start() noexcept {
+        return hype::video::v4lv_device_count() != 0;
+    }
+
     void stage_svc() noexcept {
         using hype::svc::SvcRestart;
         hype::svc::svc_register("gfx", svc_gfx_start, nullptr, SvcRestart::OnFail, true);
@@ -518,6 +522,7 @@ namespace {
         hype::svc::svc_register("sqlite", svc_sqlite_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("hda", svc_hda_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("ac97", svc_ac97_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("video", svc_video_start, nullptr, SvcRestart::OnFail, true);
         const hcpp::u32 started = hype::svc::svc_autostart();
         serial::write("svc autostart=");
         serial::write_dec32(started);
