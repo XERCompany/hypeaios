@@ -77,10 +77,10 @@ namespace hype::ui {
         if (box.empty()) {
             return;
         }
-        const Theme& theme = Theme::dark();
-        canvas.fill_rect(box, canvas.color(theme.surface));
+        const Theme& theme = theme_active();
+        canvas.fill_rect(box, canvas.color(theme.card));
         canvas.stroke_rect(
-            box, canvas.color(focused_ ? theme.accent : theme.border));
+            box, canvas.color(focused_ ? theme.ring : theme.border));
 
         const hcpp::fonts::FontFace* face = resolve_font(nullptr);
         if (face == nullptr) {
@@ -106,7 +106,7 @@ namespace hype::ui {
             shown = text();
         }
         const hcpp::u32 text_rgb =
-            length_ == 0 ? theme.text_muted : theme.text_primary;
+            length_ == 0 ? theme.muted_fg : theme.fg;
         hcpp::i32 text_w = 0;
         if (!shown.empty()) {
             text_w = text_extent(shown, *face).width;
@@ -119,7 +119,7 @@ namespace hype::ui {
                 caret_x = inner.right() - 1;
             }
             canvas.fill_rect({caret_x, inner.y + 1, 1, inner.h - 2},
-                             canvas.color(theme.text_primary));
+                             canvas.color(theme.fg));
         }
     }
 

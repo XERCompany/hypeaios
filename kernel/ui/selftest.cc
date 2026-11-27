@@ -5,6 +5,7 @@
 #include "kernel/ui/box.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
+#include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
 
 namespace hype::ui {
@@ -203,6 +204,61 @@ namespace hype::ui {
         serial::write("\r\n");
         const bool ok = lines_ok == 6 && alpha_ok && rrect_ok && circle_ok;
         serial::write_line(ok ? "ui2 primitives ok" : "ui2 primitives fail");
+        return ok;
+    }
+
+    bool theme2_selftest() noexcept {
+        const Theme& dark = theme_dark();
+        const Theme& light = theme_light();
+        const hcpp::u32 dark_tokens[] = {
+            dark.bg,          dark.fg,       dark.card,     dark.card_fg,
+            dark.primary,     dark.primary_fg, dark.secondary,
+            dark.destructive, dark.success,  dark.warning,  dark.muted,
+            dark.muted_fg,    dark.border,   dark.ring,     dark.accent,
+        };
+        const hcpp::u32 light_tokens[] = {
+            light.bg,          light.fg,       light.card,    light.card_fg,
+            light.primary,     light.primary_fg, light.secondary,
+            light.destructive, light.success,  light.warning, light.muted,
+            light.muted_fg,    light.border,   light.ring,    light.accent,
+        };
+        constexpr hcpp::size_t token_count =
+            sizeof(dark_tokens) / sizeof(dark_tokens[0]) + 5;
+        hcpp::u32 tokens = 0;
+        bool nonzero = true;
+        for (hcpp::size_t i = 0; i < token_count - 5; ++i) {
+            if (dark_tokens[i] == 0 || light_tokens[i] == 0) {
+                nonzero = false;
+            }
+        }
+        bool chart_distinct = true;
+        for (hcpp::size_t i = 0; i < 5; ++i) {
+            if (dark.chart[i] == 0 || light.chart[i] == 0) {
+                nonzero = false;
+            }
+            for (hcpp::size_t j = i + 1; j < 5; ++j) {
+                if (dark.chart[i] == dark.chart[j] ||
+                    light.chart[i] == light.chart[j]) {
+                    chart_distinct = false;
+                }
+            }
+        }
+        if (nonzero) {
+            tokens = static_cast<hcpp::u32>(token_count);
+        }
+        const bool variants_differ =
+            dark.bg != light.bg && dark.fg != light.fg;
+        theme_set(theme_light());
+        const bool set_ok = theme_active().bg == light.bg;
+        theme_set(theme_dark());
+        const bool restore_ok = theme_active().bg == dark.bg;
+
+        serial::write("ui2 theme tokens=");
+        serial::write_dec32(tokens);
+        serial::write(" variants=2\r\n");
+        const bool ok = nonzero && chart_distinct && variants_differ && set_ok &&
+                        restore_ok;
+        serial::write_line(ok ? "ui2 theme ok" : "ui2 theme fail");
         return ok;
     }
 

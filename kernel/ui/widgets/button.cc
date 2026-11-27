@@ -48,11 +48,11 @@ namespace hype::ui {
         if (box.empty()) {
             return;
         }
-        const Theme& theme = Theme::dark();
+        const Theme& theme = theme_active();
         const hcpp::u32 fill_rgb =
-            style_ == ButtonStyle::Accent ? theme.accent : theme.surface;
+            style_ == ButtonStyle::Accent ? theme.primary : theme.secondary;
         const hcpp::u32 text_rgb =
-            style_ == ButtonStyle::Accent ? theme.on_accent : theme.text_primary;
+            style_ == ButtonStyle::Accent ? theme.primary_fg : theme.fg;
         const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_md);
         canvas.fill_rounded_rect(box, radius, canvas.color(fill_rgb));
         canvas.stroke_rounded_rect(box, radius, canvas.color(theme.border));

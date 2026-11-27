@@ -9,14 +9,14 @@ namespace hype::ui {
         hcpp::u32 kind_rgb(ToastKind kind, const Theme& theme) noexcept {
             switch (kind) {
                 case ToastKind::Success:
-                    return 0x3FB950;
+                    return theme.success;
                 case ToastKind::Warning:
-                    return 0xD29922;
+                    return theme.warning;
                 case ToastKind::Error:
-                    return 0xF85149;
+                    return theme.destructive;
                 case ToastKind::Info:
                 default:
-                    return theme.accent;
+                    return theme.primary;
             }
         }
 
@@ -68,7 +68,7 @@ namespace hype::ui {
             return;
         }
 
-        const Theme& theme = Theme::dark();
+        const Theme& theme = theme_active();
         const hcpp::fonts::FontFace* face = theme.resolved_font();
         const hcpp::i32 margin = static_cast<hcpp::i32>(theme.spacing_lg);
         const hcpp::i32 pad = static_cast<hcpp::i32>(theme.spacing_md);
@@ -94,7 +94,7 @@ namespace hype::ui {
             const Rect card{screen.right() - margin - card_w, cursor_y, card_w,
                             card_h};
 
-            canvas.fill_rect(card, canvas.color(theme.surface));
+            canvas.fill_rect(card, canvas.color(theme.card));
             canvas.stroke_rect(card, canvas.color(theme.border));
             canvas.fill_rect({card.x, card.y, 4, card.h},
                              canvas.color(kind_rgb(toast.kind, theme)));
@@ -107,11 +107,11 @@ namespace hype::ui {
             hcpp::i32 baseline = card.y + pad + face->baseline;
             if (titled) {
                 canvas.draw_text(text_x, baseline, toast.title,
-                                 canvas.color(theme.text_primary), *face);
+                                 canvas.color(theme.card_fg), *face);
                 baseline += line + gap;
             }
             canvas.draw_text(text_x, baseline, toast.message,
-                             canvas.color(theme.text_muted), *face);
+                             canvas.color(theme.muted_fg), *face);
             cursor_y -= gap;
         }
     }

@@ -7,15 +7,15 @@ namespace hype::ui {
     namespace {
 
         hcpp::u32 role_rgb(LabelColor role) noexcept {
-            const Theme& theme = Theme::dark();
+            const Theme& theme = theme_active();
             switch (role) {
                 case LabelColor::Muted:
-                    return theme.text_muted;
+                    return theme.muted_fg;
                 case LabelColor::Accent:
                     return theme.accent;
                 case LabelColor::Primary:
                 default:
-                    return theme.text_primary;
+                    return theme.fg;
             }
         }
 

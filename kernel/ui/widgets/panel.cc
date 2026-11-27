@@ -24,7 +24,7 @@ namespace hype::ui {
         }
         const hcpp::fonts::FontFace* face = resolved_font();
         const hcpp::i32 line = face != nullptr ? face->height : 16;
-        return line + static_cast<hcpp::i32>(Theme::dark().spacing_md) + 4;
+        return line + static_cast<hcpp::i32>(theme_active().spacing_md) + 4;
     }
 
     const hcpp::fonts::FontFace* Panel::resolved_font() const noexcept {
@@ -38,7 +38,7 @@ namespace hype::ui {
     }
 
     Size Panel::measure(Size available) noexcept {
-        const Theme& theme = Theme::dark();
+        const Theme& theme = theme_active();
         const hcpp::i32 top = title_bar_height() + 1;
         const Size content_available{
             available.width < 0 ? -1 : available.width - 2,
@@ -97,8 +97,8 @@ namespace hype::ui {
         if (box.empty()) {
             return;
         }
-        const Theme& theme = Theme::dark();
-        canvas.fill_rect(box, canvas.color(theme.surface));
+        const Theme& theme = theme_active();
+        canvas.fill_rect(box, canvas.color(theme.card));
         canvas.stroke_rect(box, canvas.color(theme.border));
 
         const hcpp::i32 strip_h = title_bar_height();
@@ -106,7 +106,7 @@ namespace hype::ui {
         if (!strip.empty()) {
             canvas.fill_rect(strip, canvas.color(theme.border));
             canvas.fill_rect({strip.x, strip.bottom() - 1, strip.w, 1},
-                             canvas.color(theme.accent));
+                             canvas.color(theme.primary));
         }
 
         const hcpp::fonts::FontFace* face = resolved_font();
@@ -120,7 +120,7 @@ namespace hype::ui {
         }
         const hcpp::i32 baseline_y = strip.y + offset + face->baseline;
         canvas.draw_text(strip.x + pad, baseline_y, title_,
-                         canvas.color(theme.text_primary), *face);
+                         canvas.color(theme.card_fg), *face);
     }
 
 }  // namespace hype::ui

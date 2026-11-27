@@ -79,6 +79,9 @@ namespace hype::ui {
         if (!canvas2_selftest()) {
             return 0;
         }
+        if (!theme2_selftest()) {
+            return 0;
+        }
         if (!framebuffer.valid()) {
             return 0;
         }
@@ -95,7 +98,7 @@ namespace hype::ui {
         static bool built = false;
 
         if (!built) {
-            const Theme& theme = Theme::dark();
+            const Theme& theme = theme_active();
             window.set_title("HypeAI OS");
 
             column.set_padding(
@@ -125,10 +128,10 @@ namespace hype::ui {
         }
 
         Canvas canvas(framebuffer);
-        const Theme& theme = Theme::dark();
+        const Theme& theme = theme_active();
         const Rect screen{0, 0, static_cast<hcpp::i32>(framebuffer.width()),
                           static_cast<hcpp::i32>(framebuffer.height())};
-        canvas.fill_rect(screen, canvas.color(theme.background));
+        canvas.fill_rect(screen, canvas.color(theme.bg));
 
         const Rect window_rect = centered_window(screen, 560, 320);
 
