@@ -1,9 +1,11 @@
 #include "kernel/win/winman.h"
 
 #include "kernel/font/hypefont.h"
+#include "kernel/functionemitkeys.h"
 #include "kernel/font/hypetext.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/hxrt.h"
+#include "kernel/input/scancode.h"
 #include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/deskbar.h"
@@ -27,6 +29,12 @@ namespace hype::win {
         constexpr hcpp::i32 chrome_btn = 18;
         constexpr hcpp::i32 chrome_gap = 6;
         constexpr hcpp::i32 chrome_pad = 8;
+        // Windows-style caption buttons: ~26-30 px hit boxes, flush together.
+        constexpr hcpp::i32 ctl_btn_w = 30;
+        constexpr hcpp::i32 ctl_btn_h = 24;
+        // Aero Snap zones: edge proximity 16 px, corner boxes 32 px.
+        constexpr hcpp::i32 snap_edge = 16;
+        constexpr hcpp::i32 snap_corner = 32;
         constexpr hcpp::i32 menu_width = 140;
         constexpr hcpp::i32 menu_item_h = 22;
         constexpr hcpp::i32 menu_pad = 4;
@@ -37,6 +45,21 @@ namespace hype::win {
         constexpr hcpp::i32 cascade_w = 520;
         constexpr hcpp::i32 cascade_h = 340;
         constexpr hcpp::u32 cascade_wrap = 6;
+        // Alt-Tab switcher metrics.
+        constexpr hcpp::i32 sw_item_w = 148;
+        constexpr hcpp::i32 sw_item_h = 44;
+        constexpr hcpp::i32 sw_gap = 6;
+        constexpr hcpp::i32 sw_pad = 12;
+        // Set-1 scancodes used by the switcher.
+        constexpr hcpp::u16 key_escape = 1;
+        constexpr hcpp::u16 key_tab = 15;
+        constexpr hcpp::u16 key_alt = 56;
+        // Titlebar hot-tracking part ids.
+        constexpr hcpp::u8 hot_none = 0;
+        constexpr hcpp::u8 hot_menu = 1;
+        constexpr hcpp::u8 hot_min = 2;
+        constexpr hcpp::u8 hot_max = 3;
+        constexpr hcpp::u8 hot_close = 4;
 
         const char* const menu_items[menu_item_count] = {"Move", "Minimize",
                                                          "Close"};
@@ -57,6 +80,22 @@ namespace hype::win {
         Rect damage{};
         bool damaged = false;
         bool damage_full = false;
+        // Titlebar drag + snap-preview state.
+        hcpp::u32 drag_win = 0;
+        Point grab_off{};
+        bool drag_engaged = false;
+        SnapZone drag_zone = SnapZone::None;
+        Rect preview{};
+        bool preview_on = false;
+        // Caption-button hover state.
+        hcpp::u32 hover_win = 0;
+        hcpp::u8 hover_part = hot_none;
+        // Alt-Tab switcher state.
+        bool switcher_open = false;
+        hcpp::u32 switcher_ids[wm_max_windows];
+        hcpp::u32 switcher_count = 0;
+        hcpp::u32 switcher_sel = 0;
+        bool keys_hooked = false;
 
         void damage_add(const Rect& region) noexcept {
             if (region.empty()) {
@@ -102,15 +141,108 @@ namespace hype::win {
 
         Rect close_btn_rect(const Win& w) noexcept {
             const Rect strip = chrome_strip(w);
-            return {strip.right() - chrome_pad - chrome_btn,
-                    strip.y + (strip.h - chrome_btn) / 2, chrome_btn,
-                    chrome_btn};
+            return {strip.right() - chrome_pad - ctl_btn_w,
+                    strip.y + (strip.h - ctl_btn_h) / 2, ctl_btn_w,
+                    ctl_btn_h};
+        }
+
+        Rect max_btn_rect(const Win& w) noexcept {
+            const Rect close = close_btn_rect(w);
+            return {close.x - ctl_btn_w, close.y, ctl_btn_w, ctl_btn_h};
+        }
+
+        Rect min_btn_rect(const Win& w) noexcept {
+            const Rect max = max_btn_rect(w);
+            return {max.x - ctl_btn_w, max.y, ctl_btn_w, ctl_btn_h};
         }
 
         Rect menu_btn_rect(const Win& w) noexcept {
-            const Rect close = close_btn_rect(w);
-            return {close.x - chrome_gap - chrome_btn, close.y, chrome_btn,
-                    chrome_btn};
+            const Rect min = min_btn_rect(w);
+            return {min.x - chrome_gap - chrome_btn,
+                    min.y + (min.h - chrome_btn) / 2, chrome_btn, chrome_btn};
+        }
+
+        // Work area = screen minus the bottom deskbar band; maximize and
+        // every snap target derive from it (appbar-style reserved edge).
+        Rect work_area() noexcept {
+            return {menu_screen.x, menu_screen.y, menu_screen.w,
+                    menu_screen.h - hype::ui::deskbar_height};
+        }
+
+        const char* zone_name(SnapZone zone) noexcept {
+            switch (zone) {
+                case SnapZone::Left: return "left";
+                case SnapZone::Right: return "right";
+                case SnapZone::Top: return "top";
+                case SnapZone::Nw: return "nw";
+                case SnapZone::Ne: return "ne";
+                case SnapZone::Sw: return "sw";
+                case SnapZone::Se: return "se";
+                default: return "none";
+            }
+        }
+
+        SnapZone zone_at(hcpp::i32 x, hcpp::i32 y) noexcept {
+            const Rect area = work_area();
+            // Corner boxes (2x edge threshold) take precedence over edges.
+            const bool near_l = x < area.x + snap_corner;
+            const bool near_r = x >= area.right() - snap_corner;
+            const bool near_t = y < area.y + snap_corner;
+            const bool near_b = y >= area.bottom() - snap_corner;
+            if (near_l && near_t) {
+                return SnapZone::Nw;
+            }
+            if (near_r && near_t) {
+                return SnapZone::Ne;
+            }
+            if (near_l && near_b) {
+                return SnapZone::Sw;
+            }
+            if (near_r && near_b) {
+                return SnapZone::Se;
+            }
+            if (x < area.x + snap_edge) {
+                return SnapZone::Left;
+            }
+            if (x >= area.right() - snap_edge) {
+                return SnapZone::Right;
+            }
+            if (y < area.y + snap_edge) {
+                return SnapZone::Top;
+            }
+            return SnapZone::None;
+        }
+
+        Rect zone_rect(SnapZone zone) noexcept {
+            const Rect area = work_area();
+            const hcpp::i32 hw = area.w / 2;
+            const hcpp::i32 hh = area.h / 2;
+            switch (zone) {
+                case SnapZone::Left:
+                    return {area.x, area.y, hw, area.h};
+                case SnapZone::Right:
+                    return {area.x + hw, area.y, area.w - hw, area.h};
+                case SnapZone::Top:
+                    return area;
+                case SnapZone::Nw:
+                    return {area.x, area.y, hw, hh};
+                case SnapZone::Ne:
+                    return {area.x + hw, area.y, area.w - hw, hh};
+                case SnapZone::Sw:
+                    return {area.x, area.y + hh, hw, area.h - hh};
+                case SnapZone::Se:
+                    return {area.x + hw, area.y + hh, area.w - hw,
+                            area.h - hh};
+                default:
+                    return {};
+            }
+        }
+
+        void preview_clear() noexcept {
+            if (preview_on) {
+                damage_add(preview);
+                preview_on = false;
+            }
         }
 
         Rect content_for(const Rect& frame) noexcept {
@@ -349,26 +481,68 @@ namespace hype::win {
             canvas.fill_circle(strip.x + chrome_pad + 3, cy, 3,
                                canvas.color(theme.accent));
 
+            const bool hot = hover_win == w.id;
+            const hcpp::u32 glyph = canvas.color(theme.card_fg);
+
             const Rect menu_btn = menu_btn_rect(w);
-            hype::ui::rui_control_bg(canvas, menu_btn, theme.secondary,
-                                     theme.border);
+            hype::ui::rui_control_bg(
+                canvas, menu_btn,
+                hot && hover_part == hot_menu
+                    ? hype::ui::rui_lift(theme.secondary, 2)
+                    : theme.secondary,
+                hot && hover_part == hot_menu ? theme.accent
+                                              : theme.border);
             for (hcpp::i32 k = 0; k < 3; ++k) {
                 canvas.fill_rect(
                     Rect{menu_btn.x + 4, menu_btn.y + 4 + k * 4,
                          menu_btn.w - 8, 2},
-                    canvas.color(theme.card_fg));
+                    glyph);
+            }
+
+            // Minimize "_" caption button.
+            const Rect min_btn = min_btn_rect(w);
+            hype::ui::rui_control_bg(
+                canvas, min_btn,
+                hot && hover_part == hot_min
+                    ? hype::ui::rui_lift(theme.secondary, 2)
+                    : theme.secondary,
+                hot && hover_part == hot_min ? theme.accent
+                                             : theme.border);
+            canvas.fill_rect(Rect{min_btn.x + 9, min_btn.bottom() - 8,
+                                  min_btn.w - 18, 2},
+                             glyph);
+
+            // Maximize "square" / restore "overlapping squares" glyph.
+            const Rect max_btn = max_btn_rect(w);
+            hype::ui::rui_control_bg(
+                canvas, max_btn,
+                hot && hover_part == hot_max
+                    ? hype::ui::rui_lift(theme.secondary, 2)
+                    : theme.secondary,
+                hot && hover_part == hot_max ? theme.accent
+                                             : theme.border);
+            if (w.maximized) {
+                canvas.stroke_rect(
+                    Rect{max_btn.x + 11, max_btn.y + 6, 10, 8}, glyph, 1);
+                canvas.stroke_rect(
+                    Rect{max_btn.x + 8, max_btn.y + 9, 10, 9}, glyph, 1);
+            } else {
+                canvas.stroke_rect(
+                    Rect{max_btn.x + 9, max_btn.y + 7, 12, 10}, glyph, 1);
             }
 
             const Rect close_btn = close_btn_rect(w);
             hype::ui::rui_control_bg(canvas, close_btn,
-                                     hype::ui::rui_shade(theme.destructive,
-                                                         40),
+                                     hot && hover_part == hot_close
+                                         ? theme.destructive
+                                         : hype::ui::rui_shade(
+                                               theme.destructive, 40),
                                      theme.destructive);
-            canvas.draw_line(close_btn.x + 5, close_btn.y + 5,
-                             close_btn.right() - 6, close_btn.bottom() - 6,
+            canvas.draw_line(close_btn.x + 9, close_btn.y + 6,
+                             close_btn.right() - 10, close_btn.bottom() - 7,
                              canvas.color(theme.primary_fg));
-            canvas.draw_line(close_btn.x + 5, close_btn.bottom() - 6,
-                             close_btn.right() - 6, close_btn.y + 5,
+            canvas.draw_line(close_btn.x + 9, close_btn.bottom() - 7,
+                             close_btn.right() - 10, close_btn.y + 6,
                              canvas.color(theme.primary_fg));
 
             const hcpp::i32 title_x = strip.x + chrome_pad + 12;
@@ -413,6 +587,290 @@ namespace hype::win {
             }
             sort_order(order, n, ascending);
             return n;
+        }
+
+        void set_frame(Win& w, const Rect& next) noexcept {
+            damage_add(w.frame);
+            w.frame = next;
+            w.content_rect = content_for(next);
+            damage_add(next);
+        }
+
+        void drag_finish() noexcept {
+            Win* w = slot_for(drag_win);
+            const SnapZone zone = drag_zone;
+            preview_clear();
+            drag_zone = SnapZone::None;
+            drag_win = 0;
+            drag_engaged = false;
+            if (w != nullptr && zone != SnapZone::None) {
+                // The frame is floating again after drag begin; remember it
+                // as the restore rect, then commit the snapped geometry.
+                w->restore = w->frame;
+                set_frame(*w, zone_rect(zone));
+                if (zone == SnapZone::Top) {
+                    w->maximized = true;
+                    w->snap = SnapZone::None;
+                    serial::write_line("win maximized=1");
+                } else {
+                    w->maximized = false;
+                    w->snap = zone;
+                }
+                serial::write("snap zone=");
+                serial::write_line(zone_name(zone));
+            }
+        }
+
+        void update_hover(hcpp::i32 x, hcpp::i32 y) noexcept {
+            hcpp::u32 win = 0;
+            hcpp::u8 part = hot_none;
+            const Point p{x, y};
+            hcpp::u32 order[wm_max_windows];
+            const hcpp::u32 n = collect_order(order, false);
+            for (hcpp::u32 k = 0; k < n; ++k) {
+                Win& w = slots[order[k]];
+                if (!chrome_strip(w).contains(p)) {
+                    continue;
+                }
+                win = w.id;
+                if (close_btn_rect(w).contains(p)) {
+                    part = hot_close;
+                } else if (max_btn_rect(w).contains(p)) {
+                    part = hot_max;
+                } else if (min_btn_rect(w).contains(p)) {
+                    part = hot_min;
+                } else if (menu_btn_rect(w).contains(p)) {
+                    part = hot_menu;
+                }
+                break;
+            }
+            if (win == hover_win && part == hover_part) {
+                return;
+            }
+            Win* old = slot_for(hover_win);
+            if (old != nullptr) {
+                damage_add(chrome_strip(*old));
+            }
+            hover_win = win;
+            hover_part = part;
+            Win* next = slot_for(hover_win);
+            if (next != nullptr) {
+                damage_add(chrome_strip(*next));
+            }
+        }
+
+        // Alt-Tab switcher: MRU list = visible windows by descending z,
+        // minimized windows appended last (also descending z).
+        hcpp::u32 collect_mru(hcpp::u32* ids) noexcept {
+            hcpp::u32 order[wm_max_windows];
+            hcpp::u32 n = collect_order(order, false);
+            for (hcpp::u32 i = 0; i < n; ++i) {
+                ids[i] = slots[order[i]].id;
+            }
+            hcpp::u32 mins[wm_max_windows];
+            hcpp::u32 m = 0;
+            for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
+                if (slots[i].id != 0 &&
+                    slots[i].state == WinState::Minimized) {
+                    mins[m++] = i;
+                }
+            }
+            sort_order(mins, m, false);
+            for (hcpp::u32 i = 0; i < m; ++i) {
+                ids[n + i] = slots[mins[i]].id;
+            }
+            return n + m;
+        }
+
+        hcpp::i32 switcher_item_w(hcpp::u32 n) noexcept {
+            const Rect area = work_area();
+            const hcpp::i32 max_w = area.w - 64;
+            hcpp::i32 w = sw_item_w;
+            const hcpp::i32 need =
+                sw_pad * 2 + static_cast<hcpp::i32>(n) * w +
+                (static_cast<hcpp::i32>(n) - 1) * sw_gap;
+            if (need > max_w && n > 0) {
+                w = (max_w - sw_pad * 2 -
+                     (static_cast<hcpp::i32>(n) - 1) * sw_gap) /
+                    static_cast<hcpp::i32>(n);
+                if (w < 40) {
+                    w = 40;
+                }
+            }
+            return w;
+        }
+
+        Rect switcher_rect() noexcept {
+            const Rect area = work_area();
+            const hcpp::u32 n = switcher_count > 0 ? switcher_count : 1;
+            const hcpp::i32 item_w = switcher_item_w(n);
+            const hcpp::i32 w =
+                sw_pad * 2 + static_cast<hcpp::i32>(n) * item_w +
+                (static_cast<hcpp::i32>(n) - 1) * sw_gap;
+            const hcpp::i32 h = sw_pad * 2 + sw_item_h;
+            return {area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w,
+                    h};
+        }
+
+        void alttab_marker() noexcept {
+            serial::write("alttab open=1 sel=");
+            serial::write_dec32(switcher_sel);
+            serial::write("\r\n");
+        }
+
+        void alttab_begin() noexcept {
+            switcher_count = collect_mru(switcher_ids);
+            if (switcher_count == 0) {
+                return;
+            }
+            switcher_sel = switcher_count > 1 ? 1 : 0;
+            switcher_open = true;
+            damage_add(switcher_rect());
+            alttab_marker();
+        }
+
+        void alttab_step(hcpp::i32 dir) noexcept {
+            if (!switcher_open || switcher_count == 0) {
+                return;
+            }
+            switcher_sel = static_cast<hcpp::u32>(
+                (static_cast<hcpp::i32>(switcher_sel) + dir +
+                 static_cast<hcpp::i32>(switcher_count)) %
+                static_cast<hcpp::i32>(switcher_count));
+            damage_add(switcher_rect());
+            alttab_marker();
+        }
+
+        void alttab_close(bool commit) noexcept {
+            const hcpp::u32 id =
+                switcher_open && switcher_sel < switcher_count
+                    ? switcher_ids[switcher_sel]
+                    : 0;
+            if (switcher_open) {
+                damage_add(switcher_rect());
+            }
+            switcher_open = false;
+            serial::write_line("alttab open=0");
+            if (commit && id != 0) {
+                wm_set_minimized(id, false);
+                wm_focus(id);
+            }
+        }
+
+        void alttab_sync() noexcept {
+            // A window set change while the switcher is up: rebuild the
+            // MRU list and keep the selection in range.
+            if (!switcher_open) {
+                return;
+            }
+            switcher_count = collect_mru(switcher_ids);
+            if (switcher_count == 0) {
+                switcher_open = false;
+                serial::write_line("alttab open=0");
+                return;
+            }
+            if (switcher_sel >= switcher_count) {
+                switcher_sel = switcher_count - 1;
+            }
+            damage_add(switcher_rect());
+        }
+
+        void wm_key_event(void*, const input::InputEvent& e) noexcept {
+            if (e.type != input::InputEventType::Key) {
+                return;
+            }
+            const bool pressed =
+                e.value !=
+                static_cast<hcpp::u32>(input::KeyState::Released);
+            if (e.code == key_alt) {
+                if (!pressed && switcher_open) {
+                    alttab_close(true);
+                }
+                return;
+            }
+            if (!pressed) {
+                return;
+            }
+            if (e.code == key_tab &&
+                input::scancode_key_pressed(key_alt)) {
+                if (!switcher_open) {
+                    alttab_begin();
+                } else {
+                    alttab_step(input::scancode_shift_active() ? -1 : 1);
+                }
+            } else if (e.code == key_escape && switcher_open) {
+                alttab_close(false);
+            }
+        }
+
+        void ensure_key_hook() noexcept {
+            if (keys_hooked) {
+                return;
+            }
+            keys_hooked = input::subscribe_keys(&wm_key_event, nullptr);
+        }
+
+        void paint_switcher(Canvas& canvas) noexcept {
+            if (!switcher_open || switcher_count == 0) {
+                return;
+            }
+            const Theme& theme = hype::ui::theme_active();
+            const Rect panel = switcher_rect();
+            hype::ui::rui_panel(canvas, panel, hype::ui::rui_elev_panel);
+            const hcpp::i32 item_w = switcher_item_w(switcher_count);
+            const hcpp::i32 line = hype::font::hypefont_ready()
+                                       ? hype::font::text_line_height(13)
+                                       : 16;
+            for (hcpp::u32 i = 0; i < switcher_count; ++i) {
+                const Rect item{
+                    panel.x + sw_pad +
+                        static_cast<hcpp::i32>(i) * (item_w + sw_gap),
+                    panel.y + sw_pad, item_w, sw_item_h};
+                const bool sel = i == switcher_sel;
+                hype::ui::rui_control_bg(
+                    canvas, item,
+                    sel ? hype::ui::rui_lift(theme.secondary, 2)
+                        : theme.secondary,
+                    sel ? theme.accent : theme.border);
+                const Win* w = slot_for(switcher_ids[i]);
+                const hcpp::i32 cy = item.y + item.h / 2;
+                canvas.fill_circle(item.x + 14, cy, 4,
+                                   canvas.color(w != nullptr &&
+                                                        w->state ==
+                                                            WinState::Minimized
+                                                    ? theme.muted_fg
+                                                    : theme.accent));
+                if (w == nullptr) {
+                    continue;
+                }
+                // Truncate the title so it cannot bleed into the next chip.
+                char label[24];
+                hcpp::i32 max_chars = (item_w - 34) / 7;
+                if (max_chars < 4) {
+                    max_chars = 4;
+                }
+                if (max_chars > 23) {
+                    max_chars = 23;
+                }
+                hcpp::i32 len = 0;
+                while (len < max_chars && w->app_name[len] != '\0') {
+                    label[len] = w->app_name[len];
+                    ++len;
+                }
+                label[len] = '\0';
+                hcpp::i32 top = cy - line / 2;
+                if (top < item.y + 4) {
+                    top = item.y + 4;
+                }
+                paint_label(canvas, item.x + 26, top,
+                            hcpp::StringView{label},
+                            sel ? theme.card_fg : theme.muted_fg, 13);
+            }
+            if (hype::ui::rui_dark_surface()) {
+                hype::gfx::gfx_inner_glow_edge(
+                    canvas, panel.inset(hype::ui::Insets::uniform(1)),
+                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
+            }
         }
 
     }
@@ -472,9 +930,20 @@ namespace hype::win {
         if (menu_win == id) {
             wm_menu_close();
         }
+        if (hover_win == id) {
+            hover_win = 0;
+            hover_part = hot_none;
+        }
+        if (drag_win == id) {
+            preview_clear();
+            drag_zone = SnapZone::None;
+            drag_win = 0;
+            drag_engaged = false;
+        }
         const Rect gone = w->frame;
         *w = Win{};
         damage_add(gone);
+        alttab_sync();
         if (was_focused) {
             hcpp::u32 top_order[wm_max_windows];
             const hcpp::u32 n = collect_order(top_order, false);
@@ -532,6 +1001,77 @@ namespace hype::win {
             w->state = WinState::Normal;
             damage_add(w->frame);
         }
+        alttab_sync();
+        return true;
+    }
+
+    bool wm_set_maximized(hcpp::u32 id, bool maximized) noexcept {
+        Win* w = slot_for(id);
+        if (w == nullptr) {
+            return false;
+        }
+        if (maximized) {
+            if (w->state == WinState::Minimized) {
+                w->state = WinState::Normal;
+            }
+            if (w->maximized) {
+                return true;
+            }
+            // Keep the floating frame as the restore rect unless a snap
+            // already saved one.
+            if (w->snap == SnapZone::None) {
+                w->restore = w->frame;
+            }
+            set_frame(*w, work_area());
+            w->maximized = true;
+            w->snap = SnapZone::None;
+            serial::write_line("win maximized=1");
+            return true;
+        }
+        if (!w->maximized && w->snap == SnapZone::None) {
+            return true;
+        }
+        const bool was_max = w->maximized;
+        Rect r = w->restore;
+        if (r.empty()) {
+            r = w->frame;
+        }
+        set_frame(*w, r);
+        w->maximized = false;
+        w->snap = SnapZone::None;
+        if (was_max) {
+            serial::write_line("win maximized=0");
+        } else {
+            serial::write_line("snap zone=none");
+        }
+        return true;
+    }
+
+    bool wm_snap(hcpp::u32 id, SnapZone zone) noexcept {
+        Win* w = slot_for(id);
+        if (w == nullptr) {
+            return false;
+        }
+        if (zone == SnapZone::None) {
+            return wm_set_maximized(id, false);
+        }
+        if (w->state == WinState::Minimized) {
+            w->state = WinState::Normal;
+        }
+        if (!w->maximized && w->snap == SnapZone::None) {
+            w->restore = w->frame;
+        }
+        set_frame(*w, zone_rect(zone));
+        if (zone == SnapZone::Top) {
+            w->maximized = true;
+            w->snap = SnapZone::None;
+            serial::write_line("win maximized=1");
+        } else {
+            w->maximized = false;
+            w->snap = zone;
+        }
+        serial::write("snap zone=");
+        serial::write_line(zone_name(zone));
         return true;
     }
 
@@ -539,6 +1079,7 @@ namespace hype::win {
         if (!fb.valid()) {
             return;
         }
+        ensure_key_hook();
         const Rect screen{0, 0, static_cast<hcpp::i32>(fb.width()),
                           static_cast<hcpp::i32>(fb.height())};
         menu_screen = screen;
@@ -579,6 +1120,14 @@ namespace hype::win {
                     canvas, w.frame.inset(hype::ui::Insets::uniform(1)),
                     static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
             }
+        }
+        // Translucent snap-preview hint while a titlebar drag hovers a zone.
+        if (preview_on && !preview.empty()) {
+            canvas.fill_rect_alpha(preview, canvas.color(theme.accent), 90);
+            canvas.stroke_rect(preview, canvas.color(theme.accent), 2);
+        }
+        if (switcher_open) {
+            paint_switcher(canvas);
         }
         overlays.paint_overlays(canvas, screen);
     }
@@ -687,6 +1236,10 @@ namespace hype::win {
 
     bool wm_handle_mouse(hcpp::i32 x, hcpp::i32 y, bool pressed) noexcept {
         if (!pressed) {
+            if (drag_win != 0) {
+                drag_finish();
+                return true;
+            }
             return false;
         }
         const Point p{x, y};
@@ -737,8 +1290,25 @@ namespace hype::win {
             if (close_btn_rect(w).contains(p)) {
                 return wm_close(w.id);
             }
+            if (max_btn_rect(w).contains(p)) {
+                return wm_set_maximized(w.id, !w.maximized);
+            }
+            if (min_btn_rect(w).contains(p)) {
+                return wm_set_minimized(w.id, true);
+            }
             if (menu_btn_rect(w).contains(p)) {
                 return wm_menu_open(w.id);
+            }
+            if (chrome_strip(w).contains(p)) {
+                // Titlebar press: focus and arm the drag engine; snapped or
+                // maximized geometry is restored under the cursor on the
+                // first motion (Windows behavior).
+                wm_focus(w.id);
+                drag_win = w.id;
+                grab_off = {p.x - w.frame.x, p.y - w.frame.y};
+                drag_engaged = false;
+                drag_zone = SnapZone::None;
+                return true;
             }
             return wm_focus(w.id);
         }
@@ -780,6 +1350,85 @@ namespace hype::win {
         // Empty desktop: icon menu on a cell, desktop menu otherwise.
         return desk_icons_handle_rclick(x, y);
     }
+
+    bool wm_handle_move(hcpp::i32 x, hcpp::i32 y) noexcept {
+        bool used = false;
+        if (drag_win != 0) {
+            Win* w = slot_for(drag_win);
+            if (w == nullptr || w->state == WinState::Minimized) {
+                preview_clear();
+                drag_zone = SnapZone::None;
+                drag_win = 0;
+                drag_engaged = false;
+            } else {
+                used = true;
+                if (!drag_engaged) {
+                    drag_engaged = true;
+                    if (w->maximized || w->snap != SnapZone::None) {
+                        // Dragging a maximized/snapped titlebar restores
+                        // the floating frame re-anchored under the cursor.
+                        const bool was_max = w->maximized;
+                        const bool was_snap = w->snap != SnapZone::None;
+                        Rect r = w->restore;
+                        if (r.empty()) {
+                            r = {x - cascade_w / 2,
+                                 y - wm_chrome_height / 2, cascade_w,
+                                 cascade_h};
+                        }
+                        hcpp::i32 relx = w->frame.w > 0
+                                             ? (x - w->frame.x) * r.w /
+                                                   w->frame.w
+                                             : r.w / 2;
+                        if (relx < 8) {
+                            relx = 8;
+                        }
+                        if (relx > r.w - 8) {
+                            relx = r.w - 8;
+                        }
+                        grab_off = {relx, grab_off.y};
+                        w->maximized = false;
+                        w->snap = SnapZone::None;
+                        set_frame(*w, {x - relx, y - grab_off.y, r.w, r.h});
+                        if (was_max) {
+                            serial::write_line("win maximized=0");
+                        } else if (was_snap) {
+                            serial::write_line("snap zone=none");
+                        }
+                    }
+                }
+                const Rect next{x - grab_off.x, y - grab_off.y, w->frame.w,
+                                w->frame.h};
+                if (next != w->frame) {
+                    set_frame(*w, next);
+                }
+                const SnapZone zone = zone_at(x, y);
+                if (zone != drag_zone) {
+                    preview_clear();
+                    drag_zone = zone;
+                    if (zone != SnapZone::None) {
+                        preview = zone_rect(zone);
+                        preview_on = true;
+                        damage_add(preview);
+                    }
+                    serial::write("snap zone=");
+                    serial::write_line(zone_name(zone));
+                }
+            }
+        }
+        if (drag_win == 0 && !wm_menu_visible() && !overlays.is_open()) {
+            update_hover(x, y);
+        } else if (hover_part != hot_none || hover_win != 0) {
+            Win* old = slot_for(hover_win);
+            if (old != nullptr) {
+                damage_add(chrome_strip(*old));
+            }
+            hover_win = 0;
+            hover_part = hot_none;
+        }
+        return used;
+    }
+
+    bool wm_drag_active() noexcept { return drag_win != 0; }
 
     bool wm_test_click(hcpp::i32 x, hcpp::i32 y) noexcept {
         return wm_handle_mouse(x, y, true);
@@ -866,6 +1515,26 @@ namespace hype::win {
         }
         serial::write("wm menu=");
         serial::write_line(menu_ok ? "ok" : "fail");
+        bool snap_ok = false;
+        const hcpp::u32 c = wm_open("SnapProbe", Rect{10, 10, 200, 120});
+        const Win* wc = wm_window(c);
+        if (wc != nullptr) {
+            const Rect area = work_area();
+            snap_ok = wm_snap(c, SnapZone::Left) &&
+                      wc->frame ==
+                          Rect{area.x, area.y, area.w / 2, area.h} &&
+                      wc->snap == SnapZone::Left;
+            snap_ok = wm_set_maximized(c, true) && snap_ok &&
+                      wc->maximized && wc->frame == area;
+            snap_ok = wm_set_maximized(c, false) && snap_ok &&
+                      !wc->maximized && wc->snap == SnapZone::None &&
+                      wc->frame == Rect{10, 10, 200, 120};
+        }
+        serial::write("wm snap=");
+        serial::write_line(snap_ok ? "ok" : "fail");
+        if (c != 0) {
+            wm_close(c);
+        }
         bool dirty_ok = wm_dirty();
         {
             static hcpp::u8 probe_mem[64 * 48 * 4];
@@ -881,8 +1550,8 @@ namespace hype::win {
                 wm_close(slots[i].id);
             }
         }
-        return open_ok && close_ok && z_ok && menu_ok && dirty_ok &&
-               wm_count() == 0;
+        return open_ok && close_ok && z_ok && menu_ok && snap_ok &&
+               dirty_ok && wm_count() == 0;
     }
 
 }
