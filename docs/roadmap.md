@@ -1,0 +1,77 @@
+# HypeAI OS — Core roadmap
+
+Drafted 2026-11-27. Sources: user direction + `docs/research/*`. Historical decisions in `docs/wiki/`.
+
+## Standing rules (updated 2026-11-27)
+
+- **No third-party libraries in new work.** Own `HypeAI.*` implementations only.
+  Supersedes the earlier "port PD/MIT single-headers" decision; vendored code already merged
+  (sqlite3, minimp3, dr_flac, stb_vorbis) stays for now — each is a *replacement candidate*
+  in program P2, not a model for new code.
+- Freestanding, `hcpp` vocab, noexcept, static storage, no comments, serial-marker acceptance.
+- Drivers target what QEMU actually emulates first (intel-hda, ac97, bochs-display, std VGA,
+  virtio-gpu, ahci, nvme, ehci), real hardware paths second.
+
+## Program P1 — Display engine (user-specified file set)
+
+Goal: real mode-setting + multi-display + scaling + capture-to-file, laid out as
+`kernel/display/` modules. File names are spec-mandated (XER style); meanings assigned:
+
+| File | Module |
+|---|---|
+| `displayport.h` | DP link layer: AUX channel transactions, lane/link training states, MSA packing |
+| `displaydpi.h` | logical DPI → pixel scale table, per-output scale factors |
+| `displaySize.h` | canonical mode list (WxH×Hz), aspect classes |
+| `display-qxga.h` | QXGA 2048×1536 timings |
+| `display-wvga.h` | WVGA 800×480 timings |
+| `display-huxga.h` | HUXGA 6400×4800 timings |
+| `clientdisplay.h` | client API surface: open output, get modes, set mode, present |
+| `multidisplay.h` | multi-output topology registry |
+| `multidisplay-mode.h` | span/mirror/extend policies |
+| `multidisplay-swich.h` | active-output switch + re-blit path |
+| `scaler.h` | integer scaler: nearest/bilinear (+bicubic tier) RGB32→format |
+| `scaleuhd.h` | upscale path to UHD targets with edge rules |
+| `writeframe.h` | present/blit pipeline: FrameBuf→scanout w/ vsync-ish pacing |
+| `idscreen.h` | output identification: EDID serial→stable output id |
+| `id-stat.h` | per-output status block (mode, link, last-present stats) |
+| `foepnscr.h` | frame-open/screen-open session object for writers |
+| `urecordscr.h` | screen-record: capture scanout→encode→file (uses codec path) |
+| `lowbitrate.h` | bitrate tier table (low) for record/stream |
+| `highbitrate.h` | bitrate tier table (high) |
+| `displayhda.h` | HDMI/DP audio-over-display bridging to HDA |
+| `pal.h` | PAL 625-line timings (legacy/analog out) |
+| `uhdtv2.h` | UHDTV mode tables (4K/8K CTA-861 classes) |
+| `uhdtv2-vision.h` | colorimetry/HDR metadata for UHD paths |
+| `hgc.h` | HypeAI Graphics Controller facade — the public entry point other modules call |
+
+Proposed additional files (same naming style): `dpxaux.h` (AUX primitive split out of displayport), `msthub.h` (DP MST topology), `scrnmap.h` (screen→fb mapping), `edidcta.h` (CTA-861 blocks beyond base EDID), `fmtcvt.h` (pixel-format convert inside writeframe).
+
+Tickets (draft): D1 mode tables+scaler+writeframe → D2 EDID/output-id+clientdisplay → D3 DP/AUX + training state machine → D4 multidisplay → D5 urecordscr+bitrate tiers → D6 UHDTV/PAL/HDR metadata.
+
+## Program P2 — HypeAI Codecs v2 (all formats, own code)
+
+- Coverage matrix lives in `docs/research/os-core-roadmap.md` §5 (research in flight).
+- Replace vendored decoders with own `HypeAI.*` implementations incrementally (MP3 first — well-understood), keep ABI through `CodecDescriptor` so `codec report` honesty stays.
+- New own implementations first where specs are small: DDS, ICO-complete, BMP/TGA done ✓, TGA-16/XBM, ADPCM variants, MOD/XM/S3M tracker formats (tiny parsers, big win), MIDI-SMF, APNG.
+- Video decode program (deferred earlier) folds in here: MJPEG → MPEG-1/2 → Theora → H.264-baseline as the ladder.
+- Acceleration reality: no OpenCL-capable device in QEMU; real path = integer/fixed-point kernels + SSE2/AVX2 intrinsics in freestanding + kernel threads. Direct-PCIe compute offload = far future, design `CodecDescriptor` to allow device-backed impls later.
+
+## Program P3 — Storage & persistence
+
+AHCI (QEMU `-device ich9-ahci`) + NVMe-lite; block layer; filesystem write path; sqlite VFS upgrade memdb→block-backed → **persistent credentials/world state across reboots**. Unlocks real enroll/lockout persistence for Hello.
+
+## Program P4 — Audio pro
+
+ASIO-shaped public API (low-latency exclusive stream, kernel-bypass mixing) implemented our own way — Steinberg SDK is licensed, so the *interface contract* (period sizes, callback, <10ms roundtrip) is what we port, not the SDK. Kernel mixer + integer SRC (linear→windowed-sinc tier), tracker/MIDI playback via P2 decoders.
+
+## Program P5 — Video capture
+
+`videocapture.cc` skeleton → virtual capture device → UVC USB webcam path once xHCI exists (depends P3-adjacent USB work); V4L2-shaped API for consistency.
+
+## Program P6 — Platform hardening
+
+SMP/AP startup (MP spec), CPUID topology, perf counters, CPU/MEM accounting, thread model review, eventual ring-3 boundary.
+
+## Program P7 — UI design language v3
+
+From user references (2026-11-27): soft drop shadows (low opacity, negative spread), layered inner shadows for depth, **dark mode = elevation via surface luminosity not shadow**, cosmic/dark visual system. Lands on top of UI v2 primitives (alpha + rrect already exist).
