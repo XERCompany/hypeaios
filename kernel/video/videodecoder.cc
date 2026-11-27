@@ -5,6 +5,8 @@
 #include "kernel/codecapps/image/jpeg.h"
 #include "kernel/video/videodecoderlz.h"
 #include "kernel/video/videodecoderpcie.h"
+#include "kernel/video/videomcodec.h"
+#include "kernel/video/videomp2.h"
 #include "kernel/video/videoraw.h"
 namespace hype::video {
     namespace {
@@ -18,6 +20,7 @@ namespace hype::video {
             case CodecType::Hardware: return "hw";
             case CodecType::Mjpeg: return "mjpeg";
             case CodecType::Ffv1: return "ffv1";
+            case CodecType::H264: return "h264";
             default: return "unknown";
         }
     }
@@ -41,6 +44,8 @@ namespace hype::video {
         return {true, n, fb.size, CodecType::Mjpeg};
     }
     DecodeResult video_decode(CodecType c, const hcpp::u8* src, hcpp::size_t n, VideoFrame& out) noexcept {
+        DecodeFn fn = mcodec_find(c);
+        if (fn != nullptr) return fn(src, n, out);
         switch (c) {
             case CodecType::Raw: return raw_decode_frame(src, n, out);
             case CodecType::Lz: return lz_decode_frame(src, n, out);
@@ -49,5 +54,24 @@ namespace hype::video {
             case CodecType::Hardware: return pcie_decode_frame(src, n, out);
             default: return {false, 0, 0, c};
         }
+    }
+    bool video_decode_frame(CodecType c, const hcpp::u8* p, hcpp::size_t n,
+                            VideoFrame& out) noexcept {
+        return video_decode(c, p, n, out).ok;
+    }
+    codec::CodecStatus video_mjpeg_decode(const hcpp::u8* p, hcpp::size_t n, void* out,
+                                          codec::Arena& arena) noexcept {
+        return codec::image::jpeg_decode(p, n, out, arena);
+    }
+    codec::CodecStatus video_mpeg2_decode(const hcpp::u8* p, hcpp::size_t n, void* out,
+                                          codec::Arena&) noexcept {
+        Mp2SeqInfo seq{};
+        if (!mp2_seq_parse(p, n, seq)) return codec::CodecStatus::BadInput;
+        codec::FrameBuf* fb = static_cast<codec::FrameBuf*>(out);
+        if (fb != nullptr) {
+            fb->width = seq.width;
+            fb->height = seq.height;
+        }
+        return codec::CodecStatus::Unsupported;
     }
 }  // namespace hype::video

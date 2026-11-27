@@ -344,6 +344,7 @@ namespace {
         report("jpeg decode=", jpeg_selftest_ok);
         png_selftest_ok = hype::codec::image::png_selftest();
         report("png selftest=", png_selftest_ok);
+        report("video demux=", hype::video::video_demux_selftest());
         hype::codec::audio_codec_selftest();
         video_decode_selftest_ok = hype::video::video_decode_selftest();
     }

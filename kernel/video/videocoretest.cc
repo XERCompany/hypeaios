@@ -1,15 +1,17 @@
 #include "kernel/video/videocoretest.h"
 
-#include "kernel/serial.hpp"
-#include "kernel/video/videoclient.h"
 #include "kernel/codecapps/image/jpeg_selftest_blob.h"
+#include "kernel/codecapps/registry.h"
 #include "kernel/serial.hpp"
 #include "kernel/video/videocapture.h"
+#include "kernel/video/videoclient.h"
 #include "kernel/video/videocontrol.h"
 #include "kernel/video/videodecoderlz.h"
 #include "kernel/video/videodecoderpcie.h"
 #include "kernel/video/videoemuxer.h"
 #include "kernel/video/videoformat.h"
+#include "kernel/video/videomcodec.h"
+#include "kernel/video/videomp2.h"
 #include "kernel/video/videoraw.h"
 #include "kernel/video/videostream.h"
 #include "kernel/video/videov4lv_key.h"
@@ -191,6 +193,226 @@ namespace hype::video {
             if (!decodejob_submit(hw) || hw.status != DecodeJobStatus::Unsupported) return false;
             return !pcie_decoder_available() && decodejob_pending() == 0;
         }
+    namespace {
+        struct BlobWriter {
+            hcpp::u8* b;
+            hcpp::size_t p;
+            void u8(hcpp::u8 v) noexcept { b[p++] = v; }
+            void u16(hcpp::u16 v) noexcept {
+                u8(static_cast<hcpp::u8>(v));
+                u8(static_cast<hcpp::u8>(v >> 8));
+            }
+            void u32(hcpp::u32 v) noexcept {
+                u8(static_cast<hcpp::u8>(v));
+                u8(static_cast<hcpp::u8>(v >> 8));
+                u8(static_cast<hcpp::u8>(v >> 16));
+                u8(static_cast<hcpp::u8>(v >> 24));
+            }
+            void tag(const char* t) noexcept {
+                for (hcpp::u32 i = 0; i < 4; ++i) u8(static_cast<hcpp::u8>(t[i]));
+            }
+            void zero(hcpp::size_t n) noexcept {
+                while (n--) u8(0);
+            }
+        };
+        hcpp::size_t build_avi(hcpp::u8* b) noexcept {
+            BlobWriter w{b, 0};
+            w.tag("RIFF");
+            w.u32(264);
+            w.tag("AVI ");
+            w.tag("LIST");
+            w.u32(192);
+            w.tag("hdrl");
+            w.tag("avih");
+            w.u32(56);
+            w.u32(33333);
+            w.zero(52);
+            w.tag("LIST");
+            w.u32(116);
+            w.tag("strl");
+            w.tag("strh");
+            w.u32(56);
+            w.tag("vids");
+            w.tag("MJPG");
+            w.u32(0);
+            w.u32(0);
+            w.u32(1);
+            w.u32(30);
+            w.u32(0);
+            w.u32(2);
+            w.zero(24);
+            w.tag("strf");
+            w.u32(40);
+            w.u32(40);
+            w.u32(160);
+            w.u32(120);
+            w.u16(1);
+            w.u16(24);
+            w.tag("MJPG");
+            w.u32(160 * 120 * 3);
+            w.zero(16);
+            w.tag("LIST");
+            w.u32(52);
+            w.tag("movi");
+            w.tag("00dc");
+            w.u32(4);
+            w.tag("FRA1");
+            w.tag("JUNK");
+            w.u32(4);
+            w.zero(4);
+            w.tag("00dc");
+            w.u32(4);
+            w.tag("FRA2");
+            w.tag("01wb");
+            w.u32(4);
+            w.tag("AUD1");
+            return w.p;
+        }
+        bool demux_avi_check() noexcept {
+            static hcpp::u8 blob[280];
+            const hcpp::size_t n = build_avi(blob);
+            if (demux_probe(blob, n) != DemuxKind::Avi) return false;
+            Demuxer d;
+            if (!demux_open(d, blob, n)) return false;
+            if (demux_stream_count(d) != 1) return false;
+            const DemuxStream* s = demux_stream_at(d, 0);
+            if (s == nullptr || s->type != DemuxStreamType::Video ||
+                s->codec != CodecType::Mjpeg || s->width != 160 || s->height != 120)
+                return false;
+            DemuxPacket p;
+            if (!demux_packet(d, p) || p.type != DemuxStreamType::Video ||
+                p.stream_id != 0 || p.size != 4 || p.codec != CodecType::Mjpeg)
+                return false;
+            if (!demux_packet(d, p) || p.stream_id != 0 || p.size != 4) return false;
+            if (!demux_packet(d, p) || p.type != DemuxStreamType::Audio ||
+                p.stream_id != 1)
+                return false;
+            return !demux_packet(d, p);
+        }
+        hcpp::size_t build_ts(hcpp::u8* b) noexcept {
+            for (hcpp::size_t i = 0; i < 564; ++i) b[i] = 0xFF;
+            hcpp::u8* pat = b;
+            pat[0] = 0x47;
+            pat[1] = 0x40;
+            pat[2] = 0x00;
+            pat[3] = 0x10;
+            pat[4] = 0x00;
+            const hcpp::u8 pat_tab[] = {0x00, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0x00,
+                                        0x00, 0x00, 0x01, 0xE1, 0x00, 0x00,
+                                        0x00, 0x00, 0x00};
+            for (hcpp::size_t i = 0; i < sizeof(pat_tab); ++i) pat[5 + i] = pat_tab[i];
+            hcpp::u8* pmt = b + 188;
+            pmt[0] = 0x47;
+            pmt[1] = 0x41;
+            pmt[2] = 0x00;
+            pmt[3] = 0x10;
+            pmt[4] = 0x00;
+            const hcpp::u8 pmt_tab[] = {0x02, 0xB0, 0x17, 0x00, 0x01, 0xC1, 0x00,
+                                        0x00, 0xE1, 0x01, 0xF0, 0x00, 0x02, 0xE1,
+                                        0x01, 0xF0, 0x00, 0x04, 0xE1, 0x02, 0xF0,
+                                        0x00, 0x00, 0x00, 0x00, 0x00};
+            for (hcpp::size_t i = 0; i < sizeof(pmt_tab); ++i) pmt[5 + i] = pmt_tab[i];
+            hcpp::u8* pes = b + 376;
+            pes[0] = 0x47;
+            pes[1] = 0x41;
+            pes[2] = 0x01;
+            pes[3] = 0x10;
+            const hcpp::u8 pes_hdr[] = {0x00, 0x00, 0x01, 0xE0, 0x00, 0x0D, 0x80,
+                                        0x80, 0x05, 0x21, 0x00, 0x05, 0xBF, 0x21,
+                                        'M',  'P',  'G',  '2'};
+            for (hcpp::size_t i = 0; i < sizeof(pes_hdr); ++i) pes[4 + i] = pes_hdr[i];
+            return 564;
+        }
+        bool demux_ts_check() noexcept {
+            static hcpp::u8 blob[564];
+            const hcpp::size_t n = build_ts(blob);
+            if (demux_probe(blob, n) != DemuxKind::MpegTs) return false;
+            Demuxer d;
+            if (!demux_open(d, blob, n)) return false;
+            if (demux_stream_count(d) != 2) return false;
+            const DemuxStream* v = demux_stream_find(d, 0x101);
+            const DemuxStream* a = demux_stream_find(d, 0x102);
+            if (v == nullptr || v->type != DemuxStreamType::Video ||
+                v->codec != CodecType::Mpeg2)
+                return false;
+            if (a == nullptr || a->type != DemuxStreamType::Audio) return false;
+            DemuxPacket p;
+            if (!demux_packet(d, p) || p.stream_id != 0x101 ||
+                p.type != DemuxStreamType::Video || p.codec != CodecType::Mpeg2)
+                return false;
+            if (!p.has_pts || p.pts != 90000) return false;
+            return !demux_packet(d, p);
+        }
+        hcpp::size_t build_ebml(hcpp::u8* b) noexcept {
+            BlobWriter w{b, 0};
+            const hcpp::u8 head[] = {0x1A, 0x45, 0xDF, 0xA3, 0x80};
+            for (hcpp::size_t i = 0; i < sizeof(head); ++i) w.u8(head[i]);
+            const hcpp::u8 seg[] = {0x18, 0x53, 0x80, 0x67, 0xBE};
+            for (hcpp::size_t i = 0; i < sizeof(seg); ++i) w.u8(seg[i]);
+            const hcpp::u8 info[] = {0x15, 0x49, 0xA9, 0x66, 0x87,
+                                     0x2A, 0xD7, 0xB1, 0x83, 0x0F, 0x42, 0x40};
+            for (hcpp::size_t i = 0; i < sizeof(info); ++i) w.u8(info[i]);
+            const hcpp::u8 tracks[] = {
+                0x16, 0x54, 0xAE, 0x6B, 0x9A, 0xAE, 0x98, 0xD7, 0x81, 0x01, 0x83,
+                0x81, 0x01, 0x86, 0x87, 'V',  '_',  'M',  'P',  'E',  'G',  '2',
+                0xE0, 0x87, 0xB0, 0x82, 0x01, 0x40, 0xBA, 0x81, 0x78};
+            for (hcpp::size_t i = 0; i < sizeof(tracks); ++i) w.u8(tracks[i]);
+            const hcpp::u8 cluster[] = {0x1F, 0x43, 0xB6, 0x75, 0x8E, 0xE7, 0x82,
+                                        0x00, 0x00, 0xA3, 0x88, 0x81, 0x00, 0x00,
+                                        0x80, 'M',  'P',  'G',  '2'};
+            for (hcpp::size_t i = 0; i < sizeof(cluster); ++i) w.u8(cluster[i]);
+            return w.p;
+        }
+        bool demux_ebml_check() noexcept {
+            static hcpp::u8 blob[128];
+            const hcpp::size_t n = build_ebml(blob);
+            if (demux_probe(blob, n) != DemuxKind::Ebml) return false;
+            Demuxer d;
+            if (!demux_open(d, blob, n)) return false;
+            if (demux_stream_count(d) != 1) return false;
+            const DemuxStream* s = demux_stream_at(d, 0);
+            if (s == nullptr || s->type != DemuxStreamType::Video ||
+                s->codec != CodecType::Mpeg2 || s->width != 320 || s->height != 120)
+                return false;
+            if (d.timecode_scale != 1000000) return false;
+            DemuxPacket p;
+            if (!demux_packet(d, p) || p.stream_id != 1 ||
+                p.type != DemuxStreamType::Video || p.codec != CodecType::Mpeg2 ||
+                p.size != 4)
+                return false;
+            return !demux_packet(d, p);
+        }
+        const hcpp::u8 mp2_blob[] = {0x00, 0x00, 0x01, 0xB3, 0x0A, 0x00, 0x78, 0x23,
+                                     0xFF, 0xFF, 0xFF, 0xF8, 0x00, 0x00, 0x00, 0x01,
+                                     0xB8, 0x08, 0x00, 0x04, 0x40, 0x00, 0x00, 0x01,
+                                     0x00, 0x00, 0x08, 0xFF, 0xFF};
+        bool demux_selftest_run() noexcept {
+            return demux_avi_check() && demux_ts_check() && demux_ebml_check();
+        }
+    }  // namespace
+    bool video_demux_selftest() noexcept {
+        const bool demux_ok = demux_selftest_run();
+        serial::write("demux avi/ts/ebml=");
+        serial::write_line(demux_ok ? "ok" : "fail");
+        Mp2SeqInfo seq{};
+        const bool seq_ok = mp2_seq_parse(mp2_blob, sizeof(mp2_blob), seq);
+        serial::write("mp2 seq=");
+        serial::write_dec32(seq_ok ? seq.width : 0);
+        serial::write_char('x');
+        serial::write_dec32(seq_ok ? seq.height : 0);
+        serial::write("\r\n");
+        hcpp::size_t spans[4];
+        const bool frames_ok = mp2_frame_boundaries(mp2_blob, sizeof(mp2_blob), spans,
+                                                    4) == 1 &&
+                               seq_ok && seq.fps_num == 25 && seq.fps_den == 1;
+        hcpp::size_t video_codecs = 0;
+        for (hcpp::size_t i = 0; codec::codec_at(i) != nullptr; ++i)
+            if (codec::codec_at(i)->kind == codec::CodecKind::Video) ++video_codecs;
+        serial::write("video codec=");
+        serial::write_dec32(static_cast<hcpp::u32>(video_codecs));
+        serial::write("\r\n");
+        return demux_ok && frames_ok && video_codecs != 0 && mcodec_count() != 0;
+    }
     bool video_core_selftest() noexcept {
         bool ok = true;
         const hcpp::i32 client = video_open_dev(0);
