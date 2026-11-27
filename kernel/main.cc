@@ -936,16 +936,27 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_line("cursor poll=active");
     for (;;) {
         const bool ptr_dirty = hype::input::cursor_poll();
+        const bool locked = hype::session::session_locked();
         const bool shell_active = hype::session::session_logged_in();
-        if (shell_active) {
-            hype::ui::deskbar_idle();
-        }
-        if (shell_active && hype::win::wm_dirty()) {
-            hype::input::cursor_erase(framebuffer);
-            hype::win::desk_paint(framebuffer);
-            hype::input::cursor_draw(framebuffer);
-        } else if (ptr_dirty) {
-            hype::input::cursor_draw(framebuffer);
+        if (locked) {
+            // The lock veil repaints itself on entry and once per RTC
+            // minute; session_frame returns true only when it painted.
+            if (hype::session::session_frame(framebuffer)) {
+                hype::input::cursor_draw(framebuffer);
+            } else if (ptr_dirty) {
+                hype::input::cursor_draw(framebuffer);
+            }
+        } else {
+            if (shell_active) {
+                hype::ui::deskbar_idle();
+            }
+            if (shell_active && hype::win::wm_dirty()) {
+                hype::input::cursor_erase(framebuffer);
+                hype::win::desk_paint(framebuffer);
+                hype::input::cursor_draw(framebuffer);
+            } else if (ptr_dirty) {
+                hype::input::cursor_draw(framebuffer);
+            }
         }
         if (mp3_file_decoded && !mp3_file_queued &&
             hype::audio::hasio_ready()) {

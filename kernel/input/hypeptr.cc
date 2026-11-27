@@ -45,6 +45,16 @@ namespace hype::input {
                            hcpp::i32 y) noexcept {
             const hcpp::u8 rising = static_cast<hcpp::u8>(after & ~before);
             const hcpp::u8 falling = static_cast<hcpp::u8>(before & ~after);
+            // Locked session: a press unlocks, every other button edge is
+            // swallowed before it can reach the WM or apps.
+            if (hype::session::session_locked()) {
+                if ((rising &
+                     (ptr_button_left | ptr_button_right | ptr_button_middle)) != 0) {
+                    serial::write_line("ptr click=unlock");
+                    hype::session::session_unlock();
+                }
+                return;
+            }
             if ((rising & ptr_button_left) != 0) {
                 serial::write("ptr click=");
                 serial::write_dec32(static_cast<hcpp::u32>(x));

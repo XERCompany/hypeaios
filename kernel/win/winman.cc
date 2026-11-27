@@ -7,6 +7,7 @@
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/input/scancode.h"
 #include "kernel/serial.hpp"
+#include "kernel/session/session.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/hyperui.h"
@@ -777,6 +778,12 @@ namespace hype::win {
 
         void wm_key_event(void*, const input::InputEvent& e) noexcept {
             if (e.type != input::InputEventType::Key) {
+                return;
+            }
+            // Locked session owns the keyboard: the lock handler consumes
+            // Enter/click and swallows everything else, so WM chords
+            // (Alt-Tab, switcher keys) must not run underneath.
+            if (hype::session::session_locked()) {
                 return;
             }
             const bool pressed =
