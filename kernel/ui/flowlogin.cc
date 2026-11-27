@@ -19,14 +19,12 @@ namespace hype::ui::flowlogin {
 
     namespace {
 
-        constexpr char demo_user_name[] = "demo";
-        constexpr char demo_pin[] = "2468";
-        constexpr char wrong_pin[] = "9999";
-
         State screen_state = State::Hidden;
         hello::HelloResult last_submit = hello::HelloResult::NotEnrolled;
         hcpp::u32 user_uid = 0;
         hcpp::u32 session_uid = 0;
+        char session_name[32] = {};
+        char user_label_text[64] = "user: -";
         hello::HelloMethod method = hello::HelloMethod::PinCode;
         hcpp::graphics::Framebuffer* screen_fb = nullptr;
         bool keys_hooked = false;
@@ -53,7 +51,7 @@ namespace hype::ui::flowlogin {
             column.set_spacing(static_cast<hcpp::i32>(theme.spacing_md));
             column.set_cross_align(CrossAlign::Stretch);
 
-            user_label.set_text("user: demo");
+            user_label.set_text(user_label_text);
             method_label.set_text("method: PIN \xE2\x80\x94 enter code, "
                                   "press Enter");
             method_label.set_color(LabelColor::Muted);
@@ -82,28 +80,45 @@ namespace hype::ui::flowlogin {
 
     }  // namespace
 
-    bool ensure_demo_user() noexcept {
-        if (session_uid == 0) {
-            session_uid = users::users_create(
-                demo_user_name,
-                security::capability_read | security::capability_write |
-                    security::capability_execute);
-        }
-        user_uid = hello::hello_find_user(demo_user_name);
-        if (user_uid == 0) {
-            user_uid = hello::hello_register_user(demo_user_name);
-        }
-        if (user_uid == 0) {
+    bool set_user(hcpp::u32 uid, hcpp::StringView name) noexcept {
+        if (name.empty()) {
             return false;
         }
-        const hcpp::u32 pin_bit =
-            1U << static_cast<hcpp::u8>(hello::HelloMethod::PinCode);
-        if ((hello::hello_methods(user_uid) & pin_bit) != 0) {
-            hello::hello_reset_failures(user_uid, hello::HelloMethod::PinCode);
-            return true;
+        user_uid = uid;
+        hcpp::size_t pos = 0;
+        const char prefix[] = "user: ";
+        for (hcpp::size_t i = 0; prefix[i] != '\0' && pos + 1 < sizeof(user_label_text);
+             ++i) {
+            user_label_text[pos++] = prefix[i];
         }
-        return hello::hello_enroll(user_uid, hello::HelloMethod::PinCode,
-                                   demo_pin, sizeof(demo_pin) - 1);
+        for (hcpp::size_t i = 0; i < name.size() && pos + 1 < sizeof(user_label_text);
+             ++i) {
+            user_label_text[pos++] = name[i];
+        }
+        user_label_text[pos] = '\0';
+        user_label.set_text(user_label_text);
+        bool same = name.size() + 1 < sizeof(session_name);
+        if (same) {
+            for (hcpp::size_t i = 0; i < name.size(); ++i) {
+                if (session_name[i] != name[i]) {
+                    same = false;
+                    break;
+                }
+            }
+            same = same && session_name[name.size()] == '\0';
+        }
+        if (session_uid == 0 || !same) {
+            session_uid = users::users_create(
+                name,
+                security::capability_read | security::capability_write |
+                    security::capability_execute);
+            hcpp::size_t j = 0;
+            for (; j < name.size() && j + 1 < sizeof(session_name); ++j) {
+                session_name[j] = name[j];
+            }
+            session_name[j] = '\0';
+        }
+        return true;
     }
 
     void repaint(hcpp::graphics::Framebuffer& framebuffer) noexcept {
@@ -227,30 +242,5 @@ namespace hype::ui::flowlogin {
     }
 
     hello::HelloResult last_result() noexcept { return last_submit; }
-
-    hcpp::u32 drive(hcpp::graphics::Framebuffer& framebuffer) noexcept {
-        if (!ensure_demo_user()) {
-            screen_state = State::Unavailable;
-            serial::write_line("ui login=unavailable");
-            return 0;
-        }
-        if (show(framebuffer) == 0) {
-            screen_state = State::Unavailable;
-            serial::write_line("ui login=failed");
-            return 0;
-        }
-        for (hcpp::size_t i = 0; wrong_pin[i] != '\0'; ++i) {
-            handle_char(wrong_pin[i]);
-        }
-        handle_char('\n');
-        if (screen_fb != nullptr && screen_state == State::Shown) {
-            repaint(*screen_fb);
-        }
-        for (hcpp::size_t i = 0; demo_pin[i] != '\0'; ++i) {
-            handle_char(demo_pin[i]);
-        }
-        handle_char('\n');
-        return authenticated() ? 1 : 0;
-    }
 
 }  // namespace hype::ui::flowlogin

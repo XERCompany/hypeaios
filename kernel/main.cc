@@ -38,8 +38,8 @@
 #include "kernel/interrupts/idt.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
+#include "kernel/session/session.h"
 #include "kernel/svc/revsvc.h"
-#include "kernel/ui/flowlogin.h"
 #include "kernel/ui/selftest.h"
 #include "kernel/vfs/hypefile.h"
 #include "kernel/vfs/hypefs.h"
@@ -662,10 +662,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         "HDR colorspace activation is not possible through legacy "
         "VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
-    hype::ui::flowlogin::drive(framebuffer);
-    if (hype::ui::flowlogin::authenticated() ||
-        hype::ui::flowlogin::state() ==
-            hype::ui::flowlogin::State::Unavailable) {
+    hype::session::session_begin(framebuffer);
+    hype::session::session_scripted_auth(framebuffer);
+    if (hype::session::session_logged_in()) {
         const hcpp::u32 shell_wins = hype::win::desk_paint(framebuffer);
         if (shell_wins > 0) {
             serial::write("ui shell=painted wins=");
