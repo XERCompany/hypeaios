@@ -10,6 +10,7 @@ namespace hype::input {
     bool cursor_ready() noexcept;
     bool cursor_poll() noexcept;
     hcpp::u32 cursor_draw(hcpp::graphics::Framebuffer &fb) noexcept;
+    hcpp::u32 cursor_erase(hcpp::graphics::Framebuffer &fb) noexcept;
     CurStat cursor_stat() noexcept;
     bool input_selftest(hcpp::graphics::Framebuffer &fb) noexcept;
 

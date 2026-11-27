@@ -196,7 +196,7 @@ namespace hype::hxrt {
             }
             dbg_refresh();
             hype::ui::Canvas canvas(*ctx.fb);
-            canvas.set_clip(ctx.region);
+            canvas.set_clip(ctx.paint_clip());
             const hype::ui::Theme& theme = hype::ui::theme_active();
             hype::ui::rui_panel(canvas, ctx.region, hype::ui::rui_elev_window);
             paint_list(canvas, ctx.region, theme);

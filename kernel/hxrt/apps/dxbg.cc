@@ -360,7 +360,7 @@ namespace hype::hxrt {
                                 ? "mode: image"
                                 : "mode: gradient");
             hype::ui::Canvas canvas(*ctx.fb);
-            canvas.set_clip(ctx.region);
+            canvas.set_clip(ctx.paint_clip());
             panel.layout_tree(ctx.region);
             panel.paint_tree(canvas);
         }

@@ -16,6 +16,7 @@ namespace hype::input {
     bool cursprite_init() noexcept;
     bool cursprite_png_active() noexcept;
     hcpp::u32 cursprite_draw(hcpp::graphics::Framebuffer &fb, hcpp::i32 x, hcpp::i32 y) noexcept;
+    hcpp::u32 cursprite_erase(hcpp::graphics::Framebuffer &fb) noexcept;
     hcpp::u32 cursprite_opaque_count() noexcept;
     hcpp::u32 cursprite_test_fill(hcpp::u32 *pixels, hcpp::u32 capacity) noexcept;
 

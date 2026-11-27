@@ -45,6 +45,13 @@ namespace hype::input {
         hcpp::i32 png_hot_y = 0;
         bool png_ready = false;
 
+        hcpp::u32 under_px[cursor_png_sprite_w * cursor_png_sprite_h];
+        hcpp::i32 under_x = 0;
+        hcpp::i32 under_y = 0;
+        hcpp::i32 under_w = 0;
+        hcpp::i32 under_h = 0;
+        bool under_saved = false;
+
         bool mask_at(hcpp::i32 x, hcpp::i32 y) noexcept {
             if (x < 0 || y < 0 || x >= cursor_sprite_w || y >= cursor_sprite_h) {
                 return false;
@@ -172,9 +179,51 @@ namespace hype::input {
 
     bool cursprite_png_active() noexcept { return png_ready; }
 
+    hcpp::u32 cursprite_erase(hcpp::graphics::Framebuffer &fb) noexcept {
+        if (!fb.valid() || !under_saved) {
+            return 0;
+        }
+        hcpp::u32 restored = 0;
+        for (hcpp::i32 row = 0; row < under_h; ++row) {
+            for (hcpp::i32 col = 0; col < under_w; ++col) {
+                fb.put_pixel(static_cast<hcpp::u32>(under_x + col),
+                             static_cast<hcpp::u32>(under_y + row),
+                             under_px[static_cast<hcpp::u32>(row * under_w + col)]);
+                ++restored;
+            }
+        }
+        under_saved = false;
+        return restored;
+    }
+
     hcpp::u32 cursprite_draw(hcpp::graphics::Framebuffer &fb, hcpp::i32 x, hcpp::i32 y) noexcept {
         if (!fb.valid()) {
             return 0;
+        }
+        cursprite_erase(fb);
+        const hcpp::i32 spr_w = png_ready ? cursor_png_sprite_w : cursor_sprite_w;
+        const hcpp::i32 spr_h = png_ready ? cursor_png_sprite_h : cursor_sprite_h;
+        const hcpp::i32 org_x = png_ready ? x - png_hot_x : x;
+        const hcpp::i32 org_y = png_ready ? y - png_hot_y : y;
+        const hcpp::i32 fw = static_cast<hcpp::i32>(fb.width());
+        const hcpp::i32 fh = static_cast<hcpp::i32>(fb.height());
+        const hcpp::i32 cx0 = org_x > 0 ? org_x : 0;
+        const hcpp::i32 cy0 = org_y > 0 ? org_y : 0;
+        const hcpp::i32 cx1 = org_x + spr_w < fw ? org_x + spr_w : fw;
+        const hcpp::i32 cy1 = org_y + spr_h < fh ? org_y + spr_h : fh;
+        if (cx0 < cx1 && cy0 < cy1) {
+            under_w = cx1 - cx0;
+            under_h = cy1 - cy0;
+            under_x = cx0;
+            under_y = cy0;
+            for (hcpp::i32 row = 0; row < under_h; ++row) {
+                for (hcpp::i32 col = 0; col < under_w; ++col) {
+                    under_px[static_cast<hcpp::u32>(row * under_w + col)] =
+                        fb.get_pixel(static_cast<hcpp::u32>(under_x + col),
+                                     static_cast<hcpp::u32>(under_y + row));
+                }
+            }
+            under_saved = true;
         }
         if (png_ready) {
             const hcpp::i32 origin_x = x - png_hot_x;

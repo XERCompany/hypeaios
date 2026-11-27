@@ -757,6 +757,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     hype::input::cursor_poll();
     hype::input::cursor_draw(framebuffer);
     if (hype::session::session_logged_in()) {
+        hype::input::cursor_erase(framebuffer);
         const hcpp::u32 shell_wins = hype::win::desk_paint(framebuffer);
         if (shell_wins > 0) {
             serial::write("ui shell=painted wins=");
@@ -790,10 +791,12 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("\r\n");
     serial::write_line("cursor poll=active");
     for (;;) {
-        if (hype::input::cursor_poll()) {
-            if (hype::session::session_logged_in()) {
-                hype::win::desk_paint(framebuffer);
-            }
+        const bool ptr_dirty = hype::input::cursor_poll();
+        if (hype::session::session_logged_in() && hype::win::wm_dirty()) {
+            hype::input::cursor_erase(framebuffer);
+            hype::win::desk_paint(framebuffer);
+            hype::input::cursor_draw(framebuffer);
+        } else if (ptr_dirty) {
             hype::input::cursor_draw(framebuffer);
         }
         hype::audio::hasio_pump_active();
