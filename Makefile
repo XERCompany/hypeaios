@@ -78,9 +78,10 @@ $(BUILD)/fonts/%.o: $(BUILD)/fonts/%.cc | $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/kernel.bin: $(KERNEL_OBJECTS) kernel/linker.ld
-	$(LD) -nostdlib -z noexecstack -T kernel/linker.ld -o $@ $(KERNEL_OBJECTS)
+	$(LD) -nostdlib -z noexecstack -T kernel/linker.ld -Wl,-Map,$(BUILD)/kernel.map -o $@ $(KERNEL_OBJECTS)
 
-PAYLOAD_FILES := $(wildcard docs/wiki/*.md docs/research/*.md) cursor.png tools/Montserrat.ttf
+PAYLOAD_FILES := $(wildcard docs/wiki/*.md docs/research/*.md) cursor.png tools/Montserrat.ttf \
+	$(wildcard payload/wallpapers/*.png payload/help/*.txt payload/fonts/*)
 
 $(BUILD)/hypeai-os.img: $(BUILD)/stage1.bin $(BUILD)/stage2.bin $(BUILD)/kernel.bin tools/mkimage.py $(PAYLOAD_FILES)
 	python3 tools/mkimage.py

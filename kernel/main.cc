@@ -438,6 +438,10 @@ namespace {
                                                                         : 0;
             hxer_files +=
                 hype::vfs::hypefile_install(hype::hxrt::hxabout_app()) ? 1 : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::revdbg_app()) ? 1 : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::dxbg_app()) ? 1 : 0;
         }
         serial::write("vfs hxer=");
         serial::write_dec32(hxer_files);
@@ -452,6 +456,24 @@ namespace {
         serial::write("\r\n");
         serial::write("blob bytes=");
         serial::write_dec32(static_cast<hcpp::u32>(blob.bytes));
+        serial::write("\r\n");
+        // Payload packs: wallpapers (U:/wallpapers), help docs
+        // (S:/data/help), fonts (S:/data/fonts) and the .hxer app pack
+        // (U:/apps).
+        const char* const pack_dirs[] = {
+            "HYPEOS://U/wallpapers", "HYPEOS://S/data/help",
+            "HYPEOS://S/data/fonts", "HYPEOS://U/apps"};
+        hcpp::u32 packs = 0;
+        for (hcpp::u32 i = 0; i < 4; ++i) {
+            if (hype::vfs::fs_list(pack_dirs[i], nullptr, 0) != 0) {
+                ++packs;
+            }
+        }
+        serial::write("payload packs=");
+        serial::write_dec32(packs);
+        serial::write("\r\n");
+        serial::write("fs ufiles=");
+        serial::write_dec32(hype::vfs::fs_disk_file_count('U'));
         serial::write("\r\n");
         hype::vfs::FsSelftest vfs_selftest{};
         const bool vfs_ok = hype::vfs::fs_selftest(vfs_selftest);

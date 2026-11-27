@@ -1,0 +1,13 @@
+HYPEAI OS - HELP: ABOUT
+=======================
+
+HypeAI OS is an experimental x86_64 freestanding operating system written in
+HypeAICode++ (C++20, no libc). It boots from a raw disk image, brings up its
+own memory manager, scheduler, ATA driver, codec registry, window manager
+and the hxrt application runtime.
+
+This file is part of the docs pack shipped inside the HYPEDATA blob at a
+fixed disk LBA and mounted read-into-memfs at boot.
+
+Path    : HYPEOS://S/data/help/about.txt
+Pack    : docs

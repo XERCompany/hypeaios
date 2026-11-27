@@ -44,6 +44,7 @@ namespace hype::vfs {
     void fs_init() noexcept;
     bool fs_seed() noexcept;
     hcpp::u32 fs_disk_count() noexcept;
+    hcpp::u32 fs_disk_file_count(char disk) noexcept;
     FsStatus fs_mkdir(const char* path) noexcept;
     FsStatus fs_write(const char* path, const void* data, hcpp::u32 size) noexcept;
     FsStatus fs_read(const char* path, void* out, hcpp::u32 capacity,

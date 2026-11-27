@@ -19,24 +19,114 @@ BLOB_ENTRY_SIZE = 80  # name[64] + u64 offset + u64 size
 BLOB_MAX_ENTRIES = 64
 BLOB_MAX_FILE_BYTES = 1 << 20  # must match kernel/vfs/hypeblob.cc io buffer
 
+# .hxer app-pack blobs mirror kernel/hxrt/hxpack.h: 64-byte header + 8-byte
+# entry tag. Names starting with "u/" mount under HYPEOS://U/ instead of
+# HYPEOS://S/data/ (see kernel/vfs/hypeblob.cc mount routing).
+HXER_MAGIC = 0x48584552
+HXER_KIND_USER = 0
+HXER_KIND_SYSTEM = 1
+HXER_NAME_LEN = 24
+HXER_PATH_LEN = 32
+HXER_TAG_SIZE = 8
 
-def collect_payload(root: Path):
-    """Files embedded into the HYPEDATA region, mounted as S:/data/<name>."""
+# (app name, kind, header path, entry function name). Must match the
+# HxerHeader desc tables in kernel/hxrt/apps/*.cc.
+BUILTIN_APPS = [
+    ("SpeedStart", HXER_KIND_SYSTEM, "HYPEOS://S/apps/SpeedStart.hxersys",
+     "ss_entry"),
+    ("HxSettings", HXER_KIND_SYSTEM, "HYPEOS://S/apps/HxSettings.hxersys",
+     "hxsettings_entry"),
+    ("HxAbout", HXER_KIND_SYSTEM, "HYPEOS://S/apps/HxAbout.hxersys",
+     "hxabout_entry"),
+    ("RevDBGService", HXER_KIND_SYSTEM,
+     "HYPEOS://S/apps/RevDBGService.hxersys", "revdbg_entry"),
+    ("DXBackgroundDesktop", HXER_KIND_USER,
+     "HYPEOS://U/apps/DXBackgroundDesktop.hxer", "dxbg_entry"),
+]
+
+
+def map_symbols(map_path: Path):
+    """Demangled symbol -> VMA from the lld -Map file (first hex column)."""
+    symbols = {}
+    if not map_path.is_file():
+        return symbols
+    for line in map_path.read_text(errors="replace").splitlines():
+        parts = line.split(None, 4)
+        if len(parts) != 5:
+            continue
+        try:
+            vma = int(parts[0], 16)
+        except ValueError:
+            continue
+        symbols[parts[4].strip()] = vma
+    return symbols
+
+
+def hxer_blobs(map_path: Path):
+    """Serializes builtin app headers into .hxer blobs for U:/apps.
+
+    Entry tags are real kernel addresses read from the linker map, so the
+    files decode exactly like the ones hypefile_install writes at boot.
+    Apps whose entry symbol cannot be resolved are skipped with a warning.
+    """
+    symbols = map_symbols(map_path)
+    blobs = []
+    for name, kind, path, entry_fn in BUILTIN_APPS:
+        suffix = f"::{entry_fn}(hype::hxrt::AppCtx&)"
+        hits = [vma for sym, vma in symbols.items() if sym.endswith(suffix)]
+        if len(hits) != 1:
+            print(f"warning: {entry_fn} resolves {len(hits)} times in "
+                  f"{map_path.name}, skipping {name}.hxer")
+            continue
+        header = struct.pack(
+            "<I H B B 24s 32s",
+            HXER_MAGIC,
+            1,
+            kind,
+            0,
+            name.encode("ascii")[: HXER_NAME_LEN - 1],
+            path.encode("ascii")[: HXER_PATH_LEN - 1],
+        )
+        blobs.append((f"u/apps/{name}.hxer", header +
+                      struct.pack("<Q", hits[0])))
+    return blobs
+
+
+def collect_payload(root: Path, build: Path):
+    """Files embedded into the HYPEDATA region.
+
+    Plain names mount as S:/data/<name>; "u/<path>" mounts under HYPEOS://U/.
+    Returns (name, path-or-None, inline-data-or-None) tuples.
+    """
     files = []
     for sub in ("docs/wiki", "docs/research"):
         for path in sorted((root / sub).glob("*.md")):
-            files.append((f"{path.parent.name}/{path.name}", path))
-    files.append(("assets/cursor.png", root / "cursor.png"))
-    files.append(("assets/Montserrat.ttf", root / "tools" / "Montserrat.ttf"))
+            files.append((f"{path.parent.name}/{path.name}", path, None))
+    files.append(("assets/cursor.png", root / "cursor.png", None))
+    files.append(("assets/Montserrat.ttf", root / "tools" / "Montserrat.ttf",
+                  None))
+    # docs pack: generated plain-text help pages
+    for path in sorted((root / "payload" / "help").glob("*.txt")):
+        files.append((f"help/{path.name}", path, None))
+    # wallpaper pack -> U:/wallpapers (dxbg lists this dir)
+    for path in sorted((root / "payload" / "wallpapers").glob("*.png")):
+        files.append((f"u/wallpapers/{path.name}", path, None))
+    # font pack: second embedded font for later parser work
+    for path in sorted((root / "payload" / "fonts").glob("*")):
+        if path.is_file():
+            files.append((f"fonts/{path.name}", path, None))
+    # app pack: serialized builtin headers -> U:/apps
+    files.extend((name, None, data)
+                 for name, data in hxer_blobs(build / "kernel.map"))
     return files
 
 
-def build_blob(root: Path) -> bytes:
+def build_blob(root: Path, build: Path) -> bytes:
     items = []
-    for name, path in collect_payload(root):
+    for name, path, inline in collect_payload(root, build):
         if len(items) >= BLOB_MAX_ENTRIES:
             break
-        data = path.read_bytes()
+        data = inline if inline is not None else path.read_bytes()
         if not data or len(data) > BLOB_MAX_FILE_BYTES:
             continue
         encoded = name.encode("ascii")
@@ -87,7 +177,7 @@ kernel_lba = 1 + STAGE2_SECTORS
 kernel_offset = kernel_lba * SECTOR_SIZE
 image[kernel_offset:kernel_offset + len(kernel)] = kernel
 
-blob = build_blob(root)
+blob = build_blob(root, build)
 target_bytes = TARGET_SECTORS * SECTOR_SIZE
 if len(image) + len(blob) > target_bytes:
     raise SystemExit("payload exceeds configured image size")

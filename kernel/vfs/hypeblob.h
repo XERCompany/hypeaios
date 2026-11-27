@@ -17,7 +17,8 @@ namespace hype::vfs {
     };
 
     // Reads the HYPEDATA region via ATA PIO and mounts every entry as a
-    // memfs file under HYPEOS://S/data/<name>.
+    // memfs file. Entries named "<disk>/<path>" ("u", "s" or "t") mount at
+    // "HYPEOS://<DISK>/<path>"; all others mount under HYPEOS://S/data/.
     BlobMount hypeblob_mount() noexcept;
 
 }

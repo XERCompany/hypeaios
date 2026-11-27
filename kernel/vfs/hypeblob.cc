@@ -71,14 +71,28 @@ namespace {
         return length > 0 && length < name_length;
     }
 
-    // Builds "HYPEOS://S/data/<name>" and creates intermediate directories.
+    // Mount routing: a leading "<disk>/" component ("u", "s" or "t") mounts
+    // the entry at "HYPEOS://<DISK>/<rest>" (e.g. "u/apps/x.hxer" ->
+    // "HYPEOS://U/apps/x.hxer"); anything else goes to
+    // "HYPEOS://S/data/<name>". Intermediate directories are created.
     bool mount_file(const char* name, const hcpp::u8* data,
                     hcpp::u32 size) noexcept {
         char path[path_capacity];
-        const char prefix[] = "HYPEOS://S/data/";
+        const char* prefix = "HYPEOS://S/data/";
+        char routed[12];
+        hcpp::u32 name_start = 0;
+        if ((name[0] == 'u' || name[0] == 's' || name[0] == 't') &&
+            name[1] == '/' && name[2] != '\0') {
+            for (hcpp::u32 i = 0; i < sizeof(routed); ++i) routed[i] = '\0';
+            const char base[] = "HYPEOS://S/";
+            for (hcpp::u32 i = 0; base[i] != '\0'; ++i) routed[i] = base[i];
+            routed[9] = name[0] == 'u' ? 'U' : (name[0] == 's' ? 'S' : 'T');
+            prefix = routed;
+            name_start = 2;
+        }
         hcpp::u32 pos = 0;
         for (hcpp::u32 i = 0; prefix[i] != '\0'; ++i) path[pos++] = prefix[i];
-        for (hcpp::u32 i = 0; name[i] != '\0'; ++i) {
+        for (hcpp::u32 i = name_start; name[i] != '\0'; ++i) {
             if (pos + 2 >= path_capacity) return false;
             if (name[i] == '/') {
                 path[pos] = '\0';
