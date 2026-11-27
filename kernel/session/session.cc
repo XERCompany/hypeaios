@@ -6,6 +6,7 @@
 #include "kernel/input/scancode.h"
 #include "kernel/serial.hpp"
 #include "kernel/svc/revsvc.h"
+#include "kernel/time/rtc.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
 #include "kernel/ui/flowlogin.h"
@@ -31,6 +32,14 @@ namespace hype::session {
         SessionState current_state = SessionState::Booting;
         hcpp::u32 active_uid = 0;
         hcpp::u32 login_user_uid = 0;
+
+        void log_login_timestamp() noexcept {
+            char text[20];
+            if (hype::time::rtc_format(text)) {
+                serial::write("session login_at=");
+                serial::write_line(text);
+            }
+        }
 
         ui::Panel reg_window;
         ui::Flex reg_column{ui::FlexDirection::Column};
@@ -130,6 +139,7 @@ namespace hype::session {
             active_uid = uid;
             current_state = SessionState::LoggedIn;
             serial::write_line("session auth=ok");
+            log_login_timestamp();
             return true;
         }
 
@@ -379,6 +389,7 @@ namespace hype::session {
         active_uid = uid;
         current_state = SessionState::LoggedIn;
         serial::write_line("session auth=ok");
+        log_login_timestamp();
         return 1;
     }
 
