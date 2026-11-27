@@ -42,6 +42,12 @@ Started 2026-11-26.
 - Details: see [hello-audio.md](hello-audio.md).
 - **Superseded:** the 2026-11-26 plan above said credentials DB would be a native `hypedb` engine, NOT vendored sqlite3 — written while the #15 port was mid-flight. What actually merged (commit `2fb6fd8`+): **vendored SQLite 3.50.4 on a native "hypevfs" memdb VFS** + heap over PMM (`sqlite=ok`). A pure from-scratch DB remains an open option (see [hello-audio.md](hello-audio.md) open questions).
 
+## Program: UI components v2 (spec #32, 2026-11-27) — COMPLETE
+
+- All tickets #33–#40 merged; research source `docs/research/ui-registries.md`.
+- As of `3bc3842`: Canvas v2 (line/alpha/rrect/circle), Theme v2 (20 tweakcn tokens, dark+light, `hard_shadow` flag), FocusManager, 20+ widgets incl. InputOTP/Tabs/Dialog/charts/Spinner/Marquee, AnimTicker driven by `pit_ticks()`.
+- **Critical fix landed inside #38** (`6d2bef7`+): kernel `.bss` was never zeroed AND PMM only reserved 2MB — large-model sections `.ltext/.lrodata/.ldata/.lbss` are now collected in `kernel/linker.ld`, `main.cc` memsets bss before `.init_array`, `pmm.cc` reserves through `__bss_end`. Without this, static objects in new code got garbage vptrs → #GP and heap corruption.
+
 ## Program: CodecApps (spec #23, 2026-11-26) — COMPLETE
 
 - Ticket graph (all merged & closed): #24 core registry/magic/arena → #25 BMP/PNM/TGA/QOI, #26 PNG+inflate, #27 JPEG baseline, #28 GIF/ICO/EXIF/TIFF, #29 ADPCM/G.711/MP3/FLAC → #30 Ogg/Vorbis/ALAC → #31 integration + demo image.
