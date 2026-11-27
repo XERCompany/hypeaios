@@ -10,6 +10,7 @@
 #include "hcpp/text_writer.hpp"
 #include "hcpp/types.hpp"
 #include "kernel/audio/audio-serivce.h"
+#include "kernel/boot/bootsplash.h"
 #include "kernel/boot_info.hpp"
 #include "kernel/codecapps/audio/selftest.h"
 #include "kernel/codecapps/image/image.h"
@@ -248,7 +249,24 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     }
     serial::initialize();
     hcpp::fonts::initialize_default_fonts();
+    hcpp::graphics::Framebuffer framebuffer;
+    const bool has_framebuffer =
+        boot_info != nullptr && boot_info->magic == HYPEBOOT_MAGIC && (boot_info->flags & 1U) != 0 &&
+        boot_info->framebuffer != 0 &&
+        (boot_info->bits_per_pixel == 24 || boot_info->bits_per_pixel == 32) &&
+        boot_info->width >= 320 && boot_info->height >= 200 && boot_info->pitch != 0;
+    if (has_framebuffer) {
+        framebuffer = hcpp::graphics::Framebuffer(
+            reinterpret_cast<volatile hcpp::u8 *>(
+                static_cast<hcpp::uintptr_t>(boot_info->framebuffer)),
+            boot_info->width, boot_info->height, boot_info->pitch, boot_info->bits_per_pixel,
+            boot_info->red_mask_size, boot_info->red_position, boot_info->green_mask_size,
+            boot_info->green_position, boot_info->blue_mask_size, boot_info->blue_position);
+        hype::display::display_bind_target(framebuffer);
+        hype::boot::boot_splash_begin(framebuffer);
+    }
     const hype::runtime::RuntimeInfo runtime_info = hype::runtime::boot(*boot_info);
+    hype::boot::boot_splash_stage("boot devices", 14);
     serial::write_line("HYPEAI OS BOOT OK - HypeAICode++ x86_64 long mode");
     serial::write("version=");
     serial::write_line(HYPEAI_VERSION_FULL);
@@ -294,6 +312,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     }
     const bool audio_format_ok = hype::audio::audio_format_selftest();
     report("audio format selftest=", audio_format_ok);
+    hype::boot::boot_splash_stage("audio", 28);
     hype::codec::codec_register_builtins();
     serial::write("codecs=");
     serial::write_dec32(static_cast<hcpp::u32>(hype::codec::codec_count()));
@@ -309,6 +328,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     const bool png_selftest_ok = hype::codec::image::png_selftest();
     report("png selftest=", png_selftest_ok);
     hype::codec::audio_codec_selftest();
+    hype::boot::boot_splash_stage("codecs", 42);
     serial::write("memory free=");
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.memory_free_bytes / (1024 * 1024)));
     serial::write("MB e820=");
@@ -321,6 +341,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write_dec32(static_cast<hcpp::u32>(runtime_info.acpi_tables));
     serial::write(" interrupts=");
     serial::write_line(runtime_info.interrupts_ready ? "ready" : "failed");
+    hype::boot::boot_splash_stage("memory", 56);
     serial::write("vmm=");
     serial::write(runtime_info.vmm_selftest ? "ready" : "failed");
     serial::write(" madt=");
@@ -363,6 +384,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     report("display modeset/dp selftest=", display3_ok);
     const bool display4_ok = hype::display::display4_selftest();
     report("display multi selftest=", display4_ok);
+    hype::boot::boot_splash_stage("display", 70);
     if (const char* db_error = hype::db::db_open(); db_error == nullptr) {
         serial::write_line("sqlite=ok");
         serial::write("db selftest=");
@@ -374,6 +396,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         serial::write_line(db_error);
         serial::write_line("hello selftest=skipped no-db");
     }
+    hype::boot::boot_splash_stage("vfs", 84);
     const hcpp::fonts::FontFace* cyrillic_font = hcpp::fonts::default_font();
     hcpp::u32 cyrillic_found = 0;
     hcpp::u32 cyrillic_pixels = 0;
@@ -398,6 +421,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     serial::write("/66 pixels=");
     serial::write_dec32(cyrillic_pixels);
     serial::write("\r\n");
+    hype::boot::boot_splash_stage("ui", 95);
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         serial::write_line("boot info missing or invalid");
@@ -408,26 +432,13 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     write_boot_info(*boot_info);
     const MonitorReport monitor = analyze_monitor(*boot_info);
 
-    const bool has_framebuffer = (boot_info->flags & 1U) != 0 && boot_info->framebuffer != 0 &&
-                                 (boot_info->bits_per_pixel == 24 || boot_info->bits_per_pixel == 32) &&
-                                 boot_info->width >= 320 && boot_info->height >= 200 && boot_info->pitch != 0;
-
     if (!has_framebuffer) {
         serial::write_line("VBE framebuffer unavailable; VGA text fallback active");
         write_vga_text("HYPEAI OS BOOT OK - VGA TEXT MODE");
         halt_forever();
     }
 
-    auto *framebuffer_base =
-        reinterpret_cast<volatile hcpp::u8 *>(static_cast<hcpp::uintptr_t>(boot_info->framebuffer));
-
-    hcpp::graphics::Framebuffer framebuffer(
-        framebuffer_base, boot_info->width, boot_info->height, boot_info->pitch, boot_info->bits_per_pixel,
-        boot_info->red_mask_size, boot_info->red_position, boot_info->green_mask_size, boot_info->green_position,
-        boot_info->blue_mask_size, boot_info->blue_position);
-
-    framebuffer.draw_test_pattern();
-    hype::display::display_bind_target(framebuffer);
+    hype::boot::boot_splash_end();
 
     const hcpp::u32 panel_color = framebuffer.encode_rgb(4, 10, 28);
     const hcpp::u32 title_color = framebuffer.encode_rgb(240, 250, 255);
