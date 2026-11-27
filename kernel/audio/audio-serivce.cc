@@ -1,6 +1,7 @@
 #include "kernel/audio/audio-serivce.h"
 
 #include "kernel/audio/audioac97.h"
+#include "kernel/audio/audioes1370.h"
 #include "kernel/audio/audiopci.h"
 #include "kernel/audio/hda.h"
 #include "kernel/serial.hpp"
@@ -205,6 +206,7 @@ namespace hype::audio {
             }
         }
         ac97::ac97_selftest();
+        es1370::es1370_selftest();
         probed = true;
         service_ready = true;
         serial::write("audio service=ready probed=");

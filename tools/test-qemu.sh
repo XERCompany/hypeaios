@@ -11,6 +11,7 @@ qemu-system-x86_64 \
   -drive format=raw,file=build/hypeai-os.img \
   -device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
   -device AC97,audiodev=snd0 \
+  -device ES1370,audiodev=snd0 \
   -serial file:build/test-serial.log \
   -monitor unix:build/qemu-monitor.sock,server,nowait \
   -pidfile build/qemu.pid \
@@ -78,6 +79,7 @@ if ! grep -q "HYPEAI OS BOOT OK" <<<"$output"; then
     -drive format=raw,file=build/hypeai-os.img \
     -device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
     -device AC97,audiodev=snd0 \
+    -device ES1370,audiodev=snd0 \
     -serial stdio -display none -no-reboot 2>&1 || true)"
 fi
 printf '%s\n' "$output"
@@ -129,6 +131,9 @@ grep -q "audio playback=ok" <<<"$output"
 grep -q "ac97 dev=ok" <<<"$output"
 grep -q "ac97 civ>0" <<<"$output"
 grep -q "ac97 vol=ok" <<<"$output"
+grep -q "es1370 dev=ok" <<<"$output"
+grep -q "es1370 dac=ok" <<<"$output"
+grep -q "es1370 vol=ok" <<<"$output"
 grep -q "vcap frame=ok" <<<"$output"
 grep -q "yuv conv=ok" <<<"$output"
 grep -q "v4lv stream=ok" <<<"$output"

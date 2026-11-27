@@ -90,6 +90,7 @@ run: all
 	qemu-system-x86_64 -drive format=raw,file=$(BUILD)/hypeai-os.img \
 		-device intel-hda -device hda-duplex,audiodev=snd0 -audiodev none,id=snd0 \
 		-device AC97,audiodev=snd0 \
+		-device ES1370,audiodev=snd0 \
 		-serial stdio -display none -no-reboot
 
 $(BUILD)/hypeai-os.iso: $(BUILD)/hypeai-os.img tools/mkiso.py $(BUILD)/version_generated.h

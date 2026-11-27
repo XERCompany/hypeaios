@@ -11,6 +11,7 @@
 #include "hcpp/types.hpp"
 #include "kernel/audio/audio-serivce.h"
 #include "kernel/audio/audioac97.h"
+#include "kernel/audio/audioes1370.h"
 #include "kernel/boot/bootseq.h"
 #include "kernel/boot/bootsplash.h"
 #include "kernel/boot_info.hpp"
@@ -534,6 +535,10 @@ namespace {
         return hype::audio::ac97::ac97_ready();
     }
 
+    bool svc_es1370_start() noexcept {
+        return hype::audio::es1370::es1370_ready();
+    }
+
     bool svc_video_start() noexcept {
         return hype::video::v4lv_device_count() != 0;
     }
@@ -548,6 +553,7 @@ namespace {
         hype::svc::svc_register("sqlite", svc_sqlite_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("hda", svc_hda_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("ac97", svc_ac97_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_register("es1370", svc_es1370_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("video", svc_video_start, nullptr, SvcRestart::OnFail, true);
         const hcpp::u32 started = hype::svc::svc_autostart();
         serial::write("svc autostart=");
