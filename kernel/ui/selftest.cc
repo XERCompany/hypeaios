@@ -8,10 +8,16 @@
 #include "kernel/ui/focus.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget_tree.h"
+#include "kernel/ui/widgets/chart.h"
 #include "kernel/ui/widgets/checkbox.h"
+#include "kernel/ui/widgets/empty.h"
+#include "kernel/ui/widgets/item.h"
 #include "kernel/ui/widgets/label.h"
+#include "kernel/ui/widgets/numticker.h"
 #include "kernel/ui/widgets/radiogroup.h"
+#include "kernel/ui/widgets/stepper.h"
 #include "kernel/ui/widgets/switch.h"
+#include "kernel/ui/widgets/table.h"
 #include "kernel/ui/widgets/tabs.h"
 
 namespace hype::ui {
@@ -389,6 +395,183 @@ namespace hype::ui {
         ok = order_ok && check_ok && switch_ok && radio_ok && tabs_ok &&
              wrap_ok && ring_ok;
         serial::write_line(ok ? "ui2 sel ok" : "ui2 sel fail");
+        return ok;
+    }
+
+    bool data_selftest() noexcept {
+        static hcpp::u8 pixels[160 * 120 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 160, 120, 160 * 4, 32, 8, 16,
+                                           8, 8, 8, 0);
+        if (!target.valid()) {
+            return false;
+        }
+        Canvas canvas(target);
+        const Theme& theme = theme_active();
+        const hcpp::u32 black = canvas.color(0);
+        bool ok = true;
+
+        static Table table;
+        table.set_column_count(2);
+        table.set_column_width(0, 56);
+        table.set_column_width(1, 60);
+        table.set_header(0, "Name");
+        table.set_header(1, "Value");
+        table.set_row_count(3);
+        table.set_cell(0, 0, "alpha");
+        table.set_cell(0, 1, "10");
+        table.set_cell(1, 0, "beta-overflowing-cell-name");
+        table.set_cell(1, 1, "20");
+        table.set_cell(2, 0, "gamma");
+        table.set_cell(2, 1, "30");
+        table.set_selected(1);
+        canvas.fill_rect(Rect{0, 0, 160, 120}, black);
+        table.layout(Rect{4, 4, 140, 80});
+        table.paint(canvas);
+        const hcpp::i32 line_h = table.row_height();
+        const hcpp::i32 row1_y = 5 + 2 * line_h;
+        if (target.get_pixel(135, 10) != canvas.color(theme.muted) ||
+            target.get_pixel(135, row1_y + 4) != canvas.color(theme.primary) ||
+            target.get_pixel(135, 5 + line_h + 4) != canvas.color(theme.card) ||
+            table.column_x(1) != 60 || table.row_count() != 3) {
+            ok = false;
+        }
+        serial::write("ui2 table rows=");
+        serial::write_dec32(static_cast<hcpp::u32>(table.row_count()));
+        serial::write("\r\n");
+
+        static Item item;
+        item.set_icon("i");
+        item.set_title("Alpha row");
+        item.set_description("secondary detail");
+        item.set_action("Open");
+        canvas.fill_rect(Rect{0, 0, 160, 120}, black);
+        item.layout(Rect{4, 4, 140, 30});
+        item.paint(canvas);
+        const Rect slot = item.icon_rect();
+        if (target.get_pixel(static_cast<hcpp::u32>(slot.x + 3),
+                             static_cast<hcpp::u32>(slot.y + slot.h / 2)) !=
+                canvas.color(theme.muted) ||
+            !item.bounds().contains(item.action_rect())) {
+            ok = false;
+        }
+
+        static EmptyState empty;
+        empty.set_glyph("!");
+        empty.set_title("Nothing here");
+        empty.set_description("Create your first entry");
+        empty.set_cta("Create");
+        canvas.fill_rect(Rect{0, 0, 160, 120}, black);
+        empty.layout(Rect{0, 0, 160, 110});
+        empty.paint(canvas);
+        const Rect glyph = empty.glyph_rect();
+        const Rect cta = empty.cta_rect();
+        if (glyph.empty() || cta.empty() ||
+            target.get_pixel(static_cast<hcpp::u32>(glyph.x + glyph.w / 2),
+                             static_cast<hcpp::u32>(glyph.y + 1)) !=
+                canvas.color(theme.border) ||
+            target.get_pixel(static_cast<hcpp::u32>(cta.x),
+                             static_cast<hcpp::u32>(cta.y + cta.h / 2)) !=
+                canvas.color(theme.primary)) {
+            ok = false;
+        }
+
+        static Stepper stepper;
+        stepper.set_step_count(3);
+        stepper.set_step_label(0, "Cart");
+        stepper.set_step_label(1, "Pay");
+        stepper.set_step_label(2, "Done");
+        stepper.set_current(1);
+        canvas.fill_rect(Rect{0, 0, 160, 120}, black);
+        stepper.layout(Rect{4, 4, 140, 40});
+        stepper.paint(canvas);
+        const Point s0 = stepper.step_center(0);
+        const Point s1 = stepper.step_center(1);
+        const Point s2 = stepper.step_center(2);
+        if (target.get_pixel(static_cast<hcpp::u32>(s0.x),
+                             static_cast<hcpp::u32>(s0.y)) !=
+                canvas.color(theme.success) ||
+            target.get_pixel(static_cast<hcpp::u32>(s1.x),
+                             static_cast<hcpp::u32>(s1.y)) !=
+                canvas.color(theme.primary) ||
+            target.get_pixel(static_cast<hcpp::u32>(s2.x),
+                             static_cast<hcpp::u32>(s2.y)) ==
+                canvas.color(theme.muted) ||
+            target.get_pixel(static_cast<hcpp::u32>(s2.x + stepper.circle_radius()),
+                             static_cast<hcpp::u32>(s2.y)) !=
+                canvas.color(theme.muted)) {
+            ok = false;
+        }
+
+        static BarChart bars;
+        bars.set_bar_count(5);
+        bars.set_value(0, 10);
+        bars.set_value(1, 25);
+        bars.set_value(2, 15);
+        bars.set_value(3, 30);
+        bars.set_value(4, 20);
+        canvas.fill_rect(Rect{0, 0, 160, 120}, black);
+        bars.layout(Rect{4, 4, 150, 70});
+        bars.paint(canvas);
+        const Rect bar0 = bars.bar_rect(0);
+        const Rect bar3 = bars.bar_rect(3);
+        if (bar0.empty() || bar3.empty() ||
+            target.get_pixel(static_cast<hcpp::u32>(bar0.x + bar0.w / 2),
+                             static_cast<hcpp::u32>(bar0.y + bar0.h / 2)) !=
+                canvas.color(theme.chart[0]) ||
+            target.get_pixel(static_cast<hcpp::u32>(bar3.x + bar3.w / 2),
+                             static_cast<hcpp::u32>(bar3.y + bar3.h / 2)) !=
+                canvas.color(theme.chart[3])) {
+            ok = false;
+        }
+        serial::write("ui2 chart bars=");
+        serial::write_dec32(static_cast<hcpp::u32>(bars.bar_count()));
+        serial::write("\r\n");
+
+        static LineChart lines;
+        lines.set_series_count(1);
+        lines.set_point_count(4);
+        lines.set_point(0, 0, 0);
+        lines.set_point(0, 1, 30);
+        lines.set_point(0, 2, 10);
+        lines.set_point(0, 3, 30);
+        canvas.fill_rect(Rect{0, 0, 160, 120}, black);
+        lines.layout(Rect{4, 4, 150, 70});
+        lines.paint(canvas);
+        const Point p1 = lines.point_pos(0, 1);
+        const Rect plot = lines.plot_rect();
+        if (target.get_pixel(static_cast<hcpp::u32>(p1.x),
+                             static_cast<hcpp::u32>(p1.y)) !=
+                canvas.color(theme.chart[0]) ||
+            target.get_pixel(static_cast<hcpp::u32>(plot.x + plot.w / 2),
+                             static_cast<hcpp::u32>(plot.bottom() - 1)) !=
+                canvas.color(theme.border)) {
+            ok = false;
+        }
+
+        static NumberTicker ticker;
+        ticker.set_target(10);
+        ticker.set_value(0);
+        ticker.set_step(3);
+        ticker.tick();
+        ticker.tick();
+        ticker.tick();
+        ticker.tick();
+        if (ticker.value() != 10 || !ticker.done()) {
+            ok = false;
+        }
+        char digits[16];
+        const hcpp::size_t len = ticker.format(digits, sizeof(digits));
+        if (len != 2 || digits[0] != '1' || digits[1] != '0') {
+            ok = false;
+        }
+        canvas.fill_rect(Rect{0, 0, 160, 120}, black);
+        ticker.layout(Rect{4, 90, 80, 20});
+        ticker.paint(canvas);
+        serial::write("ui2 ticker value=");
+        serial::write_dec32(static_cast<hcpp::u32>(ticker.value()));
+        serial::write("\r\n");
+
+        serial::write_line(ok ? "ui2 data ok" : "ui2 data fail");
         return ok;
     }
 
