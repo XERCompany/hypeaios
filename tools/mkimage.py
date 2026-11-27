@@ -8,10 +8,9 @@ STAGE2_SECTORS = 32
 KERNEL_SECTORS = 4096
 DATA_LBA = 1 + STAGE2_SECTORS + KERNEL_SECTORS  # 4129
 
-# Final padded image size (~1.1 GiB). The space between the real HYPEDATA
-# payload and the end of the image is sparse zero padding, so the build stays
-# fast. Override with HYPEAI_IMG_SECTORS if a different target is needed.
-TARGET_SECTORS = int(os.environ.get("HYPEAI_IMG_SECTORS", 2_310_144))
+# Compact image by default: stage1 + stage2 + kernel + HYPEDATA blob only.
+# Set HYPEAI_IMG_SECTORS to pad the image out to a fixed sector count.
+TARGET_SECTORS = int(os.environ.get("HYPEAI_IMG_SECTORS", 0))
 
 BLOB_MAGIC = b"HYPEDATA"
 BLOB_NAME_LEN = 64
@@ -178,16 +177,17 @@ kernel_offset = kernel_lba * SECTOR_SIZE
 image[kernel_offset:kernel_offset + len(kernel)] = kernel
 
 blob = build_blob(root, build)
-target_bytes = TARGET_SECTORS * SECTOR_SIZE
-if len(image) + len(blob) > target_bytes:
+content_bytes = len(image) + len(blob)
+if TARGET_SECTORS and content_bytes > TARGET_SECTORS * SECTOR_SIZE:
     raise SystemExit("payload exceeds configured image size")
 
 out = build / "hypeai-os.img"
 with out.open("wb") as handle:
     handle.write(image)
     handle.write(blob)
-    handle.truncate(target_bytes)
+    if TARGET_SECTORS:
+        handle.truncate(TARGET_SECTORS * SECTOR_SIZE)
 
 size = out.stat().st_size
 print(f"wrote {out} ({size} bytes), kernel LBA {kernel_lba}, data LBA {DATA_LBA}")
-print(f"img size={'>1G' if size > (1 << 30) else size} ({size} bytes)")
+print(f"img size={size} ({size} bytes)")
