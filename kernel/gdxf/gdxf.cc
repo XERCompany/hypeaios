@@ -231,7 +231,7 @@ namespace hype::gdxf {
         const bool tex_ok = tex != gdxf_invalid_tex;
 
         // fixed-step loop over gdxf_run; quits after 3 sim steps
-        gdxf_bind_window(hype::ui::Rect{4, 700, 48, 48});
+        gdxf_bind_window(hype::ui::Rect{4, 700, 48, 48}, nullptr);
         static SelftestRun run;
         run = SelftestRun{};
         run.tex = tex;

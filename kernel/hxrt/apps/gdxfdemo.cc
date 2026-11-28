@@ -27,7 +27,6 @@ namespace hype::hxrt {
         float cur_x = 24, cur_y = 24;
         float vel_x = 120.0f, vel_y = 90.0f;
         float prev_x = 24, prev_y = 24;
-        Rect prev_draw{};
         hcpp::u64 start_ticks = 0;
         hcpp::u64 sim_steps = 0;
         bool run_marked = false;
@@ -134,11 +133,10 @@ namespace hype::hxrt {
                 return;
             }
             if (!demo_started || ctx.region != last_region) {
-                if (!hype::gdxf::gdxf_bind_window(ctx.region)) {
+                if (!hype::gdxf::gdxf_bind_window(ctx.region, ctx.fb)) {
                     return;
                 }
                 last_region = ctx.region;
-                prev_draw = Rect{};
             }
             if (!demo_started) {
                 demo_started = true;
@@ -180,22 +178,14 @@ namespace hype::hxrt {
                 hype::gdxf::gdxf_sprite_batch_begin();
                 hype::gdxf::gdxf_sprite_draw(logo_tex, ix, iy, TexFlags::Alpha);
                 hype::gdxf::gdxf_sprite_batch_end();
-                const Rect cur{ix, iy, static_cast<hcpp::i32>(logo_w),
-                               static_cast<hcpp::i32>(logo_h)};
-                if (prev_draw.empty()) {
-                    // first frame: paint the whole viewport once
-                    const Rect full{0, 0, static_cast<hcpp::i32>(surf.width),
-                                    static_cast<hcpp::i32>(surf.height)};
-                    hype::gdxf::gdxf_present(&full, 1);
-                } else {
-                    const Rect dirty = prev_draw.united(cur);
-                    hype::gdxf::gdxf_present(&dirty, 1);
-                    // repaint only where the sprite actually moved — keeps the
-                    // compositor's damage small instead of the whole window
-                    dmg = Rect{ctx.region.x + dirty.x, ctx.region.y + dirty.y,
-                               dirty.w, dirty.h};
-                }
-                prev_draw = cur;
+                // Present the whole surface every frame: the windowed blt
+                // goes into the compositor's paint target (ctx.fb), so
+                // presenting only the sprite's dirty strip would leave navy
+                // rectangles over the window's surface fill — the opaque
+                // "backdrop box" behind the sprite.
+                const Rect full{0, 0, static_cast<hcpp::i32>(surf.width),
+                                static_cast<hcpp::i32>(surf.height)};
+                hype::gdxf::gdxf_present(&full, 1);
             }
             hype::gdxf::gdxf_end_frame();
             if (!run_marked) {

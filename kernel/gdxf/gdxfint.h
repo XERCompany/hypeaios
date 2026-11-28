@@ -24,6 +24,11 @@ namespace hype::gdxf {
         // present target in screen coords; fullscreen when windowed == false
         bool windowed = false;
         hype::ui::Rect present_dst{};
+        // framebuffer the windowed present blts into. nullptr -> write the
+        // raw scanout (fullscreen path); a windowed app binds the
+        // compositor/paint framebuffer so its surface is composited like
+        // any other window content instead of poking the LFB directly.
+        hcpp::graphics::Framebuffer* present_fb = nullptr;
 
         // fixed-timestep accumulator loop
         hcpp::u32 tick_hz = gdxf_default_tick_rate;

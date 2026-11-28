@@ -81,7 +81,11 @@ namespace hype::gdxf {
                       hcpp::u32 n) noexcept;       // blt today, flip later
     hcpp::u32 gdxf_surface_count() noexcept;       // chain depth (1 today, 2+ with flip)
     bool gdxf_fullscreen_direct() noexcept;        // "DirectFlip-equivalent" engaged?
-    bool gdxf_bind_window(hype::ui::Rect dst) noexcept;  // present into a wm window region
+    // present into a wm window region; `target` is the framebuffer the app is
+    // currently painting into (the compositor surface) — nullptr blts to the
+    // raw scanout (fullscreen-style poke).
+    bool gdxf_bind_window(hype::ui::Rect dst,
+                        hcpp::graphics::Framebuffer* target) noexcept;
     void gdxf_unbind_window() noexcept;                  // back to full-screen direct
 
     // ---- input (per-frame state snapshot; events stay on functionemitkeys) ----
