@@ -212,6 +212,10 @@ namespace hype::audio {
         ac97::ac97_selftest();
         es1370::es1370_selftest();
         isa_selftest();
+        // Wave-1 PCI audio families: each driver claims its own
+        // chips out of the scanned PCI table and registers live
+        // devices in the audiopci registry (audiopci devs=N).
+        audiopci_scan();
         probed = true;
         service_ready = true;
         serial::write("audio service=ready probed=");

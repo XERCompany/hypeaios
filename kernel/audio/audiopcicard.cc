@@ -36,6 +36,26 @@ namespace hype::audio {
                 return "Sound Blaster 16";
             case AudioChip::AdLib:
                 return "AdLib OPL2";
+            case AudioChip::CreativeCa0106:
+                return "Creative CA0106";
+            case AudioChip::CirrusCs46xx:
+                return "Cirrus CS46xx";
+            case AudioChip::GeodeCs5535Audio:
+                return "Geode CS5535/CS5536 Audio";
+            case AudioChip::CreativeCtxfi:
+                return "Creative X-Fi";
+            case AudioChip::EchoAudio:
+                return "Echo Digital Audio";
+            case AudioChip::CreativeEmu10k1:
+                return "Creative EMU10k1/EMU10k2";
+            case AudioChip::Ice1712:
+                return "ICEnsemble ICE1712";
+            case AudioChip::Korg1212:
+                return "Korg 1212 I/O";
+            case AudioChip::DigigramLola:
+                return "Digigram LoLa";
+            case AudioChip::DigigramLx6464es:
+                return "Digigram LX6464ES";
             default:
                 return "unknown audio";
         }
