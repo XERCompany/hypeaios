@@ -2,6 +2,7 @@
 
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/huitokens.h"
 #include "kernel/ui/theme.h"
 
 namespace hype::ui {
@@ -204,17 +205,23 @@ namespace hype::ui {
             elevation = rui_elev_window;
         }
         const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_lg);
-        const bool dark = dark_surface();
-        if (elevation > 0) {
-            // One big soft diffused shadow: wide blur, ~16% opacity.
-            rui_shadow(canvas, rect, radius,
-                       6 + static_cast<hcpp::i32>(elevation) * 4,
-                       static_cast<hcpp::u8>(dark ? 18 + elevation * 5
-                                                 : 24 + elevation * 14));
+        // HypeUI: flat surface + hairline border; the soft-shadow scale
+        // carries elevation (control→sm, card→m, panel/window→xl).
+        if (elevation == rui_elev_control) {
+            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Sm);
+        } else if (elevation == rui_elev_card) {
+            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Md);
+        } else if (elevation >= rui_elev_panel) {
+            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Xl);
         }
-        rui_rounded_gradient(canvas, rect, radius, rui_lift(theme.card, elevation),
-                             theme.card);
+        const hcpp::u32 fill = elevation >= rui_elev_panel
+                                   ? hui::colors().surface_elev
+                                   : hui::colors().surface;
+        canvas.fill_rounded_rect(rect, radius, canvas.color(fill));
         canvas.stroke_rounded_rect(rect, radius, canvas.color(theme.border));
+        // Dark theme Type-3 hybrid: 1px light top edge separates the
+        // card from its own shadow.
+        hui::draw_top_edge(canvas, rect, radius);
     }
 
     void rui_card(Canvas& canvas, Rect rect) noexcept {
@@ -228,11 +235,9 @@ namespace hype::ui {
         }
         const Theme& theme = theme_active();
         const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_md);
-        const bool dark = dark_surface();
-        // Dark surfaces get a faint soft shadow; luminosity does the lifting.
-        rui_shadow(canvas, rect, radius, dark ? 8 : 4, dark ? 18 : 36);
-        rui_rounded_gradient(canvas, rect, radius, rui_lift(fill_rgb, 1),
-                             rui_shade(fill_rgb, 5));
+        // HypeUI controls: shadow-xs, flat fill, hairline border.
+        hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Xs);
+        canvas.fill_rounded_rect(rect, radius, canvas.color(fill_rgb));
         canvas.stroke_rounded_rect(rect, radius, canvas.color(border_rgb));
     }
 

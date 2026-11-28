@@ -369,11 +369,6 @@ namespace hype::win {
                     paint_label(canvas, row.x + 10, top, menu_items[i],
                                 theme.card_fg, 13);
                 }
-                if (hype::ui::rui_dark_surface()) {
-                    hype::gfx::gfx_inner_glow_edge(
-                        canvas, box.inset(hype::ui::Insets::uniform(1)),
-                        static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
-                }
             }
         };
 
@@ -472,12 +467,6 @@ namespace hype::win {
                     }
                     row_y += h;
                 }
-                if (hype::ui::rui_dark_surface()) {
-                    hype::gfx::gfx_inner_glow_edge(
-                        canvas, box.inset(hype::ui::Insets::uniform(1)),
-                        static_cast<hcpp::i32>(theme.radius_lg),
-                        theme.accent);
-                }
             }
         };
 
@@ -495,6 +484,8 @@ namespace hype::win {
             if (strip.empty()) {
                 return;
             }
+            // HypeUI caption: flat band one tier below the surface, with
+            // a 1px hairline separator under it (no gradient, no glow).
             const hcpp::i32 radius =
                 static_cast<hcpp::i32>(theme.radius_lg);
             hcpp::i32 band_h = strip.h + radius;
@@ -504,10 +495,10 @@ namespace hype::win {
             }
             hype::ui::rui_rounded_gradient(
                 canvas, Rect{strip.x, strip.y, strip.w, band_h}, radius,
-                hype::ui::rui_lift(theme.muted, focused ? 2 : 1), theme.muted);
-            canvas.fill_rounded_rect(
-                Rect{strip.x + 4, strip.bottom() - 1, strip.w - 8, 2}, 1,
-                canvas.color(focused ? theme.accent : theme.border));
+                theme.secondary, theme.secondary);
+            canvas.fill_rect(
+                Rect{strip.x, strip.bottom() - 1, strip.w, 1},
+                canvas.color(theme.border));
 
             const hcpp::i32 cy = strip.y + strip.h / 2;
             canvas.fill_circle(strip.x + chrome_pad + 3, cy, 3,
@@ -522,8 +513,7 @@ namespace hype::win {
                 hot && hover_part == hot_menu
                     ? hype::ui::rui_lift(theme.secondary, 2)
                     : theme.secondary,
-                hot && hover_part == hot_menu ? theme.accent
-                                              : theme.border);
+                theme.border);
             for (hcpp::i32 k = 0; k < 3; ++k) {
                 canvas.fill_rect(
                     Rect{menu_btn.x + 4, menu_btn.y + 4 + k * 4,
@@ -538,8 +528,7 @@ namespace hype::win {
                 hot && hover_part == hot_min
                     ? hype::ui::rui_lift(theme.secondary, 2)
                     : theme.secondary,
-                hot && hover_part == hot_min ? theme.accent
-                                             : theme.border);
+                theme.border);
             canvas.fill_rect(Rect{min_btn.x + 9, min_btn.bottom() - 8,
                                   min_btn.w - 18, 2},
                              glyph);
@@ -551,8 +540,7 @@ namespace hype::win {
                 hot && hover_part == hot_max
                     ? hype::ui::rui_lift(theme.secondary, 2)
                     : theme.secondary,
-                hot && hover_part == hot_max ? theme.accent
-                                             : theme.border);
+                theme.border);
             if (w.maximized) {
                 canvas.stroke_rect(
                     Rect{max_btn.x + 11, max_btn.y + 6, 10, 8}, glyph, 1);
@@ -563,19 +551,23 @@ namespace hype::win {
                     Rect{max_btn.x + 9, max_btn.y + 7, 12, 10}, glyph, 1);
             }
 
+            // HypeUI: close matches the other buttons at rest; red only
+            // appears on hover.
             const Rect close_btn = close_btn_rect(w);
+            const bool close_hot = hot && hover_part == hot_close;
             hype::ui::rui_control_bg(canvas, close_btn,
-                                     hot && hover_part == hot_close
-                                         ? theme.destructive
-                                         : hype::ui::rui_shade(
-                                               theme.destructive, 40),
-                                     theme.destructive);
+                                     close_hot ? theme.destructive
+                                               : theme.secondary,
+                                     close_hot ? theme.destructive
+                                               : theme.border);
+            const hcpp::u32 close_glyph =
+                canvas.color(close_hot ? 0xFFFFFF : theme.card_fg);
             canvas.draw_line(close_btn.x + 9, close_btn.y + 6,
                              close_btn.right() - 10, close_btn.bottom() - 7,
-                             canvas.color(theme.primary_fg));
+                             close_glyph);
             canvas.draw_line(close_btn.x + 9, close_btn.bottom() - 7,
                              close_btn.right() - 10, close_btn.y + 6,
-                             canvas.color(theme.primary_fg));
+                             close_glyph);
 
             const hcpp::i32 title_x = strip.x + chrome_pad + 12;
             const hcpp::i32 max_text =
@@ -1132,11 +1124,6 @@ namespace hype::win {
                             hcpp::StringView{label},
                             sel ? theme.card_fg : theme.muted_fg, 13);
             }
-            if (hype::ui::rui_dark_surface()) {
-                hype::gfx::gfx_inner_glow_edge(
-                    canvas, panel.inset(hype::ui::Insets::uniform(1)),
-                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
-            }
         }
 
     }
@@ -1430,12 +1417,6 @@ namespace hype::win {
                 canvas.fill_rect(region, canvas.color(theme.card));
                 paint_label(canvas, region.x + 16, region.y + 16,
                             "app unavailable", theme.muted_fg, 13);
-            }
-            // Glowing accent bottom edge over the painted content (dark UI).
-            if (hype::ui::rui_dark_surface()) {
-                hype::gfx::gfx_inner_glow_edge(
-                    canvas, w.frame.inset(hype::ui::Insets::uniform(1)),
-                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
             }
         }
         // Translucent snap-preview hint while a titlebar drag hovers a zone.

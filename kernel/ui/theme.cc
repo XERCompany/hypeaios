@@ -1,5 +1,6 @@
 #include "kernel/ui/theme.h"
 
+#include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
 
 namespace hype::ui {
@@ -14,34 +15,35 @@ namespace hype::ui {
     }  // namespace
 
     const Theme& theme_dark() noexcept {
-        // Dark-UI depth rule: elevation is expressed through surface
-        // luminosity tiers (bg -> surface1 -> surface2 -> surface3),
-        // not through black drop shadows.
+        // HypeUI dark palette (issues #143, #144): bg #0F1113, cards
+        // #1A1D21 / elevated #22262B, #2A2E34 hairlines, near-white
+        // primary buttons, sparse #3B82F6 accent. Elevation is carried
+        // by soft shadows + the 1px light top edge (Type-3 hybrid).
         static const Theme theme{
-            .bg = 0x0A0D16,
-            .fg = 0xF2F4F8,
-            .card = 0x12151C,
-            .card_fg = 0xF2F4F8,
-            .primary = 0x2365FF,
-            .primary_fg = 0xFFFFFF,
-            .secondary = 0x1F2430,
-            .destructive = 0xF0564D,
-            .success = 0x3FB950,
-            .warning = 0xD29922,
-            .muted = 0x1A1E28,
-            .muted_fg = 0x9AA3B4,
-            .border = 0x303747,
-            .ring = 0x6694FF,
-            .accent = 0x6694FF,
-            .shadow = 0x363230,
-            .chart = {0x6694FF, 0x3FB950, 0xD29922, 0xF0564D, 0xB57EDC},
+            .bg = 0x0F1113,
+            .fg = 0xF9FAFB,
+            .card = 0x1A1D21,
+            .card_fg = 0xF9FAFB,
+            .primary = 0xF9FAFB,
+            .primary_fg = 0x111827,
+            .secondary = 0x22262B,
+            .destructive = 0xEF4444,
+            .success = 0x22C55E,
+            .warning = 0xEAB308,
+            .muted = 0x16191D,
+            .muted_fg = 0x9CA3AF,
+            .border = 0x2A2E34,
+            .ring = 0x3B82F6,
+            .accent = 0x3B82F6,
+            .shadow = 0x000000,
+            .chart = {0x3B82F6, 0x22C55E, 0xEAB308, 0xEF4444, 0xA855F7},
             .spacing_xs = 2,
             .spacing_sm = 4,
             .spacing_md = 8,
             .spacing_lg = 16,
             .radius_sm = 6,
-            .radius_md = 10,
-            .radius_lg = 14,
+            .radius_md = 8,
+            .radius_lg = 12,
             .text_size = 13,
             .font = nullptr,
             .hard_shadow = false,
@@ -50,31 +52,33 @@ namespace hype::ui {
     }
 
     const Theme& theme_light() noexcept {
+        // HypeUI light palette: bg #F3F4F6, white cards, #E5E7EB
+        // hairlines, near-black primary buttons, sparse #3B82F6 accent.
         static const Theme theme{
-            .bg = 0xF4F5F7,
-            .fg = 0x1B1E26,
+            .bg = 0xF3F4F6,
+            .fg = 0x111827,
             .card = 0xFFFFFF,
-            .card_fg = 0x1B1E26,
-            .primary = 0x2F6FED,
+            .card_fg = 0x111827,
+            .primary = 0x111827,
             .primary_fg = 0xFFFFFF,
-            .secondary = 0xE9ECF2,
-            .destructive = 0xD92D20,
-            .success = 0x14804A,
-            .warning = 0xB54708,
-            .muted = 0xE4E7EC,
-            .muted_fg = 0x5A6272,
-            .border = 0xC9CEDA,
-            .ring = 0x2F6FED,
-            .accent = 0x2F6FED,
+            .secondary = 0xF3F4F6,
+            .destructive = 0xDC2626,
+            .success = 0x16A34A,
+            .warning = 0xCA8A04,
+            .muted = 0xE5E7EB,
+            .muted_fg = 0x6B7280,
+            .border = 0xE5E7EB,
+            .ring = 0x3B82F6,
+            .accent = 0x3B82F6,
             .shadow = 0x000000,
-            .chart = {0x2F6FED, 0x14804A, 0xB54708, 0xD92D20, 0x7A5AF8},
+            .chart = {0x3B82F6, 0x16A34A, 0xCA8A04, 0xDC2626, 0x9333EA},
             .spacing_xs = 2,
             .spacing_sm = 4,
             .spacing_md = 8,
             .spacing_lg = 16,
-            .radius_sm = 2,
-            .radius_md = 4,
-            .radius_lg = 8,
+            .radius_sm = 6,
+            .radius_md = 8,
+            .radius_lg = 12,
             .text_size = 13,
             .font = nullptr,
             .hard_shadow = false,
@@ -82,7 +86,15 @@ namespace hype::ui {
         return theme;
     }
 
-    void theme_set(Theme theme) noexcept { active_slot() = theme; }
+    void theme_set(Theme theme) noexcept {
+        active_slot() = theme;
+        // HypeUI marker: which token table is live (issues #143, #144).
+        const hcpp::u32 card = theme.card;
+        const hcpp::u32 sum = ((card >> 16) & 0xFF) + ((card >> 8) & 0xFF) +
+                              (card & 0xFF);
+        serial::write("hui theme=");
+        serial::write_line(sum < 384 ? "dark" : "light");
+    }
 
     const Theme& theme_active() noexcept { return active_slot(); }
 

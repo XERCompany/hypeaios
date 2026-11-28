@@ -17,6 +17,7 @@
 #include "kernel/time/timer.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/clipboard.h"
+#include "kernel/ui/huitokens.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/toast.h"
 #include "kernel/ui/text_render.h"
@@ -1487,11 +1488,6 @@ namespace hype::ui {
                 }
                 canvas.set_clip(saved_clip);
             }
-            if (rui_dark_surface()) {
-                hype::gfx::gfx_inner_glow_edge(
-                    canvas, menu.inset(Insets::uniform(1)),
-                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
-            }
         }
 
         void paint_slider(Canvas& canvas, const Theme& theme,
@@ -1590,11 +1586,6 @@ namespace hype::ui {
             paint_label(canvas, power.x + (power.w - 36) / 2,
                         label_top(power), "Power", theme.card_fg, 13);
 
-            if (rui_dark_surface()) {
-                hype::gfx::gfx_inner_glow_edge(
-                    canvas, panel.inset(Insets::uniform(1)),
-                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
-            }
         }
 
         // One history row: kind-tinted icon, title + clipped message,
@@ -1671,11 +1662,6 @@ namespace hype::ui {
                 paint_nc_row(canvas, theme, nc_row_rect(panel, i),
                              hist[hist_slot(i)]);
             }
-            if (rui_dark_surface()) {
-                hype::gfx::gfx_inner_glow_edge(
-                    canvas, panel.inset(Insets::uniform(1)),
-                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
-            }
         }
 
         // One clipboard row: number-key badge + flattened text preview.
@@ -1740,11 +1726,6 @@ namespace hype::ui {
             }
             for (hcpp::u32 i = 0; i < rows; ++i) {
                 paint_cv_row(canvas, theme, cv_row_rect(panel, i), i);
-            }
-            if (rui_dark_surface()) {
-                hype::gfx::gfx_inner_glow_edge(
-                    canvas, panel.inset(Insets::uniform(1)),
-                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
             }
         }
 
@@ -1911,11 +1892,6 @@ namespace hype::ui {
                             today ? theme.primary_fg : theme.card_fg,
                             13);
             }
-            if (rui_dark_surface()) {
-                hype::gfx::gfx_inner_glow_edge(
-                    canvas, panel.inset(Insets::uniform(1)),
-                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
-            }
         }
 
         void print_clock() noexcept {
@@ -2076,8 +2052,17 @@ namespace hype::ui {
         canvas.set_clip(clip);
         const Theme& theme = theme_active();
         if (!area.empty()) {
-            hype::gfx::gfx_gradient_v(canvas, bar,
-                                      rui_lift(theme.card, 2), theme.card);
+            // HypeUI taskbar: flat elevated surface, 1px hairline top
+            // border, and a soft upward shadow (shadow-l direction up)
+            // fading into the desktop above.
+            for (hcpp::i32 i = 0; i < 8; ++i) {
+                canvas.fill_rect_alpha(
+                    Rect{bar.x, bar.y - 1 - i, bar.w, 1},
+                    canvas.color(0x000000),
+                    static_cast<hcpp::u8>((8 - i) * 3));
+            }
+            canvas.fill_rect(bar,
+                             canvas.color(hype::ui::hui::colors().surface_elev));
             canvas.fill_rect(Rect{bar.x, bar.y, bar.w, 1},
                              canvas.color(theme.border));
             paint_start_button(canvas, theme);
@@ -2122,6 +2107,7 @@ namespace hype::ui {
         if (!painted_once) {
             painted_once = true;
             serial::write_line("deskbar ok");
+            serial::write_line("hui restyle=ok");
         }
     }
 
