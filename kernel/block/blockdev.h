@@ -5,16 +5,18 @@
 
 namespace hype::block {
 
-    // Block dispatch layer. Routes sector I/O to the AHCI/SATA driver
-    // when ahci_probe() found a live disk, otherwise falls back to the
-    // legacy ATA PIO path on 0x1F0 — so the same HYPEDATA blob works on
-    // modern PCs (no IDE controller) and on QEMU's default drive.
+    // Block dispatch layer. Routes sector I/O with the priority
+    // NVMe > AHCI > ATA PIO: an NVMe namespace wins when
+    // nvme_probe() brought one up, then AHCI/SATA when ahci_probe()
+    // found a live disk, otherwise the legacy ATA PIO path on
+    // 0x1F0 — so the same HYPEDATA blob works on modern PCs (no
+    // IDE controller) and on QEMU's default drive.
     //
     // Call block_initialize() once after PCI scan and PMM are up
     // (stage_vfs does this before hypeblob_mount()).
 
-    // Probes AHCI; prints the "ahci dev=ok|absent"/"ahci rw=ok"
-    // markers. Returns block_present().
+    // Probes NVMe and AHCI; prints the "nvme dev=ok|absent"/
+    // "ahci dev=ok|absent"/"* rw=ok" markers. Returns block_present().
     bool block_initialize() noexcept;
     // True when either backend can serve sector I/O.
     bool block_present() noexcept;

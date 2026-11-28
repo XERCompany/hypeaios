@@ -2,6 +2,7 @@
 
 #include "kernel/ata.h"
 #include "kernel/block/ahci.h"
+#include "kernel/block/nvme.h"
 
 namespace hype::block {
 
@@ -19,15 +20,21 @@ namespace hype::block {
     }
 
     bool block_initialize() noexcept {
+        // Priority order: NVMe > AHCI > ATA PIO. Both probes log their
+        // own dev=ok/absent markers; routing prefers NVMe whenever a
+        // namespace came up.
+        nvme::nvme_probe();
         ahci::ahci_probe();
         return block_present();
     }
 
     bool block_present() noexcept {
-        return ahci::ahci_ready() || ata::ata_present();
+        return nvme::nvme_ready() || ahci::ahci_ready() ||
+               ata::ata_present();
     }
 
     bool block_identify(ata::AtaInfo& out) noexcept {
+        if (nvme::nvme_ready()) return nvme::nvme_identify(out);
         if (ahci::ahci_ready()) return ahci::ahci_identify(out);
         return ata::ata_identify(out);
     }
@@ -36,6 +43,9 @@ namespace hype::block {
                     hcpp::u32 sectors) noexcept {
         if (buffer == nullptr || sectors == 0 || (lba >> 48) != 0) {
             return false;
+        }
+        if (nvme::nvme_ready()) {
+            return nvme::nvme_read_sectors(lba, buffer, sectors);
         }
         if (ahci::ahci_ready()) {
             while (sectors != 0) {
@@ -68,6 +78,9 @@ namespace hype::block {
         if (buffer == nullptr || sectors == 0 || (lba >> 48) != 0) {
             return false;
         }
+        if (nvme::nvme_ready()) {
+            return nvme::nvme_write_sectors(lba, buffer, sectors);
+        }
         if (ahci::ahci_ready()) {
             while (sectors != 0) {
                 const hcpp::u16 count = static_cast<hcpp::u16>(
@@ -96,6 +109,7 @@ namespace hype::block {
     }
 
     bool block_flush() noexcept {
+        if (nvme::nvme_ready()) return nvme::nvme_flush();
         if (ahci::ahci_ready()) return ahci::ahci_flush();
         return ata::ata_flush_cache();
     }
