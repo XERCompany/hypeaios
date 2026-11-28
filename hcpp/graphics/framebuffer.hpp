@@ -12,9 +12,15 @@ namespace hcpp::graphics {
                     u8 blue_position) noexcept;
 
         bool valid() const noexcept;
+        volatile u8* base() const noexcept;
         u32 width() const noexcept;
         u32 height() const noexcept;
         u32 pitch() const noexcept;
+        u8 bits_per_pixel() const noexcept;
+        u32 bytes_per_pixel() const noexcept;
+        // Same pixel format over a different base address (tightly packed
+        // pitch) — used to wrap a PMM back buffer as a Framebuffer.
+        Framebuffer with_base(volatile u8* base) const noexcept;
 
         u32 encode_rgb(u8 red, u8 green, u8 blue) const noexcept;
         void decode_rgb(u32 color, u8& red, u8& green, u8& blue) const noexcept;
@@ -27,7 +33,6 @@ namespace hcpp::graphics {
     private:
         static u32 scale_channel(u8 value, u8 bits) noexcept;
         static u8 unscale_channel(u32 color, u8 position, u8 bits) noexcept;
-        u32 bytes_per_pixel() const noexcept;
 
         volatile u8* base_ = nullptr;
         u32 width_ = 0;

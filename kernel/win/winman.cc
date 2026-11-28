@@ -559,8 +559,14 @@ namespace hype::win {
             if (top < strip.y) {
                 top = strip.y;
             }
+            // Long titles must clip at the caption buttons, not draw over
+            // them — scope the canvas clip to the title budget rect.
+            const Rect saved_clip = canvas.clip();
+            canvas.set_clip(saved_clip.intersection(
+                Rect{title_x, strip.y, max_text, strip.h}));
             paint_label(canvas, title_x, top, w.app_name,
                         focused ? theme.card_fg : theme.muted_fg, 13);
+            canvas.set_clip(saved_clip);
         }
 
         void sort_order(hcpp::u32* order, hcpp::u32 count,
@@ -591,10 +597,13 @@ namespace hype::win {
         }
 
         void set_frame(Win& w, const Rect& next) noexcept {
-            damage_add(w.frame);
+            // Damage covers the soft-shadow spill around the frame, not
+            // just the frame itself — otherwise moving/snap leaves a
+            // stale shadow ring on the desktop.
+            damage_add(hype::ui::rui_paint_bounds(w.frame));
             w.frame = next;
             w.content_rect = content_for(next);
-            damage_add(next);
+            damage_add(hype::ui::rui_paint_bounds(next));
         }
 
         void drag_finish() noexcept {
@@ -648,15 +657,18 @@ namespace hype::win {
             if (win == hover_win && part == hover_part) {
                 return;
             }
+            // Caption controls paint a soft shadow ~10 px below the strip —
+            // use the full chrome band so hover transitions never leave
+            // stale shadow edges inside the window body.
             Win* old = slot_for(hover_win);
             if (old != nullptr) {
-                damage_add(chrome_strip(*old));
+                damage_add(chrome_band(old->frame));
             }
             hover_win = win;
             hover_part = part;
             Win* next = slot_for(hover_win);
             if (next != nullptr) {
-                damage_add(chrome_strip(*next));
+                damage_add(chrome_band(next->frame));
             }
         }
 
@@ -726,7 +738,9 @@ namespace hype::win {
             }
             switcher_sel = switcher_count > 1 ? 1 : 0;
             switcher_open = true;
-            damage_add(switcher_rect());
+            // Panel shadow spills past switcher_rect — grow the damage so
+            // opening/closing/moving selection never leaves a shadow ring.
+            damage_add(hype::ui::rui_paint_bounds(switcher_rect()));
             alttab_marker();
         }
 
@@ -738,7 +752,9 @@ namespace hype::win {
                 (static_cast<hcpp::i32>(switcher_sel) + dir +
                  static_cast<hcpp::i32>(switcher_count)) %
                 static_cast<hcpp::i32>(switcher_count));
-            damage_add(switcher_rect());
+            // Panel shadow spills past switcher_rect — grow the damage so
+            // opening/closing/moving selection never leaves a shadow ring.
+            damage_add(hype::ui::rui_paint_bounds(switcher_rect()));
             alttab_marker();
         }
 
@@ -748,7 +764,9 @@ namespace hype::win {
                     ? switcher_ids[switcher_sel]
                     : 0;
             if (switcher_open) {
-                damage_add(switcher_rect());
+                // Panel shadow spills past switcher_rect — grow the
+                // damage so dismiss leaves no shadow ring.
+                damage_add(hype::ui::rui_paint_bounds(switcher_rect()));
             }
             switcher_open = false;
             serial::write_line("alttab open=0");
@@ -773,7 +791,7 @@ namespace hype::win {
             if (switcher_sel >= switcher_count) {
                 switcher_sel = switcher_count - 1;
             }
-            damage_add(switcher_rect());
+            damage_add(hype::ui::rui_paint_bounds(switcher_rect()));
         }
 
         void wm_key_event(void*, const input::InputEvent& e) noexcept {
@@ -920,7 +938,7 @@ namespace hype::win {
         w.ctx = hxrt::AppCtx{};
         w.ctx.region = w.content_rect;
         wm_focus(w.id);
-        damage_add(frame);
+        damage_add(hype::ui::rui_paint_bounds(frame));
         return w.id;
     }
 
@@ -949,7 +967,7 @@ namespace hype::win {
         }
         const Rect gone = w->frame;
         *w = Win{};
-        damage_add(gone);
+        damage_add(hype::ui::rui_paint_bounds(gone));
         alttab_sync();
         if (was_focused) {
             hcpp::u32 top_order[wm_max_windows];
@@ -974,10 +992,14 @@ namespace hype::win {
         }
         if (w->state != WinState::Focused) {
             if (w->state == WinState::Minimized) {
-                damage_add(w->frame);
+                damage_add(hype::ui::rui_paint_bounds(w->frame));
             }
             w->state = WinState::Focused;
-            damage_add(chrome_band(w->frame));
+            // Raising z makes this window paint over any sibling it
+            // overlaps — the whole frame (plus shadow spill) must be
+            // damaged, not just the chrome band, or stale pixels of the
+            // previously topmost window survive in the overlap area.
+            damage_add(hype::ui::rui_paint_bounds(w->frame));
         }
         w->z = ++z_counter;
         return true;
@@ -994,7 +1016,7 @@ namespace hype::win {
             }
             const bool was_focused = w->state == WinState::Focused;
             w->state = WinState::Minimized;
-            damage_add(w->frame);
+            damage_add(hype::ui::rui_paint_bounds(w->frame));
             if (was_focused) {
                 hcpp::u32 top_order[wm_max_windows];
                 const hcpp::u32 n = collect_order(top_order, false);
@@ -1006,7 +1028,7 @@ namespace hype::win {
         }
         if (w->state == WinState::Minimized) {
             w->state = WinState::Normal;
-            damage_add(w->frame);
+            damage_add(hype::ui::rui_paint_bounds(w->frame));
         }
         alttab_sync();
         return true;
@@ -1106,7 +1128,9 @@ namespace hype::win {
         const Theme& theme = hype::ui::theme_active();
         for (hcpp::u32 k = 0; k < n; ++k) {
             Win& w = slots[order[k]];
-            if (!w.frame.intersects(clip)) {
+            // A window's shadow spills past w.frame — repaint it whenever
+            // the spill region touches the clip, not only the frame.
+            if (!hype::ui::rui_paint_bounds(w.frame).intersects(clip)) {
                 continue;
             }
             paint_chrome(canvas, w);
@@ -1146,7 +1170,7 @@ namespace hype::win {
     void wm_invalidate_app(const char* app_name) noexcept {
         for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
             if (slots[i].id != 0 && name_equals(slots[i].app_name, app_name)) {
-                damage_add(slots[i].frame);
+                damage_add(hype::ui::rui_paint_bounds(slots[i].frame));
             }
         }
     }
@@ -1333,7 +1357,7 @@ namespace hype::win {
                 const hxrt::HxerHeader* app = hxrt::hxrt_find(w.app_name);
                 if (app != nullptr && app->on_click != nullptr) {
                     app->on_click(w.ctx, p.x, p.y);
-                    damage_add(w.frame);
+                    damage_add(hype::ui::rui_paint_bounds(w.frame));
                 }
             }
             return true;
@@ -1446,7 +1470,7 @@ namespace hype::win {
         } else if (hover_part != hot_none || hover_win != 0) {
             Win* old = slot_for(hover_win);
             if (old != nullptr) {
-                damage_add(chrome_strip(*old));
+                damage_add(chrome_band(old->frame));
             }
             hover_win = 0;
             hover_part = hot_none;
