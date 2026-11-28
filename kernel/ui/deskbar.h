@@ -28,12 +28,24 @@ namespace hype::ui {
 
     // Shell notification entry point: copies `title`/`msg` into tray-owned
     // storage, pushes a ToastHost card (bottom-right, above the taskbar),
-    // bumps the bell's unread badge and prints the serial markers
-    // "toast push=<title>" / "tray unread=N".
+    // archives a copy in the persistent notification-center history ring
+    // (last 24), bumps the bell's unread badge and prints the serial
+    // markers "toast push=<title>" / "tray unread=N" / "notif hist=N".
     void deskbar_notify(const char* title, const char* msg) noexcept;
 
     // Quick-settings flyout state (speaker/net tray glyph toggles it).
     bool deskbar_qs_open() noexcept;
     void deskbar_close_qs() noexcept;
+
+    // Notification-center flyout state (tray bell toggles it). Opening
+    // marks the archive read (unread -> 0).
+    bool deskbar_nc_open() noexcept;
+    void deskbar_close_nc() noexcept;
+
+    // Right-click hook for the open notification center: dismisses the
+    // history row under the cursor; a press outside closes the flyout and
+    // falls through to normal right-click routing. Returns true when the
+    // press was consumed by the panel.
+    bool deskbar_handle_mouse_r(hcpp::i32 x, hcpp::i32 y) noexcept;
 
 }

@@ -315,6 +315,12 @@ namespace hype::session {
         if (ui::deskbar_start_open()) {
             ui::deskbar_close_start();
         }
+        if (ui::deskbar_qs_open()) {
+            ui::deskbar_close_qs();
+        }
+        if (ui::deskbar_nc_open()) {
+            ui::deskbar_close_nc();
+        }
         current_state = SessionState::Locked;
         lockscr_enter();
         serial::write_line("session locked=1");
