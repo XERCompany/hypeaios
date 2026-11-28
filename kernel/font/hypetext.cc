@@ -60,15 +60,17 @@ namespace hype::font {
             hcpp::u8 dst_blue = 0;
             plot.fb->decode_rgb(dst, dst_red, dst_green, dst_blue);
             const hcpp::u32 inverse = 255 - alpha;
+            // +127: round-to-nearest so antialiased edges do not drift dark
+            // relative to the cursor/over blend paths that already round.
             plot.fb->put_pixel(
                 static_cast<hcpp::u32>(x), static_cast<hcpp::u32>(y),
                 plot.fb->encode_rgb(
                     static_cast<hcpp::u8>(
-                        (plot.red * alpha + dst_red * inverse) / 255),
+                        (plot.red * alpha + dst_red * inverse + 127) / 255),
                     static_cast<hcpp::u8>(
-                        (plot.green * alpha + dst_green * inverse) / 255),
+                        (plot.green * alpha + dst_green * inverse + 127) / 255),
                     static_cast<hcpp::u8>(
-                        (plot.blue * alpha + dst_blue * inverse) / 255)));
+                        (plot.blue * alpha + dst_blue * inverse + 127) / 255)));
         }
 
         hcpp::i32 units_to_q8(hcpp::i32 units, hcpp::u32 size_px) noexcept {
@@ -279,13 +281,27 @@ namespace hype::font {
                                hcpp::i32 y, hcpp::StringView text,
                                hcpp::u32 color, hcpp::u32 size_px,
                                hcpp::u8 weight, bool italic) noexcept {
-        if (!hypefont_ready() || text_scale_q8(size_px) == 0 || text.empty()) {
+        const Rect bounds{0, 0, static_cast<hcpp::i32>(fb.width()),
+                          static_cast<hcpp::i32>(fb.height())};
+        return text_draw_styled_clip(fb, x, y, text, color, size_px, weight,
+                                     italic, bounds);
+    }
+
+    hcpp::i32 text_draw_styled_clip(hcpp::graphics::Framebuffer& fb, hcpp::i32 x,
+                                    hcpp::i32 y, hcpp::StringView text,
+                                    hcpp::u32 color, hcpp::u32 size_px,
+                                    hcpp::u8 weight, bool italic,
+                                    Rect clip) noexcept {
+        const Rect bounds{0, 0, static_cast<hcpp::i32>(fb.width()),
+                          static_cast<hcpp::i32>(fb.height())};
+        clip = clip.intersection(bounds);
+        if (!hypefont_ready() || text_scale_q8(size_px) == 0 || text.empty() ||
+            clip.empty()) {
             return 0;
         }
         Plot plot;
         plot.fb = &fb;
-        plot.clip = Rect{0, 0, static_cast<hcpp::i32>(fb.width()),
-                         static_cast<hcpp::i32>(fb.height())};
+        plot.clip = clip;
         fb.decode_rgb(color, plot.red, plot.green, plot.blue);
         return draw_run(plot, x, baseline_for(y, size_px), text, size_px,
                         weight, italic);

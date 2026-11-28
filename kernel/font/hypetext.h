@@ -26,6 +26,13 @@ namespace hype::font {
                                hcpp::i32 y, hcpp::StringView text, hcpp::u32 color,
                                hcpp::u32 size_px, hcpp::u8 weight,
                                bool italic) noexcept;
+    // Same as text_draw_styled but glyphs are clipped to `clip` — the canvas
+    // damage rect — so text can never write outside the invalidated region.
+    hcpp::i32 text_draw_styled_clip(hcpp::graphics::Framebuffer& fb, hcpp::i32 x,
+                                    hcpp::i32 y, hcpp::StringView text,
+                                    hcpp::u32 color, hcpp::u32 size_px,
+                                    hcpp::u8 weight, bool italic,
+                                    hype::ui::Rect clip) noexcept;
     hcpp::i32 text_draw_wrapped(hcpp::graphics::Framebuffer& fb, hype::ui::Rect rect,
                                 hcpp::StringView text, TextAlign align,
                                 hcpp::u32 size_px) noexcept;

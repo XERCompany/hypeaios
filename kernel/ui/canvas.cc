@@ -128,12 +128,14 @@ namespace hype::ui {
                 hcpp::u8 dst_green = 0;
                 hcpp::u8 dst_blue = 0;
                 target_.decode_rgb(dst, dst_red, dst_green, dst_blue);
+                // +127 rounding: match plot_blend/text paths so alpha
+                // composites do not drift dark on repeated blends.
                 const hcpp::u8 red = static_cast<hcpp::u8>(
-                    (src_red * blend + dst_red * inverse) / 255);
+                    (src_red * blend + dst_red * inverse + 127) / 255);
                 const hcpp::u8 green = static_cast<hcpp::u8>(
-                    (src_green * blend + dst_green * inverse) / 255);
+                    (src_green * blend + dst_green * inverse + 127) / 255);
                 const hcpp::u8 blue = static_cast<hcpp::u8>(
-                    (src_blue * blend + dst_blue * inverse) / 255);
+                    (src_blue * blend + dst_blue * inverse + 127) / 255);
                 target_.put_pixel(static_cast<hcpp::u32>(column),
                                   static_cast<hcpp::u32>(row),
                                   target_.encode_rgb(red, green, blue));
@@ -197,14 +199,20 @@ namespace hype::ui {
         fill_rect({rect.x, rect.y + r, 1, rect.h - 2 * r}, color);
         fill_rect({rect.right() - 1, rect.y + r, 1, rect.h - 2 * r}, color);
 
+        // Each corner's clip box must stay inside the caller's clip —
+        // set_clip() alone would re-expand the clip beyond the damage rect
+        // and leak border pixels into undamaged neighbours.
         const Rect saved_clip = clip_;
-        set_clip(Rect{rect.x, rect.y, r + 1, r + 1});
+        set_clip(saved_clip.intersection(Rect{rect.x, rect.y, r + 1, r + 1}));
         stroke_circle(rect.x + r, rect.y + r, r, color);
-        set_clip(Rect{rect.right() - r - 1, rect.y, r + 1, r + 1});
+        set_clip(saved_clip.intersection(
+            Rect{rect.right() - r - 1, rect.y, r + 1, r + 1}));
         stroke_circle(rect.right() - r - 1, rect.y + r, r, color);
-        set_clip(Rect{rect.x, rect.bottom() - r - 1, r + 1, r + 1});
+        set_clip(saved_clip.intersection(
+            Rect{rect.x, rect.bottom() - r - 1, r + 1, r + 1}));
         stroke_circle(rect.x + r, rect.bottom() - r - 1, r, color);
-        set_clip(Rect{rect.right() - r - 1, rect.bottom() - r - 1, r + 1, r + 1});
+        set_clip(saved_clip.intersection(
+            Rect{rect.right() - r - 1, rect.bottom() - r - 1, r + 1, r + 1}));
         stroke_circle(rect.right() - r - 1, rect.bottom() - r - 1, r, color);
         set_clip(saved_clip);
     }

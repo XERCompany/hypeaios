@@ -18,6 +18,20 @@ namespace hype::ui {
     // True when the active card surface is dark: elevation is expressed via
     // luminosity tiers and accent inner-glow edges instead of dark shadows.
     bool rui_dark_surface() noexcept;
+    // Worst-case soft-shadow spill beyond a widget's nominal rect:
+    // rui_shadow clamps blur to 40 px on every side and drops the shadow
+    // down by 2 + blur / 3 (≤ 15 px). Damage/invalidate rects for anything
+    // painted via rui_panel/rui_card/rui_control_bg must be grown by this
+    // or shadow pixels are left stale when the widget moves or closes.
+    constexpr hcpp::i32 rui_shadow_spill = 42;
+    constexpr hcpp::i32 rui_shadow_spill_down = 56;
+    inline Rect rui_paint_bounds(Rect rect) noexcept {
+        if (rect.empty()) {
+            return {};
+        }
+        return rect.inset(Insets{-rui_shadow_spill, -rui_shadow_spill,
+                                 -rui_shadow_spill, -rui_shadow_spill_down});
+    }
     void rui_shadow(Canvas& canvas, Rect rect, hcpp::i32 radius, hcpp::i32 blur,
                     hcpp::u8 alpha) noexcept;
     void rui_rounded_gradient(Canvas& canvas, Rect rect, hcpp::i32 radius,

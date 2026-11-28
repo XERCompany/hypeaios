@@ -241,80 +241,100 @@ namespace hype::gfx {
         }
         blur = clamp_i32(blur, 0, 48);
         const hcpp::i32 offset_y = 2 + blur / 3;
-        Rect region = rect.inset(Insets::uniform(-blur)).translated(Point{0, offset_y});
-        const Rect bounds{0, 0, static_cast<hcpp::i32>(fb.width()),
-                          static_cast<hcpp::i32>(fb.height())};
-        region = region.intersection(canvas.clip()).intersection(bounds);
-        if (region.empty()) {
+        const Rect full = rect.inset(Insets::uniform(-blur))
+                              .translated(Point{0, offset_y})
+                              .intersection(canvas.clip())
+                              .intersection(Rect{0, 0,
+                                                 static_cast<hcpp::i32>(fb.width()),
+                                                 static_cast<hcpp::i32>(fb.height())});
+        if (full.empty()) {
             return;
-        }
-        if (region.w > k_mask_max_width) {
-            region.w = k_mask_max_width;
-        }
-        const hcpp::i32 max_h = k_mask_capacity / region.w;
-        if (region.h > max_h) {
-            region.h = max_h;
-        }
-        if (region.empty()) {
-            return;
-        }
-        const hcpp::i32 count = region.w * region.h;
-        for (hcpp::i32 i = 0; i < count; ++i) {
-            mask_a[i] = 0;
         }
 
+        // The static blur masks are bounded, so the shadow is rasterized in
+        // tiles. Each tile's mask extends `halo` px past the tile's composited
+        // area — the halo covers the full reach of the three blur passes, so
+        // tiles are seamless even when the clip rect cuts through the shadow.
+        const hcpp::i32 pass_radius = blur > 0 ? clamp_i32(blur / 2, 1, 16) : 0;
+        const hcpp::i32 halo = 3 * pass_radius;
+        const hcpp::i32 mask_w = k_mask_max_width;
+        const hcpp::i32 mask_h_cap = k_mask_capacity / mask_w;
+        const hcpp::i32 step_x = mask_w - 2 * halo;
+        const hcpp::i32 step_y = mask_h_cap - 2 * halo;
+        if (step_x <= 0 || step_y <= 0) {
+            return;
+        }
         const Rect shape = rect.translated(Point{0, offset_y});
         const hcpp::i32 r = clamp_radius(shape, radius);
         const hcpp::i32 rr = r * r;
         const hcpp::i32 top_center = shape.y + r;
         const hcpp::i32 bottom_center = shape.bottom() - r - 1;
-        for (hcpp::i32 row = shape.y; row < shape.bottom(); ++row) {
-            if (row < region.y || row >= region.bottom()) {
-                continue;
-            }
-            hcpp::i32 distance = 0;
-            if (row < top_center) {
-                distance = top_center - row;
-            } else if (row > bottom_center) {
-                distance = row - bottom_center;
-            }
-            hcpp::i32 inset = 0;
-            if (distance > 0) {
-                inset = r - isqrt_i32(rr - distance * distance);
-            }
-            hcpp::i32 span_x = shape.x + inset;
-            hcpp::i32 span_right = shape.right() - inset;
-            if (span_x < region.x) {
-                span_x = region.x;
-            }
-            if (span_right > region.right()) {
-                span_right = region.right();
-            }
-            hcpp::u8* out = mask_a + (row - region.y) * region.w + (span_x - region.x);
-            for (hcpp::i32 x = span_x; x < span_right; ++x) {
-                *out++ = 255;
-            }
-        }
-
-        if (blur > 0) {
-            const hcpp::i32 pass_radius = clamp_i32(blur / 2, 1, 16);
-            for (hcpp::i32 pass = 0; pass < 3; ++pass) {
-                box_blur(mask_a, mask_b, region.w, region.h, pass_radius);
-            }
-        }
-
         hcpp::u8 tr = 0;
         hcpp::u8 tg = 0;
         hcpp::u8 tb = 0;
         unpack_rgb(tint_rgb, tr, tg, tb);
-        for (hcpp::i32 y = 0; y < region.h; ++y) {
-            for (hcpp::i32 x = 0; x < region.w; ++x) {
-                const hcpp::u32 coverage = mask_a[y * region.w + x];
-                if (coverage == 0) {
-                    continue;
+
+        for (hcpp::i32 ty = full.y; ty < full.bottom(); ty += step_y) {
+            const hcpp::i32 tile_h =
+                full.bottom() - ty < step_y ? full.bottom() - ty : step_y;
+            const hcpp::i32 mh = tile_h + 2 * halo;
+            for (hcpp::i32 tx = full.x; tx < full.right(); tx += step_x) {
+                const hcpp::i32 tile_w =
+                    full.right() - tx < step_x ? full.right() - tx : step_x;
+                const hcpp::i32 mw = tile_w + 2 * halo;
+                const Rect mask_rect{tx - halo, ty - halo, mw, mh};
+
+                const hcpp::i32 count = mw * mh;
+                for (hcpp::i32 i = 0; i < count; ++i) {
+                    mask_a[i] = 0;
                 }
-                blend_tint(fb, region.x + x, region.y + y, tr, tg, tb,
-                           coverage * alpha / 255);
+                for (hcpp::i32 row = shape.y; row < shape.bottom(); ++row) {
+                    if (row < mask_rect.y || row >= mask_rect.bottom()) {
+                        continue;
+                    }
+                    hcpp::i32 distance = 0;
+                    if (row < top_center) {
+                        distance = top_center - row;
+                    } else if (row > bottom_center) {
+                        distance = row - bottom_center;
+                    }
+                    hcpp::i32 inset = 0;
+                    if (distance > 0) {
+                        inset = r - isqrt_i32(rr - distance * distance);
+                    }
+                    hcpp::i32 span_x = shape.x + inset;
+                    hcpp::i32 span_right = shape.right() - inset;
+                    if (span_x < mask_rect.x) {
+                        span_x = mask_rect.x;
+                    }
+                    if (span_right > mask_rect.right()) {
+                        span_right = mask_rect.right();
+                    }
+                    hcpp::u8* out =
+                        mask_a + (row - mask_rect.y) * mw + (span_x - mask_rect.x);
+                    for (hcpp::i32 x = span_x; x < span_right; ++x) {
+                        *out++ = 255;
+                    }
+                }
+
+                if (blur > 0) {
+                    for (hcpp::i32 pass = 0; pass < 3; ++pass) {
+                        box_blur(mask_a, mask_b, mw, mh, pass_radius);
+                    }
+                }
+
+                for (hcpp::i32 y = ty; y < ty + tile_h; ++y) {
+                    const hcpp::u8* src =
+                        mask_a + (y - mask_rect.y) * mw + (tx - mask_rect.x);
+                    for (hcpp::i32 x = tx; x < tx + tile_w; ++x) {
+                        const hcpp::u32 coverage = *src++;
+                        if (coverage == 0) {
+                            continue;
+                        }
+                        blend_tint(fb, x, y, tr, tg, tb,
+                                   coverage * alpha / 255);
+                    }
+                }
             }
         }
     }

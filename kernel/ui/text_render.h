@@ -21,8 +21,11 @@ namespace hype::ui {
                                           hcpp::u32 color, hcpp::u32 size_px,
                                           hcpp::u8 weight,
                                           bool italic) noexcept {
-        return hype::font::text_draw_styled(canvas.target(), x, y, text, color,
-                                            size_px, weight, italic);
+        // Clip to the canvas damage rect: without it styled glyphs can
+        // overdraw neighbouring widgets and pixels outside the repaint.
+        return hype::font::text_draw_styled_clip(canvas.target(), x, y, text,
+                                                 color, size_px, weight, italic,
+                                                 canvas.clip());
     }
 
     inline hcpp::i32 draw_text_sdf_wrapped(Canvas& canvas, Rect rect,

@@ -122,12 +122,17 @@ namespace hype::ui {
         }
 
         // Column above the taskbar where toast cards stack; invalidated as
-        // one rect so slide-in motion never leaves stale pixels.
+        // one rect so slide-in motion never leaves stale pixels. Grown by
+        // the card shadow spill (left + down): the bottom card's soft
+        // shadow reaches a few px onto the bar band and must be repainted
+        // too or a faint shadow ghost survives toast expiry.
         Rect toast_region() noexcept {
             if (bar.empty()) {
                 return {};
             }
-            return {bar.right() - toast_col_w, 0, toast_col_w, bar.y - 2};
+            return {bar.right() - toast_col_w - rui_shadow_spill, 0,
+                    toast_col_w + rui_shadow_spill,
+                    bar.y - 2 + rui_shadow_spill_down};
         }
 
         // Quick-settings panel at its final anchor (bottom-right above bar).
@@ -155,11 +160,12 @@ namespace hype::ui {
         }
 
         // Damage for the open/close animation: final rect grown downward
-        // by the full travel so every intermediate frame is repainted.
+        // by the full travel so every intermediate frame is repainted,
+        // then grown again by the panel shadow spill on every side.
         Rect qs_anim_region() noexcept {
             Rect r = compute_qs();
             r.h += qs_anim_ticks * qs_anim_px;
-            return r;
+            return rui_paint_bounds(r);
         }
 
         Rect qs_vol_row(const Rect& panel) noexcept {
@@ -315,7 +321,7 @@ namespace hype::ui {
             build_menu_order();
             start_open = true;
             serial::write_line("start menu=open");
-            invalidate(compute_menu().united(bar));
+            invalidate(rui_paint_bounds(compute_menu()).united(bar));
         }
 
         void open_qs() noexcept {
@@ -432,9 +438,14 @@ namespace hype::ui {
                 canvas, btn,
                 focused ? rui_lift(theme.secondary, 1) : theme.secondary,
                 focused ? theme.accent : theme.border);
+            // Long app names clip at the button edge instead of bleeding
+            // glyphs into the neighbouring task button.
+            const Rect saved_clip = canvas.clip();
+            canvas.set_clip(saved_clip.intersection(btn));
             paint_label(canvas, btn.x + 10, label_top(btn),
                         hcpp::StringView{w.app_name},
                         minimized ? theme.muted_fg : theme.card_fg, 13);
+            canvas.set_clip(saved_clip);
             if (focused) {
                 canvas.fill_rect(
                     Rect{btn.x + 8, btn.bottom() - 3, btn.w - 16, 2},
@@ -509,9 +520,14 @@ namespace hype::ui {
                 clk[5] = '\0';
             }
             const Rect clk_box = clock_rect();
+            // Clock glyphs stay inside the clock cell — no bleed into the
+            // bell badge or the bar edge.
+            const Rect saved_clip = canvas.clip();
+            canvas.set_clip(saved_clip.intersection(clk_box));
             paint_label(canvas, clk_box.right() - clock_w + 4,
                         label_top(clk_box), hcpp::StringView{clk, 5},
                         theme.card_fg, 13);
+            canvas.set_clip(saved_clip);
         }
 
         void paint_menu(Canvas& canvas, const Theme& theme,
@@ -961,7 +977,8 @@ namespace hype::ui {
         if (!qs_open) {
             return;
         }
-        const Rect gone = qs_rect_now();
+        // Include the panel shadow spill so dismiss leaves no shadow ring.
+        const Rect gone = rui_paint_bounds(qs_rect_now());
         qs_open = false;
         qs_drag = 0;
         serial::write_line("tray qs=close");
@@ -980,7 +997,9 @@ namespace hype::ui {
         if (!start_open) {
             return;
         }
-        const Rect gone = compute_menu();
+        // Include the panel shadow spill so no shadow ring survives the
+        // dismissed start menu.
+        const Rect gone = rui_paint_bounds(compute_menu());
         start_open = false;
         serial::write_line("start menu=close");
         invalidate(gone.united(start_btn));

@@ -24,11 +24,22 @@ namespace hcpp::graphics {
                (bits_per_pixel_ == 24 || bits_per_pixel_ == 32);
     }
 
+    volatile u8* Framebuffer::base() const noexcept { return base_; }
+
     u32 Framebuffer::width() const noexcept { return width_; }
 
     u32 Framebuffer::height() const noexcept { return height_; }
 
     u32 Framebuffer::pitch() const noexcept { return pitch_; }
+
+    u8 Framebuffer::bits_per_pixel() const noexcept { return bits_per_pixel_; }
+
+    Framebuffer Framebuffer::with_base(volatile u8* base) const noexcept {
+        return Framebuffer(base, width_, height_,
+                           width_ * bytes_per_pixel(), bits_per_pixel_,
+                           red_mask_size_, red_position_, green_mask_size_,
+                           green_position_, blue_mask_size_, blue_position_);
+    }
 
     u32 Framebuffer::encode_rgb(u8 red, u8 green, u8 blue) const noexcept {
         return (scale_channel(red, red_mask_size_) << red_position_) |
