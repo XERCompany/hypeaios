@@ -28,6 +28,9 @@ namespace hype::vfs {
         NoSpace,
         BadFd,
         IoError,
+        // The primitive exists but not for this operand (e.g. renaming a
+        // directory on the FAT32 mount, which has no relink primitive).
+        Unsupported,
     };
 
     struct FsStat {
@@ -64,6 +67,15 @@ namespace hype::vfs {
                      hcpp::u32* out_size) noexcept;
     FsStatus fs_stat(const char* path, FsStat& out) noexcept;
     FsStatus fs_delete(const char* path) noexcept;
+    // Rename / move (issue #128, hxfiles). On the memfs disks this is a
+    // real relink: the entry keeps its block run and is re-parented and
+    // renamed in place, so directories move too. On F: (and for
+    // cross-disk moves) files are copied through fs_read/fs_write and
+    // the source is deleted — a real operation, but not atomic and not
+    // available for directories (Unsupported). The destination must not
+    // exist (Exists); FS_SYS entries and disk roots refuse
+    // (AccessDenied).
+    FsStatus fs_rename(const char* old_path, const char* new_path) noexcept;
     hcpp::u32 fs_list(const char* dir_path, FsStat* out, hcpp::u32 out_max) noexcept;
     // Write-through policy: fs_write/fs_delete/fs_pwrite set a dirty flag
     // and a debounced auto-sync pushes the memfs to the HYPEDATA blob at

@@ -25,6 +25,9 @@ namespace hype::hxrt {
         hxshell_register_xau();
         serial::write_line(hxrt_register(hxshell_app()) ? "HxShell"
                                                       : "fail");
+        serial::write_line(hxrt_register(hxfiles_app()) ? "HxFiles"
+                                                      : "fail");
+        hxfiles_register_xau();
     }
 
 }

@@ -508,6 +508,104 @@ namespace hype::vfs {
         return FsStatus::Ok;
     }
 
+    // File-body copy used by the fs_rename() fallback path (FAT32 and
+    // cross-disk moves): reads the whole file through the facade and
+    // writes it to `newp` — fs_write creates the destination entry.
+    // The scratch buffer is page-granular PMM memory; the file size is
+    // bounded by the source disk's capacity (or the FAT32 file size).
+    static FsStatus fs_copy_file(const HypePath& oldp,
+                                 const char* old_text,
+                                 const HypePath& newp,
+                                 const char* new_text,
+                                 hcpp::u32 size) noexcept {
+        (void)oldp;
+        (void)newp;
+        if (size > 32u * 1024u * 1024u) return FsStatus::Unsupported;
+        hcpp::uintptr_t mem = 0;
+        hcpp::u8* buf = nullptr;
+        hcpp::size_t pages = 0;
+        if (size != 0) {
+            pages =
+                (static_cast<hcpp::size_t>(size) +
+                 hype::memory::page_size - 1) /
+                hype::memory::page_size;
+            mem = hype::memory::pmm_allocate_pages(pages);
+            if (mem == 0) return FsStatus::NoSpace;
+            buf = reinterpret_cast<hcpp::u8*>(mem);
+        }
+        hcpp::u32 got = 0;
+        FsStatus st = fs_read(old_text, buf, size, &got);
+        if (st == FsStatus::Ok && got != size) st = FsStatus::IoError;
+        if (st == FsStatus::Ok) st = fs_write(new_text, buf, size);
+        if (mem != 0) hype::memory::pmm_free_pages(mem, pages);
+        return st;
+    }
+
+    FsStatus fs_rename(const char* old_text, const char* new_text) noexcept {
+        HypePath oldp, newp;
+        if (hypepath_parse(old_text, oldp) != HypePathStatus::Ok ||
+            hypepath_parse(new_text, newp) != HypePathStatus::Ok) {
+            return FsStatus::BadPath;
+        }
+        // Rename == delete-right on the source + write-right on the
+        // destination under the landlock model.
+        if (!fs_guard_allows(old_text, hype::guard::landlock_fs_delete) ||
+            !fs_guard_allows(new_text, hype::guard::landlock_fs_write)) {
+            return FsStatus::AccessDenied;
+        }
+        if (oldp.depth == 0 || newp.depth == 0) return FsStatus::AccessDenied;
+
+        if (oldp.disk == newp.disk && oldp.disk != 'F') {
+            // Native memfs rename: the entry keeps its allocation and is
+            // re-linked under the new parent with the new leaf name.
+            const hcpp::u32 di = disk_index(oldp.disk);
+            if (di >= disk_count_max) return FsStatus::BadDisk;
+            const hcpp::u16 index = resolve_entry(oldp);
+            if (index == no_entry) return FsStatus::NotFound;
+            FsEntry& entry = entries[index];
+            if ((entry.flags & FS_SYS) != 0) return FsStatus::AccessDenied;
+            const hcpp::u16 dir = resolve_dir(newp, newp.depth - 1);
+            if (dir == no_entry) return FsStatus::NotFound;
+            // Re-parenting a directory into its own subtree would create
+            // a cycle: walk the destination's ancestor chain and refuse
+            // when it passes through the entry being moved.
+            if ((entry.flags & FS_DIR) != 0) {
+                for (hcpp::u16 p = dir; p != no_entry;
+                     p = entries[p].parent) {
+                    if (p == index) return FsStatus::BadPath;
+                }
+            }
+            const char* leaf = newp.components[newp.depth - 1];
+            const hcpp::u16 clash = find_child(dir, newp.disk, leaf);
+            if (clash == index && dir == entry.parent) {
+                return FsStatus::Ok;  // same name, same parent: no-op
+            }
+            if (clash != no_entry) return FsStatus::Exists;
+            name_copy(entry.name, leaf);
+            entry.parent = dir;
+            mark_dirty(di);
+            fs_autosync();
+            return FsStatus::Ok;
+        }
+
+        // FAT32 rename and cross-disk moves have no relink primitive:
+        // files go through a real copy+delete; directories refuse.
+        {
+            FsStat src;
+            const FsStatus st = fs_stat(old_text, src);
+            if (st != FsStatus::Ok) return st;
+            if ((src.flags & FS_DIR) != 0) return FsStatus::Unsupported;
+            FsStat dst;
+            if (fs_stat(new_text, dst) == FsStatus::Ok) {
+                return FsStatus::Exists;
+            }
+            const FsStatus copied =
+                fs_copy_file(oldp, old_text, newp, new_text, src.size);
+            if (copied != FsStatus::Ok) return copied;
+            return fs_delete(old_text);
+        }
+    }
+
     hcpp::u32 fs_list(const char* dir_text, FsStat* out, hcpp::u32 out_max) noexcept {
         HypePath path;
         if (hypepath_parse(dir_text, path) != HypePathStatus::Ok) return 0;

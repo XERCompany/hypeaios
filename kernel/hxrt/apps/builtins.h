@@ -11,6 +11,7 @@ namespace hype::hxrt {
     const HxerHeader* revdbg_app() noexcept;
     const HxerHeader* gdxfdemo_app() noexcept;
     const HxerHeader* hxshell_app() noexcept;
+    const HxerHeader* hxfiles_app() noexcept;
     void hxrt_register_builtins() noexcept;
     // Registers the "HxAbout" XAU window class (kernel/win/xau.cc), so
     // HxAbout windows render/input through a WndProc.
@@ -18,6 +19,9 @@ namespace hype::hxrt {
     // Registers the "HxShell" XAU window class so the terminal paints
     // and receives keyboard input through its WndProc.
     void hxshell_register_xau() noexcept;
+    // Registers the "HxFiles" XAU class + its wheel-scroll input hook
+    // (kernel/hxrt/apps/hxfiles.cc, issue #128).
+    void hxfiles_register_xau() noexcept;
 
     hcpp::size_t dbg_refresh() noexcept;
     bool dbg_select(hcpp::size_t index) noexcept;
