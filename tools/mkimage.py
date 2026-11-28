@@ -161,41 +161,51 @@ def build_blob(root: Path, build: Path) -> bytes:
     return bytes(region)
 
 
-root = Path(__file__).resolve().parents[1]
-build = root / "build"
-stage1 = (build / "stage1.bin").read_bytes()
-stage2 = (build / "stage2.bin").read_bytes()
-kernel = (build / "kernel.bin").read_bytes()
+def blob_region(root: Path, build: Path) -> bytes:
+    """HYPEDATA blob padded out to BLOB_REGION_BYTES (shared with mkesp)."""
+    blob = build_blob(root, build)
+    region_bytes = max(len(blob), BLOB_REGION_BYTES)
+    return blob + b"\0" * (region_bytes - len(blob))
 
-if len(stage1) != SECTOR_SIZE:
-    raise SystemExit(f"stage1 must be exactly 512 bytes, got {len(stage1)}")
-if len(stage2) > STAGE2_SECTORS * SECTOR_SIZE:
-    raise SystemExit("stage2 exceeds fixed 32-sector layout")
-if len(kernel) > KERNEL_SECTORS * SECTOR_SIZE:
-    raise SystemExit("kernel exceeds fixed kernel-area layout")
 
-image = bytearray(DATA_LBA * SECTOR_SIZE)
-image[0:len(stage1)] = stage1
-stage2_offset = SECTOR_SIZE
-image[stage2_offset:stage2_offset + len(stage2)] = stage2
-kernel_lba = 1 + STAGE2_SECTORS
-kernel_offset = kernel_lba * SECTOR_SIZE
-image[kernel_offset:kernel_offset + len(kernel)] = kernel
+def main() -> None:
+    root = Path(__file__).resolve().parents[1]
+    build = root / "build"
+    stage1 = (build / "stage1.bin").read_bytes()
+    stage2 = (build / "stage2.bin").read_bytes()
+    kernel = (build / "kernel.bin").read_bytes()
 
-blob = build_blob(root, build)
-region_bytes = max(len(blob), BLOB_REGION_BYTES)
-content_bytes = len(image) + region_bytes
-if TARGET_SECTORS and content_bytes > TARGET_SECTORS * SECTOR_SIZE:
-    raise SystemExit("payload exceeds configured image size")
+    if len(stage1) != SECTOR_SIZE:
+        raise SystemExit(f"stage1 must be exactly 512 bytes, got {len(stage1)}")
+    if len(stage2) > STAGE2_SECTORS * SECTOR_SIZE:
+        raise SystemExit("stage2 exceeds fixed 32-sector layout")
+    if len(kernel) > KERNEL_SECTORS * SECTOR_SIZE:
+        raise SystemExit("kernel exceeds fixed kernel-area layout")
 
-out = build / "hypeai-os.img"
-with out.open("wb") as handle:
-    handle.write(image)
-    handle.write(blob)
-    handle.write(b"\0" * (region_bytes - len(blob)))
-    if TARGET_SECTORS:
-        handle.truncate(TARGET_SECTORS * SECTOR_SIZE)
+    image = bytearray(DATA_LBA * SECTOR_SIZE)
+    image[0:len(stage1)] = stage1
+    stage2_offset = SECTOR_SIZE
+    image[stage2_offset:stage2_offset + len(stage2)] = stage2
+    kernel_lba = 1 + STAGE2_SECTORS
+    kernel_offset = kernel_lba * SECTOR_SIZE
+    image[kernel_offset:kernel_offset + len(kernel)] = kernel
 
-size = out.stat().st_size
-print(f"wrote {out} ({size} bytes), kernel LBA {kernel_lba}, data LBA {DATA_LBA}")
-print(f"img size={size} ({size} bytes)")
+    region = blob_region(root, build)
+    content_bytes = len(image) + len(region)
+    if TARGET_SECTORS and content_bytes > TARGET_SECTORS * SECTOR_SIZE:
+        raise SystemExit("payload exceeds configured image size")
+
+    out = build / "hypeai-os.img"
+    with out.open("wb") as handle:
+        handle.write(image)
+        handle.write(region)
+        if TARGET_SECTORS:
+            handle.truncate(TARGET_SECTORS * SECTOR_SIZE)
+
+    size = out.stat().st_size
+    print(f"wrote {out} ({size} bytes), kernel LBA {kernel_lba}, data LBA {DATA_LBA}")
+    print(f"img size={size} ({size} bytes)")
+
+
+if __name__ == "__main__":
+    main()

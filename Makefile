@@ -38,7 +38,15 @@ KERNEL_HEADERS := $(shell find hcpp kernel third_party -name '*.hpp' -o -name '*
 PYTHON ?= python3
 FONT_ASSETS := $(BUILD)/fonts/hypeai-8x16_hpf.cc
 
-.PHONY: all clean run test iso vdi usb
+# UEFI loader (BOOTX64.EFI): freestanding C++ compiled to COFF and linked
+# by lld-link as an EFI application. No gnu-efi needed.
+UEFI_CXXFLAGS := --target=x86_64-pc-windows-msvc -std=c++20 -Os \
+	-ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector \
+	-fshort-wchar -mno-red-zone -m64 -Wall -Wextra -I.
+LLD_LINK ?= lld-link
+OVMF ?= C:/Program Files/qemu/share/edk2-x86_64-code.fd
+
+.PHONY: all clean run test iso vdi usb uefi run-uefi
 
 all: $(BUILD)/hypeai-os.img $(FONT_ASSETS)
 
@@ -103,6 +111,29 @@ $(BUILD)/hypeai-os.iso: $(BUILD)/hypeai-os.img tools/mkiso.py $(BUILD)/version_g
 
 iso: $(BUILD)/hypeai-os.iso
 
+$(BUILD)/uefi/bootx64.o: boot/uefi/bootx64.cc boot/uefi/efi.hpp kernel/boot_info.hpp | $(BUILD)
+	mkdir -p $(dir $@)
+	$(CXX) $(UEFI_CXXFLAGS) -c $< -o $@
+
+$(BUILD)/uefi/BOOTX64.EFI: $(BUILD)/uefi/bootx64.o
+	$(LLD_LINK) -subsystem:efi_application -entry:efi_main -nodefaultlib -out:$@ $<
+
+$(BUILD)/hypeai-os-uefi.img: $(BUILD)/uefi/BOOTX64.EFI $(BUILD)/kernel.bin \
+		tools/mkesp.py tools/mkimage.py $(PAYLOAD_FILES)
+	$(PYTHON) tools/mkesp.py
+
+# GPT disk: FAT32 ESP (EFI/BOOT/BOOTX64.EFI + EFI/HYPEAI/KERNEL.BIN) plus
+# the HYPEDATA payload at the fixed LBA 4129 the kernel block layer reads.
+uefi: $(BUILD)/hypeai-os-uefi.img
+
+# On Windows QEMU cannot open images under the Cyrillic repo path — copy
+# the image to an ASCII path first (see docs/wiki/build-and-run.md), and
+# -bios does not work there, so OVMF goes on a pflash drive.
+run-uefi: uefi
+	qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file="$(OVMF)" \
+		-drive format=raw,file=$(BUILD)/hypeai-os-uefi.img \
+		-serial stdio -display none -no-reboot
+
 $(BUILD)/hypeai-os.vdi: $(BUILD)/hypeai-os.img
 	@if command -v VBoxManage >/dev/null 2>&1; then \
 		VBoxManage convertfromraw --format VDI $(BUILD)/hypeai-os.img $(BUILD)/hypeai-os.vdi; \
@@ -121,7 +152,9 @@ usb: all
 	@echo "  Windows: Rufus -> select image -> 'DD Image' mode -> START"
 	@echo "          or balenaEtcher -> Flash from file -> hypeai-os.img"
 	@echo "  Linux:   dd if=build/hypeai-os.img of=/dev/sdX bs=4M status=progress conv=fsync"
-	@echo "Boot the stick with BIOS/CSM (Legacy) mode enabled - UEFI-only is unsupported."
+	@echo "Boot the stick with BIOS/CSM (Legacy) mode enabled."
+	@echo "For UEFI-only machines build 'make uefi' and flash build/hypeai-os-uefi.img"
+	@echo "instead (Secure Boot must be off - the loader is unsigned)."
 
 test: all
 	./tools/test-qemu.sh
