@@ -5,6 +5,7 @@
 #include "kernel/input/msaux.h"
 #include "kernel/input/ptrmv.h"
 #include "kernel/serial.hpp"
+#include "kernel/usb/xhci.h"
 #include "kernel/session/session.h"
 #include "kernel/win/winman.h"
 
@@ -127,6 +128,21 @@ namespace hype::input {
         const hcpp::u32 n = msaux_poll(packets, 16);
         bool moved = false;
         for (hcpp::u32 i = 0; i < n; ++i) {
+            ptr_apply(packets[i]);
+            if (packets[i].dx != 0 || packets[i].dy != 0) {
+                moved = true;
+            }
+            if (packets[i].wheel != 0) {
+                route_wheel(packets[i].wheel);
+            }
+        }
+        // USB HID mouse reports land in the same MsauxPacket/ptr_apply
+        // pipeline as PS/2 above: usb_poll() pumps the xHCI event ring
+        // (and feeds USB keyboard events through the scancode path), then
+        // usb_mouse_poll() hands over the queued packets.
+        usb::usb_poll();
+        const hcpp::u32 usb_n = usb::usb_mouse_poll(packets, 16);
+        for (hcpp::u32 i = 0; i < usb_n; ++i) {
             ptr_apply(packets[i]);
             if (packets[i].dx != 0 || packets[i].dy != 0) {
                 moved = true;

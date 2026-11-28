@@ -1,0 +1,1073 @@
+// xHCI (USB 3.x host controller) + USB HID boot-protocol input driver.
+//
+// Scope (see xhci.h): PCI class 0x0C/0x03/0x30 probe, controller halt +
+// reset, DCBAA/command ring/event ring/interrupter-0 programming, Enable
+// Slot / Address Device / Evaluate Context / Configure Endpoint commands,
+// EP0 control transfers for enumeration (GET_DESCRIPTOR device/config,
+// SET_CONFIGURATION, SET_PROTOCOL boot, SET_IDLE), one interrupt-IN
+// endpoint per HID keyboard (protocol 1) or mouse (protocol 2) on root
+// ports only. Single polled event ring, no MSI, <= 8 slots, no hubs, no
+// mass storage, no hot-removal. Devices are enumerated during init;
+// afterwards the interrupt-IN rings stay armed and usb_poll() (called
+// from input::cursor_poll) turns completion events into the same key/ptr
+// counters PS/2 feeds.
+
+#include "kernel/usb/xhci.h"
+
+#include "kernel/arch/x86/cpu.h"
+#include "kernel/functionemitkeys.h"
+#include "kernel/interrupts/idt.h"
+#include "kernel/input/scancode.h"
+#include "kernel/memory/pmm.h"
+#include "kernel/memory/vmm.h"
+#include "kernel/pci/pci.h"
+#include "kernel/pci/pci_io.h"
+#include "kernel/serial.hpp"
+
+namespace hype::usb {
+
+    namespace {
+
+        // -----------------------------------------------------------------
+        // xHCI register/TRB constants
+        // -----------------------------------------------------------------
+
+        // Capability register byte offsets from BAR0.
+        constexpr hcpp::u32 cap_caplength = 0x00;
+        constexpr hcpp::u32 cap_hcsparams1 = 0x04;
+        constexpr hcpp::u32 cap_hccparams1 = 0x10;
+        constexpr hcpp::u32 cap_dboff = 0x14;
+        constexpr hcpp::u32 cap_rtsoff = 0x18;
+
+        // Operational register offsets (from cap_base + CAPLENGTH).
+        constexpr hcpp::u32 op_usbcmd = 0x00;
+        constexpr hcpp::u32 op_usbsts = 0x04;
+        constexpr hcpp::u32 op_crcr = 0x18;
+        constexpr hcpp::u32 op_dcbaap = 0x30;
+        constexpr hcpp::u32 op_config = 0x38;
+        constexpr hcpp::u32 op_portsc0 = 0x400;  // + 0x10 * (port - 1)
+
+        constexpr hcpp::u32 usbcmd_rs = 1u << 0;
+        constexpr hcpp::u32 usbcmd_hcrst = 1u << 1;
+        constexpr hcpp::u32 usbcmd_inte = 1u << 2;
+
+        constexpr hcpp::u32 usbsts_hchalted = 1u << 0;
+        constexpr hcpp::u32 usbsts_cnr = 1u << 11;
+
+        // Interrupter-0 register offsets (from rt_base + 0x20).
+        constexpr hcpp::u32 intr_iman = 0x00;
+        constexpr hcpp::u32 intr_imod = 0x04;
+        constexpr hcpp::u32 intr_erstsz = 0x08;
+        constexpr hcpp::u32 intr_erstba = 0x10;
+        constexpr hcpp::u32 intr_erdp = 0x18;
+        constexpr hcpp::u32 erdp_ehb = 1u << 3;
+
+        // PORTSC bits.
+        constexpr hcpp::u32 portsc_ccs = 1u << 0;
+        constexpr hcpp::u32 portsc_ped = 1u << 1;
+        constexpr hcpp::u32 portsc_pr = 1u << 4;
+        constexpr hcpp::u32 portsc_pp = 1u << 9;
+        constexpr hcpp::u32 portsc_prc = 1u << 21;
+        // Write-1-to-clear change bits (17..23) we must never toggle.
+        constexpr hcpp::u32 portsc_w1c_mask = 0xFE0000u;
+
+        // TRB types (control dword bits 10..15).
+        constexpr hcpp::u8 trb_type_normal = 1;
+        constexpr hcpp::u8 trb_type_setup = 2;
+        constexpr hcpp::u8 trb_type_data = 3;
+        constexpr hcpp::u8 trb_type_status = 4;
+        constexpr hcpp::u8 trb_type_link = 6;
+        constexpr hcpp::u8 trb_type_enable_slot = 9;
+        constexpr hcpp::u8 trb_type_address_device = 11;
+        constexpr hcpp::u8 trb_type_configure_ep = 12;
+        constexpr hcpp::u8 trb_type_evaluate_ctx = 13;
+        constexpr hcpp::u8 trb_type_transfer_event = 32;
+        constexpr hcpp::u8 trb_type_cmd_complete = 33;
+
+        constexpr hcpp::u32 trb_cycle = 1u << 0;
+        constexpr hcpp::u32 trb_tc = 1u << 1;
+        constexpr hcpp::u32 trb_chain = 1u << 5;
+        constexpr hcpp::u32 trb_ioc = 1u << 5;
+        constexpr hcpp::u32 trb_idt = 1u << 6;
+        constexpr hcpp::u32 trb_dir = 1u << 16;
+
+        constexpr hcpp::u32 trb_trt_none = 0u << 16;
+        constexpr hcpp::u32 trb_trt_out = 2u << 16;
+        constexpr hcpp::u32 trb_trt_in = 3u << 16;
+
+        constexpr hcpp::u8 code_success = 1;
+        constexpr hcpp::u8 code_short_packet = 13;
+
+        constexpr hcpp::u8 ep_type_control = 4;
+        constexpr hcpp::u8 ep_type_interrupt_in = 7;
+
+        constexpr hcpp::size_t ring_trbs = 256;        // one 4 KiB page
+        constexpr hcpp::size_t ring_link_idx = ring_trbs - 1;
+        constexpr hcpp::u32 max_slots = 8;
+        constexpr hcpp::u32 max_ports = 32;
+        constexpr hcpp::u64 wait_command_ticks = 300;  // PIT @100 Hz -> ~3 s
+        constexpr hcpp::u64 wait_reset_ticks = 300;
+        constexpr hcpp::u64 wait_transfer_ticks = 200;
+        constexpr hcpp::u64 wait_halt_ticks = 200;
+        constexpr hcpp::u32 ctrl_buf_size = 512;
+
+        struct Trb {
+            hcpp::u32 param_lo;
+            hcpp::u32 param_hi;
+            hcpp::u32 status;
+            hcpp::u32 control;
+        };
+        static_assert(sizeof(Trb) == 16);
+
+        hcpp::u8 trb_type(const Trb &t) noexcept {
+            return static_cast<hcpp::u8>((t.control >> 10) & 0x3F);
+        }
+        hcpp::u8 trb_code(const Trb &t) noexcept {
+            return static_cast<hcpp::u8>((t.status >> 24) & 0xFF);
+        }
+        hcpp::u8 trb_slot(const Trb &t) noexcept {
+            return static_cast<hcpp::u8>((t.control >> 24) & 0xFF);
+        }
+        hcpp::u8 trb_endpoint(const Trb &t) noexcept {
+            return static_cast<hcpp::u8>((t.control >> 16) & 0x1F);
+        }
+        hcpp::u64 trb_param(const Trb &t) noexcept {
+            return (hcpp::u64(t.param_hi) << 32) | t.param_lo;
+        }
+
+        struct ErstEntry {
+            hcpp::u64 address;
+            hcpp::u32 size;
+            hcpp::u32 reserved;
+        };
+        static_assert(sizeof(ErstEntry) == 16);
+
+        // -----------------------------------------------------------------
+        // Driver state
+        // -----------------------------------------------------------------
+
+        struct Ring {
+            volatile Trb *trbs;
+            hcpp::u64 phys;
+            hcpp::u32 enqueue;
+            bool pcs;
+        };
+
+        enum class DevKind : hcpp::u8 { None = 0, Keyboard = 1, Mouse = 2, Other = 3 };
+
+        struct Device {
+            bool used;
+            hcpp::u8 slot_id;
+            hcpp::u8 port;
+            hcpp::u8 speed;
+            hcpp::u8 iface;
+            hcpp::u8 ep_dci;
+            hcpp::u16 ep_mps;
+            hcpp::u8 ep_interval;
+            DevKind kind;
+            hcpp::u64 dev_ctx_phys;
+            hcpp::u64 input_ctx_phys;
+            hcpp::u64 report_phys;
+            hcpp::u32 report_len;
+            Ring ep0;
+            Ring intr;
+            hcpp::u8 prev_keys[6];
+            hcpp::u8 prev_mods;
+        };
+
+        hcpp::uintptr_t mmio;
+        hcpp::uintptr_t op_base;
+        hcpp::uintptr_t rt_base;
+        hcpp::uintptr_t db_base;
+        hcpp::u32 ctx_size;
+        hcpp::u32 hc_max_slots;
+        hcpp::u32 hc_max_ports;
+        hcpp::u32 slots_enabled;
+
+        hcpp::u64 dcbaa_phys;
+        volatile hcpp::u64 *dcbaa;
+        Ring cmd_ring;
+        volatile Trb *evt_trbs;
+        hcpp::u64 evt_ring_phys;
+        hcpp::u64 erst_phys;
+        volatile ErstEntry *erst;
+        hcpp::u32 evt_dequeue;
+        bool evt_ccs;
+        hcpp::u64 ctrl_buf_phys;
+        volatile hcpp::u8 *ctrl_buf;
+        hcpp::u64 input_ctx_phys;  // shared scratch input-context page
+
+        Device devices[max_slots];
+        bool present;
+        bool running;
+        hcpp::u8 fail_step;
+
+        // Queue of decoded mouse packets drained by usb_mouse_poll().
+        input::MsauxPacket mouse_queue[16];
+        hcpp::u32 mouse_head;
+        hcpp::u32 mouse_tail;
+        constexpr hcpp::u32 mouse_queue_size =
+            sizeof(mouse_queue) / sizeof(mouse_queue[0]);
+
+        // Last events seen by wait_event() matching.
+        Trb last_cmd_event;
+        bool have_cmd_event;
+        Trb last_xfer_event;
+        bool have_xfer_event;
+
+        // -----------------------------------------------------------------
+        // Small helpers
+        // -----------------------------------------------------------------
+
+        volatile hcpp::u32 &cap32(hcpp::u32 off) noexcept {
+            return *reinterpret_cast<volatile hcpp::u32 *>(mmio + off);
+        }
+        volatile hcpp::u32 &op32(hcpp::u32 off) noexcept {
+            return *reinterpret_cast<volatile hcpp::u32 *>(op_base + off);
+        }
+        volatile hcpp::u32 &intr32(hcpp::u32 off) noexcept {
+            return *reinterpret_cast<volatile hcpp::u32 *>(rt_base + 0x20 + off);
+        }
+        volatile hcpp::u32 &doorbell(hcpp::u32 slot) noexcept {
+            return *reinterpret_cast<volatile hcpp::u32 *>(db_base + slot * 4);
+        }
+        volatile hcpp::u32 &portsc(hcpp::u32 port) noexcept {
+            return *reinterpret_cast<volatile hcpp::u32 *>(op_base + op_portsc0 +
+                                                          (port - 1) * 0x10);
+        }
+        void op_write64(hcpp::u32 off, hcpp::u64 value) noexcept {
+            op32(off) = static_cast<hcpp::u32>(value);
+            op32(off + 4) = static_cast<hcpp::u32>(value >> 32);
+        }
+        void intr_write64(hcpp::u32 off, hcpp::u64 value) noexcept {
+            intr32(off) = static_cast<hcpp::u32>(value);
+            intr32(off + 4) = static_cast<hcpp::u32>(value >> 32);
+        }
+        void barrier() noexcept { asm volatile("" ::: "memory"); }
+
+        void zero_bytes(volatile hcpp::u8 *p, hcpp::size_t n) noexcept {
+            for (hcpp::size_t i = 0; i < n; ++i) p[i] = 0;
+        }
+        void zero_page(hcpp::u64 phys) noexcept {
+            zero_bytes(reinterpret_cast<volatile hcpp::u8 *>(phys),
+                       memory::page_size);
+        }
+
+        hcpp::u64 alloc_page() noexcept {
+            const hcpp::uintptr_t p = memory::pmm_allocate_page();
+            if (p != 0) zero_page(p);
+            return p;
+        }
+
+        bool wait_flag(volatile hcpp::u32 &reg, hcpp::u32 mask, bool set,
+                       hcpp::u64 timeout_ticks) noexcept {
+            const hcpp::u64 start = interrupts::pit_ticks();
+            while (((reg & mask) != 0) != set) {
+                if (interrupts::pit_ticks() - start > timeout_ticks) return false;
+                hype_cpu_halt();
+            }
+            return true;
+        }
+
+        // -----------------------------------------------------------------
+        // Producer rings (command + per-endpoint transfer rings)
+        // -----------------------------------------------------------------
+
+        bool ring_init(Ring &ring) noexcept {
+            ring.phys = alloc_page();
+            if (ring.phys == 0) return false;
+            ring.trbs = reinterpret_cast<volatile Trb *>(ring.phys);
+            ring.enqueue = 0;
+            ring.pcs = true;
+            return true;
+        }
+
+        // Enqueue one TRB at the producer position, writing the Link TRB on
+        // wrap-around. Returns the physical address of the TRB written.
+        hcpp::u64 ring_push(Ring &ring, hcpp::u64 param, hcpp::u32 status,
+                            hcpp::u32 control) noexcept {
+            const hcpp::u32 idx = ring.enqueue;
+            volatile Trb &t = ring.trbs[idx];
+            const hcpp::u64 phys = ring.phys + idx * sizeof(Trb);
+            t.param_lo = static_cast<hcpp::u32>(param);
+            t.param_hi = static_cast<hcpp::u32>(param >> 32);
+            t.status = status;
+            barrier();
+            t.control = control | (ring.pcs ? trb_cycle : 0u);
+            barrier();
+            ring.enqueue = idx + 1;
+            if (ring.enqueue >= ring_link_idx) {
+                volatile Trb &link = ring.trbs[ring_link_idx];
+                link.param_lo = static_cast<hcpp::u32>(ring.phys);
+                link.param_hi = static_cast<hcpp::u32>(ring.phys >> 32);
+                link.status = 0;
+                barrier();
+                link.control = (hcpp::u32(trb_type_link) << 10) | trb_tc |
+                               (ring.pcs ? trb_cycle : 0u);
+                ring.enqueue = 0;
+                ring.pcs = !ring.pcs;
+            }
+            return phys;
+        }
+
+        // -----------------------------------------------------------------
+        // Event ring (single, polled)
+        // -----------------------------------------------------------------
+
+        void evt_write_erdp() noexcept {
+            intr_write64(intr_erdp,
+                         (evt_ring_phys + evt_dequeue * sizeof(Trb)) | erdp_ehb);
+        }
+
+        bool evt_pop(Trb &out) noexcept {
+            volatile Trb &t = evt_trbs[evt_dequeue];
+            if (((t.control & trb_cycle) != 0) != evt_ccs) return false;
+            out.param_lo = t.param_lo;
+            out.param_hi = t.param_hi;
+            out.status = t.status;
+            out.control = t.control;
+            evt_dequeue = evt_dequeue + 1;
+            if (evt_dequeue >= ring_trbs) {
+                evt_dequeue = 0;
+                evt_ccs = !evt_ccs;
+            }
+            evt_write_erdp();
+            return true;
+        }
+
+        Device *device_for_slot(hcpp::u8 slot) noexcept {
+            for (auto &d : devices)
+                if (d.used && d.slot_id == slot) return &d;
+            return nullptr;
+        }
+
+        void ring_doorbell(hcpp::u32 slot, hcpp::u32 target) noexcept {
+            barrier();
+            doorbell(slot) = target;
+        }
+
+        void handle_transfer_event(const Trb &t) noexcept;
+        void kbd_report(Device &dev) noexcept;
+        void mouse_report(Device &dev) noexcept;
+
+        void dispatch_event(const Trb &t) noexcept {
+            const hcpp::u8 type = trb_type(t);
+            if (type == trb_type_cmd_complete) {
+                last_cmd_event = t;
+                have_cmd_event = true;
+            } else if (type == trb_type_transfer_event) {
+                last_xfer_event = t;
+                have_xfer_event = true;
+                handle_transfer_event(t);
+            }
+            // Port-status/other events are ignored: enumeration reads
+            // PORTSC directly.
+        }
+
+        // Wait for a command-completion (command=true) or transfer event
+        // whose param matches the TRB physical address we posted. Other
+        // events encountered meanwhile are dispatched normally.
+        bool wait_event(hcpp::u64 param_phys, bool command,
+                        hcpp::u64 timeout_ticks, Trb &out) noexcept {
+            // Commands are serialized, so any still-flagged event belongs
+            // to an older wait and can never match this one.
+            have_cmd_event = false;
+            have_xfer_event = false;
+            const hcpp::u64 start = interrupts::pit_ticks();
+            for (;;) {
+                Trb t{};
+                while (evt_pop(t)) dispatch_event(t);
+                if (command && have_cmd_event &&
+                    trb_param(last_cmd_event) == param_phys) {
+                    out = last_cmd_event;
+                    have_cmd_event = false;
+                    return true;
+                }
+                if (!command && have_xfer_event &&
+                    trb_param(last_xfer_event) == param_phys) {
+                    out = last_xfer_event;
+                    have_xfer_event = false;
+                    return true;
+                }
+                if (interrupts::pit_ticks() - start > timeout_ticks) return false;
+                hype_cpu_halt();
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Commands + control transfers
+        // -----------------------------------------------------------------
+
+        bool run_command(hcpp::u8 type, hcpp::u64 param, hcpp::u32 flags,
+                         hcpp::u8 slot_id, hcpp::u8 *completion_code,
+                         hcpp::u8 *result_slot = nullptr) noexcept {
+            const hcpp::u64 phys =
+                ring_push(cmd_ring, param, 0,
+                          (hcpp::u32(type) << 10) | flags |
+                              (hcpp::u32(slot_id) << 24));
+            ring_doorbell(0, 0);
+            Trb ev{};
+            if (!wait_event(phys, true, wait_command_ticks, ev)) return false;
+            if (completion_code != nullptr) *completion_code = trb_code(ev);
+            if (result_slot != nullptr) *result_slot = trb_slot(ev);
+            return true;
+        }
+
+        // Enqueue setup + optional data + status stage on EP0 and wait for
+        // the status-stage Transfer Event.
+        bool control_transfer(Device &dev, hcpp::u8 bm_request_type,
+                              hcpp::u8 b_request, hcpp::u16 w_value,
+                              hcpp::u16 w_index, hcpp::u16 w_length,
+                              hcpp::u64 data_phys, bool dir_in,
+                              hcpp::u8 *code_out = nullptr) noexcept {
+            hcpp::u64 setup_param = 0;
+            hcpp::u8 *sp = reinterpret_cast<hcpp::u8 *>(&setup_param);
+            sp[0] = bm_request_type;
+            sp[1] = b_request;
+            sp[2] = static_cast<hcpp::u8>(w_value);
+            sp[3] = static_cast<hcpp::u8>(w_value >> 8);
+            sp[4] = static_cast<hcpp::u8>(w_index);
+            sp[5] = static_cast<hcpp::u8>(w_index >> 8);
+            sp[6] = static_cast<hcpp::u8>(w_length);
+            sp[7] = static_cast<hcpp::u8>(w_length >> 8);
+
+            const bool has_data = w_length != 0;
+            const hcpp::u32 trt = !has_data ? trb_trt_none
+                                            : (dir_in ? trb_trt_in : trb_trt_out);
+            ring_push(dev.ep0, setup_param, 8,
+                      (hcpp::u32(trb_type_setup) << 10) | trb_idt | trt |
+                          trb_chain);
+            if (has_data) {
+                ring_push(dev.ep0, data_phys, w_length,
+                          (hcpp::u32(trb_type_data) << 10) | trb_chain |
+                              (dir_in ? trb_dir : 0u));
+            }
+            // Status stage direction is the inverse of the data stage; a
+            // no-data control transfer ends with an IN status stage.
+            const hcpp::u32 status_dir =
+                (has_data && dir_in) ? 0u : trb_dir;
+            const hcpp::u64 status_phys =
+                ring_push(dev.ep0, 0, 0,
+                          (hcpp::u32(trb_type_status) << 10) | trb_ioc |
+                              status_dir);
+            ring_doorbell(dev.slot_id, 1);
+            Trb ev{};
+            if (!wait_event(status_phys, false, wait_transfer_ticks, ev)) {
+                return false;
+            }
+            const hcpp::u8 code = trb_code(ev);
+            if (code_out != nullptr) *code_out = code;
+            return code == code_success || code == code_short_packet;
+        }
+
+        bool get_descriptor(Device &dev, hcpp::u8 dtype, hcpp::u8 index,
+                            hcpp::u16 length, hcpp::u8 *code = nullptr) noexcept {
+            zero_bytes(ctrl_buf, length);
+            return control_transfer(dev, 0x80, 6,
+                                    static_cast<hcpp::u16>((hcpp::u16(dtype) << 8) |
+                                                           index),
+                                    0, length, ctrl_buf_phys, true, code);
+        }
+        bool set_configuration(Device &dev, hcpp::u16 config_value) noexcept {
+            return control_transfer(dev, 0x00, 9, config_value, 0, 0, 0, false);
+        }
+        bool set_protocol_boot(Device &dev) noexcept {
+            // Class/interface, host->device: SET_PROTOCOL(0x0B) value 0=boot.
+            return control_transfer(dev, 0x21, 0x0B, 0, dev.iface, 0, 0, false);
+        }
+        bool set_idle(Device &dev) noexcept {
+            return control_transfer(dev, 0x21, 0x0A, 0, dev.iface, 0, 0, false);
+        }
+
+        // -----------------------------------------------------------------
+        // Input contexts
+        // -----------------------------------------------------------------
+
+        volatile hcpp::u32 *ctx_dwords(hcpp::u64 ctx_base, hcpp::u32 index) noexcept {
+            return reinterpret_cast<volatile hcpp::u32 *>(ctx_base +
+                                                          index * ctx_size);
+        }
+
+        void fill_slot_ctx(hcpp::u64 ctx_base, const Device &dev,
+                           hcpp::u32 context_entries) noexcept {
+            volatile hcpp::u32 *s = ctx_dwords(ctx_base, 1);
+            s[0] = (hcpp::u32(dev.speed) << 20) | (context_entries << 27);
+            s[1] = hcpp::u32(dev.port) << 16;
+        }
+
+        void fill_ep_ctx(hcpp::u64 ctx_base, hcpp::u32 ctx_index,
+                         hcpp::u8 ep_type, hcpp::u16 mps, hcpp::u8 interval,
+                         hcpp::u64 ring_phys, hcpp::u32 avg_trb_len,
+                         hcpp::u16 max_esit) noexcept {
+            volatile hcpp::u32 *e = ctx_dwords(ctx_base, ctx_index);
+            e[0] = hcpp::u32(interval) << 16;
+            e[1] = (hcpp::u32(3) << 1) | (hcpp::u32(ep_type) << 3) |
+                   (hcpp::u32(mps) << 16);
+            e[2] = static_cast<hcpp::u32>(ring_phys) | 1u;  // DCS = 1
+            e[3] = static_cast<hcpp::u32>(ring_phys >> 32);
+            e[4] = avg_trb_len | (hcpp::u32(max_esit) << 16);
+        }
+
+        // -----------------------------------------------------------------
+        // Interrupt-IN report polls
+        // -----------------------------------------------------------------
+
+        void post_intr_trb(Device &dev) noexcept {
+            ring_push(dev.intr, dev.report_phys, dev.ep_mps,
+                      (hcpp::u32(trb_type_normal) << 10) | trb_ioc);
+            ring_doorbell(dev.slot_id, dev.ep_dci);
+        }
+
+        void handle_transfer_event(const Trb &t) noexcept {
+            Device *dev = device_for_slot(trb_slot(t));
+            if (dev == nullptr) return;
+            if (trb_endpoint(t) != dev->ep_dci ||
+                (dev->kind != DevKind::Keyboard && dev->kind != DevKind::Mouse)) {
+                return;  // EP0 events are consumed by wait_event() above.
+            }
+            const hcpp::u8 code = trb_code(t);
+            if (code == code_success || code == code_short_packet) {
+                if (dev->kind == DevKind::Keyboard) {
+                    kbd_report(*dev);
+                } else {
+                    mouse_report(*dev);
+                }
+            }
+            post_intr_trb(*dev);  // repost the report poll
+        }
+
+        // -----------------------------------------------------------------
+        // HID boot reports -> existing PS/2 input paths
+        // -----------------------------------------------------------------
+
+        // HID usage ID -> set-1 scancode; bit 15 = needs 0xE0 prefix.
+        constexpr hcpp::u16 ext_flag = 0x8000;
+        constexpr hcpp::u16 hid_map[0x66] = {
+            /* 0x00-0x03 */ 0, 0, 0, 0,
+            /* 0x04-0x1D a-z */
+            0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24,
+            0x25, 0x26, 0x32, 0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14,
+            0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C,
+            /* 0x1E-0x27 digits 1-0 */
+            0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
+            /* 0x28 Enter .. 0x39 CapsLock */
+            0x1C, 0x01, 0x0E, 0x0F, 0x39, 0x0C, 0x0D, 0x1A, 0x1B, 0x2B,
+            0x56, 0x27, 0x28, 0x29, 0x33, 0x34, 0x35, 0x3A,
+            /* 0x3A-0x45 F1-F12 */
+            0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44,
+            0x57, 0x58,
+            /* 0x46 PrtSc, 0x47 ScrLk, 0x48 Pause(unmapped) */
+            ext_flag | 0x37, 0x46, 0,
+            /* 0x49-0x4E Ins Home PgUp Del End PgDn */
+            ext_flag | 0x52, ext_flag | 0x47, ext_flag | 0x49,
+            ext_flag | 0x53, ext_flag | 0x4F, ext_flag | 0x51,
+            /* 0x4F-0x52 Right Left Down Up */
+            ext_flag | 0x4D, ext_flag | 0x4B, ext_flag | 0x50,
+            ext_flag | 0x48,
+            /* 0x53 NumLock, 0x54-0x58 KP/ * - + Enter */
+            0x45, ext_flag | 0x35, 0x37, 0x4A, 0x4E, ext_flag | 0x1C,
+            /* 0x59-0x62 KP1-KP0, 0x63 KP. */
+            0x4F, 0x50, 0x51, 0x4B, 0x4C, 0x4D, 0x47, 0x48, 0x49, 0x52,
+            0x53,
+            /* 0x64 non-US 102nd key, 0x65 menu */
+            0x56, ext_flag | 0x5D,
+        };
+
+        // Push one make/break through the exact PS/2 decode path so the
+        // functionemitkeys bus sees identical events.
+        void feed_scancode(hcpp::u16 mapped, bool pressed) noexcept {
+            if ((mapped & ext_flag) != 0) {
+                input::scancode_decode(0xE0);
+            }
+            const hcpp::u8 code = static_cast<hcpp::u8>(mapped & 0x7F);
+            const input::DecodedKey key = input::scancode_decode(
+                pressed ? code : static_cast<hcpp::u8>(code | 0x80));
+            if (key.valid) {
+                input::emit_key_event(
+                    key.key_code,
+                    pressed ? input::KeyState::Pressed : input::KeyState::Released,
+                    interrupts::pit_ticks());
+            }
+        }
+
+        constexpr hcpp::u16 mod_map[8] = {
+            0x1D,             // Left Ctrl
+            0x2A,             // Left Shift
+            0x38,             // Left Alt
+            ext_flag | 0x5B,  // Left GUI
+            ext_flag | 0x1D,  // Right Ctrl
+            0x36,             // Right Shift
+            ext_flag | 0x38,  // Right Alt
+            ext_flag | 0x5C,  // Right GUI
+        };
+
+        bool key_in_report(const volatile hcpp::u8 *r, hcpp::u8 usage) noexcept {
+            for (hcpp::u8 i = 0; i < 6; ++i)
+                if (r[2 + i] == usage) return true;
+            return false;
+        }
+
+        void kbd_report(Device &dev) noexcept {
+            // Boot-protocol report: [modifier bitmap, reserved, usage x6].
+            volatile hcpp::u8 *r =
+                reinterpret_cast<volatile hcpp::u8 *>(dev.report_phys);
+            const hcpp::u8 mods = r[0];
+            const hcpp::u8 changed = static_cast<hcpp::u8>(mods ^ dev.prev_mods);
+            for (hcpp::u8 bit = 0; bit < 8; ++bit) {
+                if ((changed & static_cast<hcpp::u8>(1u << bit)) == 0) continue;
+                feed_scancode(mod_map[bit],
+                              (mods & static_cast<hcpp::u8>(1u << bit)) != 0);
+            }
+            dev.prev_mods = mods;
+            for (hcpp::u8 i = 0; i < 6; ++i) {
+                const hcpp::u8 u = dev.prev_keys[i];
+                if (u != 0 && !key_in_report(r, u) && u < 0x66 &&
+                    hid_map[u] != 0) {
+                    feed_scancode(hid_map[u], false);
+                }
+            }
+            for (hcpp::u8 i = 0; i < 6; ++i) {
+                const hcpp::u8 u = r[2 + i];
+                if (u == 0 || u >= 0x66 || hid_map[u] == 0) continue;
+                bool held = false;
+                for (hcpp::u8 j = 0; j < 6; ++j)
+                    if (dev.prev_keys[j] == u) held = true;
+                if (!held) feed_scancode(hid_map[u], true);
+            }
+            for (hcpp::u8 i = 0; i < 6; ++i) {
+                dev.prev_keys[i] = r[2 + i];
+            }
+        }
+
+        void mouse_report(Device &dev) noexcept {
+            // Boot-protocol report: [buttons, dx, dy, (wheel)].
+            volatile hcpp::u8 *r =
+                reinterpret_cast<volatile hcpp::u8 *>(dev.report_phys);
+            input::MsauxPacket packet{};
+            packet.buttons = static_cast<hcpp::u8>(r[0] & 0x07);
+            packet.dx = static_cast<hcpp::i8>(r[1]);
+            // USB HID dy is already screen-positive (down = +y), so it can
+            // feed the ptr path directly without the PS/2 sign fixup.
+            packet.dy = static_cast<hcpp::i8>(r[2]);
+            if (dev.report_len >= 4) {
+                packet.wheel = static_cast<hcpp::i8>(r[3]);
+            }
+            const hcpp::u32 next = (mouse_head + 1) % mouse_queue_size;
+            if (next != mouse_tail) {
+                mouse_queue[mouse_head] = packet;
+                mouse_head = next;
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Enumeration
+        // -----------------------------------------------------------------
+
+        struct HidScan {
+            bool found;
+            hcpp::u8 config_value;
+            hcpp::u8 iface;
+            hcpp::u8 protocol;
+            hcpp::u8 ep_num;
+            hcpp::u16 ep_mps;
+            hcpp::u8 ep_interval;
+        };
+
+        // Walk a fetched config descriptor looking for a boot-protocol HID
+        // interface with an interrupt-IN endpoint.
+        HidScan scan_config(const volatile hcpp::u8 *d, hcpp::u32 len) noexcept {
+            HidScan out{};
+            if (len < 9 || d[1] != 2) return out;
+            out.config_value = d[5];
+            bool hid_iface = false;
+            hcpp::u8 iface_proto = 0;
+            hcpp::u8 iface_num = 0;
+            hcpp::u32 i = d[0] == 0 ? 9 : d[0];
+            while (i + 1 < len) {
+                const hcpp::u8 blen = d[i];
+                const hcpp::u8 btype = d[i + 1];
+                if (blen < 2) break;
+                if (btype == 4 && i + 8 < len) {  // interface descriptor
+                    hid_iface = d[i + 5] == 3 && (d[i + 7] == 1 || d[i + 7] == 2);
+                    iface_proto = d[i + 7];
+                    iface_num = d[i + 2];
+                } else if (btype == 5 && i + 6 < len && hid_iface) {  // endpoint
+                    const hcpp::u8 addr = d[i + 2];
+                    const hcpp::u8 attr = d[i + 3] & 0x03;
+                    if ((addr & 0x80) != 0 && attr == 3) {  // interrupt IN
+                        out.found = true;
+                        out.iface = iface_num;
+                        out.protocol = iface_proto;
+                        out.ep_num = static_cast<hcpp::u8>(addr & 0x0F);
+                        out.ep_mps = static_cast<hcpp::u16>(d[i + 4] |
+                                                            (hcpp::u16(d[i + 5]) << 8));
+                        out.ep_interval = d[i + 6];
+                        return out;
+                    }
+                }
+                i = static_cast<hcpp::u32>(i + blen);
+            }
+            return out;
+        }
+
+        hcpp::u16 default_mps0(hcpp::u8 speed) noexcept {
+            // PORTSC speed: 1=full, 2=low, 3=high, 4+=super.
+            if (speed >= 4) return 512;
+            if (speed == 3) return 64;
+            return 8;
+        }
+
+        // xHCI endpoint-context Interval encoding for LS/FS interrupt
+        // endpoints: period = 2^(interval-1) microframes; bInterval is ms.
+        hcpp::u8 ep_interval_encoding(hcpp::u8 binterval_ms) noexcept {
+            hcpp::u32 uf = hcpp::u32(binterval_ms == 0 ? 1 : binterval_ms) * 8;
+            hcpp::u8 v = 1;
+            for (hcpp::u32 span = 1; span < uf && v < 15; span <<= 1) ++v;
+            return v;
+        }
+
+        bool port_reset(hcpp::u32 port) noexcept {
+            volatile hcpp::u32 &p = portsc(port);
+            hcpp::u32 cur = p;
+            if ((cur & portsc_pp) == 0) {
+                p = (cur & ~portsc_w1c_mask) | portsc_pp;
+                wait_flag(p, portsc_pp, true, wait_reset_ticks);
+            }
+            cur = p;
+            if ((cur & portsc_ccs) == 0) return false;
+            if ((cur & portsc_ped) != 0) return true;  // SS: already enabled
+            p = (cur & ~portsc_w1c_mask) | portsc_pr;
+            if (!wait_flag(p, portsc_prc, true, wait_reset_ticks)) return false;
+            cur = p;
+            p = cur | portsc_prc;  // ack the port-reset-change bit
+            cur = p;
+            return (cur & portsc_ccs) != 0 && (cur & portsc_ped) != 0;
+        }
+
+        Device *free_device() noexcept {
+            for (auto &d : devices)
+                if (!d.used) return &d;
+            return nullptr;
+        }
+
+        bool enumerate_port(hcpp::u32 port, hcpp::u8 speed) noexcept {
+            Device *dev = free_device();
+            if (dev == nullptr) return true;  // table full: ignore extra ports
+
+            *dev = Device{};
+            dev->used = true;  // claim the entry; kind stays None on failure
+            dev->port = static_cast<hcpp::u8>(port);
+            dev->speed = speed;
+            dev->kind = DevKind::None;
+
+            hcpp::u8 code = 0;
+            hcpp::u8 slot = 0;
+            if (!run_command(trb_type_enable_slot, 0, 0, 0, &code, &slot) ||
+                code != code_success || slot == 0) {
+                fail_step = 10;
+                return false;
+            }
+            dev->slot_id = slot;
+
+            dev->dev_ctx_phys = alloc_page();
+            dev->report_phys = alloc_page();
+            if (dev->dev_ctx_phys == 0 || dev->report_phys == 0 ||
+                !ring_init(dev->ep0) || !ring_init(dev->intr)) {
+                fail_step = 11;
+                return false;
+            }
+            dcbaa[slot] = dev->dev_ctx_phys;
+            barrier();
+
+            // Address Device: input ctx with A0 (slot) + A1 (EP0) added.
+            zero_page(input_ctx_phys);
+            volatile hcpp::u32 *ctl = ctx_dwords(input_ctx_phys, 0);
+            ctl[1] = (1u << 0) | (1u << 1);  // add slot ctx + EP0 ctx
+            fill_slot_ctx(input_ctx_phys, *dev, 1);
+            fill_ep_ctx(input_ctx_phys, 2, ep_type_control, default_mps0(speed),
+                        0, dev->ep0.phys, 8, 0);
+            if (!run_command(trb_type_address_device, input_ctx_phys, 0,
+                             slot, &code) ||
+                code != code_success) {
+                fail_step = 12;
+                return false;
+            }
+
+            // Read the real bMaxPacketSize0; fix EP0 via Evaluate Context
+            // when the speed-based guess was wrong. SuperSpeed encodes the
+            // field as a power of two (9 -> 512) rather than a byte count.
+            if (!get_descriptor(*dev, 1, 0, 8, &code)) {
+                fail_step = 13;
+                return false;
+            }
+            const hcpp::u16 real_mps =
+                speed >= 4 ? static_cast<hcpp::u16>(1u << ctrl_buf[7])
+                           : ctrl_buf[7];
+            const hcpp::u16 guess_mps = default_mps0(speed);
+            if (real_mps != 0 && real_mps != guess_mps) {
+                zero_page(input_ctx_phys);
+                ctl = ctx_dwords(input_ctx_phys, 0);
+                ctl[1] = 1u << 1;  // evaluate EP0 ctx only
+                fill_ep_ctx(input_ctx_phys, 2, ep_type_control, real_mps, 0,
+                            dev->ep0.phys, 8, 0);
+                if (!run_command(trb_type_evaluate_ctx, input_ctx_phys, 0,
+                                 slot, &code) ||
+                    code != code_success) {
+                    fail_step = 14;
+                    return false;
+                }
+            }
+
+            // Full device descriptor, then the config descriptor (header,
+            // then wTotalLength bytes capped at the scratch buffer size).
+            if (!get_descriptor(*dev, 1, 0, 18, &code)) {
+                fail_step = 15;
+                return false;
+            }
+            if (!get_descriptor(*dev, 2, 0, 9, &code)) {
+                fail_step = 16;
+                return false;
+            }
+            hcpp::u16 total =
+                static_cast<hcpp::u16>(ctrl_buf[2] | (hcpp::u16(ctrl_buf[3]) << 8));
+            if (total > ctrl_buf_size) total = ctrl_buf_size;
+            if (total < 9 || !get_descriptor(*dev, 2, 0, total, &code)) {
+                fail_step = 17;
+                return false;
+            }
+            const HidScan hid = scan_config(ctrl_buf, total);
+            if (!hid.found || hid.ep_num == 0 || hid.ep_mps == 0) {
+                dev->kind = DevKind::Other;
+                return true;  // non-HID device: slot claimed, nothing armed
+            }
+            dev->iface = hid.iface;
+            dev->ep_dci = static_cast<hcpp::u8>(hid.ep_num * 2 + 1);  // IN ep
+            dev->ep_mps = hid.ep_mps;
+            dev->ep_interval = hid.ep_interval;
+            dev->report_len = hid.ep_mps > 64 ? 64 : hid.ep_mps;
+
+            if (!set_configuration(*dev, hid.config_value)) {
+                fail_step = 18;
+                return false;
+            }
+            // Best-effort HID class requests; a STALL here is tolerated
+            // (e.g. devices already in boot protocol).
+            set_protocol_boot(*dev);
+            set_idle(*dev);
+
+            // Configure Endpoint: input ctx adds A0 (slot, with updated
+            // context-entries count) + A<dci> for the interrupt-IN ep.
+            zero_page(input_ctx_phys);
+            ctl = ctx_dwords(input_ctx_phys, 0);
+            ctl[1] = (1u << 0) | (1u << dev->ep_dci);
+            fill_slot_ctx(input_ctx_phys, *dev, dev->ep_dci);
+            fill_ep_ctx(input_ctx_phys, dev->ep_dci + 1, ep_type_interrupt_in,
+                        dev->ep_mps, ep_interval_encoding(dev->ep_interval),
+                        dev->intr.phys, dev->report_len, dev->ep_mps);
+            if (!run_command(trb_type_configure_ep, input_ctx_phys, 0, slot,
+                             &code) ||
+                code != code_success) {
+                fail_step = 19;
+                return false;
+            }
+
+            dev->kind = hid.protocol == 1 ? DevKind::Keyboard : DevKind::Mouse;
+            post_intr_trb(*dev);  // arm the periodic report poll
+            if (dev->kind == DevKind::Keyboard) {
+                serial::write_line("usb kbd=ok");
+            } else {
+                serial::write_line("usb mouse=ok");
+            }
+            return true;
+        }
+
+        // -----------------------------------------------------------------
+        // Controller bring-up
+        // -----------------------------------------------------------------
+
+        bool controller_init(const pci::PciDevice &pdev) noexcept {
+            const hcpp::u32 bar0 = pci::bar(pdev, 0);
+            const hcpp::u32 bar1 = pci::bar(pdev, 1);
+            if (!pci::bar_is_memory(bar0)) {
+                fail_step = 2;
+                return false;
+            }
+            const hcpp::u64 base = pci::bar_memory_address(bar0, bar1);
+            if (base == 0 || base >= 0x100000000ull) {
+                fail_step = 3;
+                return false;
+            }
+            pci::pci_enable_mem(pdev);
+            pci::pci_enable_busmaster(pdev);
+            mmio = static_cast<hcpp::uintptr_t>(base);
+            // The kernel identity-maps MMIO low enough for the other PCI
+            // drivers; verify rather than assume, like the HDA path does,
+            // and identity-map the first 32 KiB of the BAR when it is not.
+            if (memory::vmm_initialized() && memory::vmm_translate(mmio) != mmio) {
+                bool mapped = true;
+                for (hcpp::u32 i = 0; i < 8 && mapped; ++i) {
+                    const hcpp::uintptr_t page = mmio + i * memory::page_size;
+                    if (memory::vmm_translate(page) != page &&
+                        !memory::vmm_map_page(page, page, true, false)) {
+                        mapped = false;
+                    }
+                }
+                if (!mapped) {
+                    fail_step = 4;
+                    return false;
+                }
+            }
+
+            const hcpp::u32 caplen =
+                cap32(cap_caplength) & 0xFF;  // CAPLENGTH is a byte at 0x00
+            op_base = mmio + caplen;
+            rt_base = mmio + (cap32(cap_rtsoff) & ~0x1Fu);
+            db_base = mmio + (cap32(cap_dboff) & ~0x3u);
+            const hcpp::u32 hcs1 = cap32(cap_hcsparams1);
+            hc_max_slots = hcs1 & 0xFF;
+            hc_max_ports = (hcs1 >> 24) & 0xFF;
+            if (hc_max_ports > max_ports) hc_max_ports = max_ports;
+            ctx_size = (cap32(cap_hccparams1) & 4u) != 0 ? 64 : 32;
+            if (hc_max_slots == 0 || hc_max_ports == 0) {
+                fail_step = 5;
+                return false;
+            }
+            slots_enabled = hc_max_slots < max_slots ? hc_max_slots : max_slots;
+
+            // Halt, then reset; all waits bounded by PIT ticks.
+            op32(op_usbcmd) = op32(op_usbcmd) & ~usbcmd_rs;
+            if (!wait_flag(op32(op_usbsts), usbsts_hchalted, true,
+                           wait_halt_ticks)) {
+                fail_step = 6;
+                return false;
+            }
+            op32(op_usbcmd) = op32(op_usbcmd) | usbcmd_hcrst;
+            if (!wait_flag(op32(op_usbcmd), usbcmd_hcrst, false,
+                           wait_reset_ticks) ||
+                !wait_flag(op32(op_usbsts), usbsts_cnr, false,
+                           wait_reset_ticks)) {
+                fail_step = 7;
+                return false;
+            }
+
+            dcbaa_phys = alloc_page();
+            input_ctx_phys = alloc_page();
+            ctrl_buf_phys = alloc_page();
+            if (dcbaa_phys == 0 || input_ctx_phys == 0 || ctrl_buf_phys == 0 ||
+                !ring_init(cmd_ring)) {
+                fail_step = 8;
+                return false;
+            }
+            dcbaa = reinterpret_cast<volatile hcpp::u64 *>(dcbaa_phys);
+            ctrl_buf = reinterpret_cast<volatile hcpp::u8 *>(ctrl_buf_phys);
+            erst_phys = alloc_page();
+            evt_ring_phys = alloc_page();
+            if (erst_phys == 0 || evt_ring_phys == 0) {
+                fail_step = 8;
+                return false;
+            }
+            erst = reinterpret_cast<volatile ErstEntry *>(erst_phys);
+            evt_trbs = reinterpret_cast<volatile Trb *>(evt_ring_phys);
+            erst[0].address = evt_ring_phys;
+            erst[0].size = static_cast<hcpp::u32>(ring_trbs);
+            erst[0].reserved = 0;
+            evt_dequeue = 0;
+            evt_ccs = true;
+
+            op_write64(op_dcbaap, dcbaa_phys);
+            op_write64(op_crcr, cmd_ring.phys | 1u);  // RCS = producer cycle 1
+            op32(op_config) = slots_enabled;
+
+            // Interrupter 0: single-segment event ring, interrupts masked
+            // off (IMAN.IE = 0) since we poll ERDP directly.
+            intr32(intr_iman) = 1;  // clear pending IP bit (RW1C), IE stays 0
+            intr32(intr_imod) = 0;
+            intr32(intr_erstsz) = 1;
+            intr_write64(intr_erstba, erst_phys);
+            intr_write64(intr_erdp, evt_ring_phys | erdp_ehb);
+
+            op32(op_usbcmd) = op32(op_usbcmd) | usbcmd_rs | usbcmd_inte;
+            if (!wait_flag(op32(op_usbsts), usbsts_hchalted, false,
+                           wait_halt_ticks)) {
+                fail_step = 9;
+                return false;
+            }
+            return true;
+        }
+
+    }  // namespace
+
+    bool usb_initialize() noexcept {
+        present = false;
+        running = false;
+        fail_step = 0;
+        mouse_head = mouse_tail = 0;
+        have_cmd_event = have_xfer_event = false;
+        for (auto &d : devices) d = Device{};
+
+        const pci::PciDevice *pdev = pci::find_class(0x0C, 0x03);
+        if (pdev == nullptr || pdev->program_interface != 0x30) {
+            serial::write_line("xhci dev=absent");
+            return true;  // graceful: PS/2 input path keeps working
+        }
+        if (!controller_init(*pdev)) {
+            serial::write("xhci dev=fail s=");
+            serial::write_dec32(fail_step);
+            serial::write("\r\n");
+            return true;  // never fail the boot over USB
+        }
+        present = true;
+        running = true;
+        serial::write("xhci dev=ok slots=");
+        serial::write_dec32(slots_enabled);
+        serial::write("\r\n");
+
+        // Root ports only; no hub traversal. port_reset() powers up each
+        // port, waits for connect status, resets it when needed and bails
+        // out quickly for empty ports.
+        for (hcpp::u32 port = 1; port <= hc_max_ports; ++port) {
+            if (!port_reset(port)) continue;
+            const hcpp::u8 speed =
+                static_cast<hcpp::u8>((portsc(port) >> 10) & 0x0F);
+            enumerate_port(port, speed);
+        }
+        return true;
+    }
+
+    bool xhci_present() noexcept { return present; }
+
+    hcpp::u32 usb_device_count() noexcept {
+        hcpp::u32 n = 0;
+        for (const auto &d : devices)
+            if (d.used) ++n;
+        return n;
+    }
+
+    bool usb_keyboard_present() noexcept {
+        for (const auto &d : devices)
+            if (d.kind == DevKind::Keyboard) return true;
+        return false;
+    }
+
+    bool usb_mouse_present() noexcept {
+        for (const auto &d : devices)
+            if (d.kind == DevKind::Mouse) return true;
+        return false;
+    }
+
+    void usb_poll() noexcept {
+        if (!running) return;
+        Trb t{};
+        while (evt_pop(t)) dispatch_event(t);
+    }
+
+    hcpp::u32 usb_mouse_poll(input::MsauxPacket *out, hcpp::u32 max) noexcept {
+        hcpp::u32 n = 0;
+        while (mouse_tail != mouse_head && n < max && out != nullptr) {
+            out[n++] = mouse_queue[mouse_tail];
+            mouse_tail = (mouse_tail + 1) % mouse_queue_size;
+        }
+        return n;
+    }
+
+}  // namespace hype::usb
