@@ -103,7 +103,9 @@ namespace hype::ui {
             const Rect card{screen.right() - margin - card_w + slide,
                             cursor_y, card_w, card_h};
 
-            rui_card(canvas, card);
+            // L6 toast (issue #177): elevated surface at sh-lg, above
+            // the taskbar layer.
+            rui_panel(canvas, card, rui_elev_panel);
             const hcpp::i32 bar_inset =
                 theme.hard_shadow ? 0
                                   : static_cast<hcpp::i32>(theme.radius_lg) / 2;

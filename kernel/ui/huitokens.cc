@@ -1,4 +1,5 @@
-// HypeUI tokens — see huitokens.h for the design rationale (issues #143, #144).
+// HypeUI tokens v2 — see huitokens.h for the design rationale
+// (issues #143, #144, #177; spec docs/research/hypeui-design.md §2).
 #include "kernel/ui/huitokens.h"
 
 #include "kernel/gfx/hypegfx.h"
@@ -10,45 +11,8 @@ namespace hype::ui::hui {
     namespace {
 
         using hype::ui::Canvas;
-        using hype::ui::Insets;
         using hype::ui::Point;
         using hype::ui::Rect;
-
-        // Light table: bg #F3F4F6, white cards, #E5E7EB hairlines,
-        // near-black primary buttons, sparse #3B82F6 accent.
-        const HuiColors k_light{
-            .bg = 0xF3F4F6,
-            .surface = 0xFFFFFF,
-            .surface_elev = 0xFFFFFF,
-            .border = 0xE5E7EB,
-            .text = 0x111827,
-            .text_dim = 0x6B7280,
-            .accent = 0x3B82F6,
-            .accent_fg = 0xFFFFFF,
-            .primary = 0x111827,
-            .primary_fg = 0xFFFFFF,
-            .danger = 0xDC2626,
-            .success = 0x16A34A,
-            .shadow_rgb = 0x000000,
-        };
-
-        // Dark table: bg #0F1113, cards #1A1D21 / elevated #22262B,
-        // #2A2E34 hairlines, near-white primary buttons, same blue.
-        const HuiColors k_dark{
-            .bg = 0x0F1113,
-            .surface = 0x1A1D21,
-            .surface_elev = 0x22262B,
-            .border = 0x2A2E34,
-            .text = 0xF9FAFB,
-            .text_dim = 0x9CA3AF,
-            .accent = 0x3B82F6,
-            .accent_fg = 0xFFFFFF,
-            .primary = 0xF9FAFB,
-            .primary_fg = 0x111827,
-            .danger = 0xEF4444,
-            .success = 0x22C55E,
-            .shadow_rgb = 0x000000,
-        };
 
         bool dark_active() noexcept {
             const Theme& theme = theme_active();
@@ -58,27 +22,93 @@ namespace hype::ui::hui {
             return sum < 384;
         }
 
+        // Light surfaces need far less shadow alpha to read — scale
+        // the dark-table stop down to ~40% (Tailwind v4-ish .10-.14).
+        hcpp::u8 stop_alpha(hcpp::u8 alpha) noexcept {
+            if (alpha == 0) {
+                return 0;
+            }
+            if (dark_active()) {
+                return alpha;
+            }
+            const hcpp::u32 scaled = static_cast<hcpp::u32>(alpha) * 2 / 5;
+            return static_cast<hcpp::u8>(scaled == 0 ? 1 : scaled);
+        }
+
+        void draw_stop(Canvas& canvas, Rect rect, hcpp::i32 radius,
+                       const HuiShadow& stop, hcpp::u32 shadow_rgb) noexcept {
+            const hcpp::u8 alpha = stop_alpha(stop.alpha);
+            if (alpha == 0) {
+                return;
+            }
+            // gfx_soft_shadow derives its own drop from the blur
+            // (2 + blur / 3); shift the source rect so the cast lands
+            // where the token's dy says it should.
+            const Rect shifted = rect.translated(
+                Point{0, stop.dy - (2 + stop.blur / 3)});
+            gfx::gfx_soft_shadow_tinted(canvas, shifted, radius, stop.blur,
+                                        alpha, shadow_rgb);
+        }
+
     }  // namespace
 
     const HuiColors& colors() noexcept {
-        return dark_active() ? k_dark : k_light;
+        // The Theme is the single token table: hui colors are a
+        // projected view, so ui.theme / ui.accent changes reach every
+        // hui::colors() consumer with no second copy to keep in sync.
+        static HuiColors active{};
+        const Theme& theme = theme_active();
+        active = HuiColors{
+            .bg = theme.bg,
+            .surface = theme.card,
+            .surface_sunk = theme.surface_sunk,
+            .surface_elev = theme.secondary,
+            .border = theme.border,
+            .border_strong = theme.border_strong,
+            .text = theme.fg,
+            .text_dim = theme.muted_fg,
+            .accent = theme.accent,
+            .accent_fg = theme.accent_fg,
+            .accent_hover = theme.accent_hover,
+            .accent_active = theme.accent_active,
+            .accent_soft = theme.accent_soft,
+            .accent_soft_alpha = theme.accent_soft_alpha,
+            .primary = theme.primary,
+            .primary_fg = theme.primary_fg,
+            .danger = theme.destructive,
+            .danger_soft = theme.destructive_soft,
+            .danger_soft_alpha = theme.destructive_soft_alpha,
+            .success = theme.success,
+            .warning = theme.warning,
+            .ring = theme.ring,
+            .ring_alpha = theme.ring_alpha,
+            .scrim = theme.scrim,
+            .scrim_alpha = theme.scrim_alpha,
+            .top_edge_alpha = theme.top_edge_alpha,
+            .shadow_rgb = theme.shadow,
+        };
+        return active;
     }
 
     bool is_dark() noexcept { return dark_active(); }
 
-    const HuiShadow& shadow(HuiShadowLevel level) noexcept {
-        // CSS-style soft-shadow stops (dy / blur / alpha as 0-255):
-        //   xs:  y1  blur2  .04 | sm: y2  blur6  .06 | m:  y4  blur12 .08
-        //   l:   y8  blur24 .10 | xl: y16 blur40 .12 | 2xl: y24 blur64 .14
-        // Dark theme bumps each stop ~+25% alpha so the shadow still
-        // reads against a dark background.
-        static const HuiShadow scale[6] = {
-            {1, 2, 10},   // xs  (.04 * 255 ≈ 10)
-            {2, 6, 15},   // sm  (.06 * 255 ≈ 15)
-            {4, 12, 20},  // m   (.08 * 255 ≈ 20)
-            {8, 24, 26},  // l   (.10 * 255 ≈ 26)
-            {16, 40, 31}, // xl  (.12 * 255 ≈ 31)
-            {24, 64, 36}, // 2xl (.14 * 255 ≈ 36)
+    const HuiShadowRecipe& shadow_recipe(HuiShadowLevel level) noexcept {
+        // Two-stop recipes (penumbra, umbra) as (dy / blur / alpha):
+        //   xs:  --            | (1, 2, .28)   buttons, inputs, badges
+        //   sm:  (1, 3, .12)   | (1, 2, .18)   cards, taskbar, panels
+        //   md:  (4, 8, .14)   | (1, 3, .18)   raised card, sticky head
+        //   lg:  (8, 16, .16)  | (2, 6, .20)   menus, popovers, toasts
+        //   xl:  (16, 28, .20) | (4, 10, .24)  dialogs, sheets, palette
+        //   2xl: (24, 44, .30) | (8, 16, .28)  windows, drag-lifted
+        // Alphas are the spec's dark-surface values (~Tailwind v4
+        // x2-2.5); the light theme scales them in draw_shadow.
+        static const HuiShadowRecipe scale[6] = {
+            {{0, 0, 0},     {1, 2, 71}},   // xs
+            {{1, 3, 31},    {1, 2, 46}},   // sm
+            {{4, 8, 36},    {1, 3, 46}},   // md
+            {{8, 16, 41},   {2, 6, 51}},   // lg
+            {{16, 28, 51},  {4, 10, 61}},  // xl
+            {{24, 44, 77},  {8, 16, 71}},  // 2xl
         };
         const hcpp::u8 idx = static_cast<hcpp::u8>(level);
         return scale[idx > 5 ? 5 : idx];
@@ -92,27 +122,24 @@ namespace hype::ui::hui {
         const Theme& theme = theme_active();
         if (theme.hard_shadow) {
             // Flat variant: offset duplicate, no blur (ui.hard_shadow).
-            const hcpp::i32 off = 2 + shadow(level).dy;
+            const HuiShadowRecipe& recipe = shadow_recipe(level);
+            const hcpp::i32 dy =
+                recipe.umbra.alpha != 0 ? recipe.umbra.dy
+                                        : recipe.penumbra.dy;
+            const hcpp::i32 off = 2 + dy;
             canvas.fill_rect(rect.translated(Point{off, off}),
                              canvas.color(theme.shadow));
             return;
         }
-        const HuiShadow spec = shadow(level);
-        hcpp::u32 alpha = spec.alpha;
-        if (is_dark()) {
-            alpha = alpha + alpha / 4 > 255 ? 255 : alpha + alpha / 4;
-        }
-        // gfx_soft_shadow derives its own offset from blur; pass the
-        // token's dy by shifting the source rect down first so the cast
-        // lands where the token says it should.
-        const Rect shifted = rect.translated(
-            Point{0, spec.dy - (2 + spec.blur / 3)});
-        gfx::gfx_soft_shadow(canvas, shifted, radius, spec.blur,
-                             static_cast<hcpp::u8>(alpha));
+        const HuiShadowRecipe& recipe = shadow_recipe(level);
+        const hcpp::u32 shadow_rgb = colors().shadow_rgb;
+        draw_stop(canvas, rect, radius, recipe.penumbra, shadow_rgb);
+        draw_stop(canvas, rect, radius, recipe.umbra, shadow_rgb);
     }
 
     void draw_top_edge(Canvas& canvas, Rect rect, hcpp::i32 radius) noexcept {
-        if (!is_dark() || rect.empty()) {
+        const hcpp::u8 alpha = theme_active().top_edge_alpha;
+        if (!is_dark() || rect.empty() || alpha == 0) {
             return;
         }
         // Faint 1px white edge just inside the top of the shape — the
@@ -121,7 +148,7 @@ namespace hype::ui::hui {
         canvas.fill_rect_alpha(
             Rect{rect.x + inset + 2, rect.y + 1,
                  rect.w - 2 * (inset + 2), 1},
-            canvas.color(0xFFFFFF), 18);
+            canvas.color(0xFFFFFF), alpha);
     }
 
 }  // namespace hype::ui::hui

@@ -192,6 +192,18 @@ namespace hype::ui {
                            static_cast<hcpp::u8>(alpha / 2));
     }
 
+    void rui_glow(Canvas& canvas, Rect rect, hcpp::i32 radius, hcpp::u32 rgb,
+                  hcpp::u8 alpha) noexcept {
+        if (rect.empty() || alpha == 0) {
+            return;
+        }
+        // glow = zero-offset tinted soft shadow: compensate for the
+        // raster's built-in 2 + blur / 3 drop so the halo hugs the rect.
+        constexpr hcpp::i32 blur = 10;
+        const Rect shifted = rect.translated(Point{0, -(2 + blur / 3)});
+        gfx::gfx_soft_shadow_tinted(canvas, shifted, radius, blur, alpha, rgb);
+    }
+
     void rui_panel(Canvas& canvas, Rect rect, hcpp::u32 elevation) noexcept {
         if (rect.empty()) {
             return;
@@ -205,14 +217,21 @@ namespace hype::ui {
             elevation = rui_elev_window;
         }
         const hcpp::i32 radius = static_cast<hcpp::i32>(theme.radius_lg);
-        // HypeUI: flat surface + hairline border; the soft-shadow scale
-        // carries elevation (control→sm, card→m, panel/window→xl).
+        // HypeUI v2 (issue #177): flat surface + hairline border; the
+        // two-stop shadow scale carries elevation — controls sh-xs,
+        // cards/panels at rest sh-sm..lg, dialogs sh-xl, windows
+        // sh-2xl. Rest never exceeds sm for controls, overlays never
+        // drop below lg.
         if (elevation == rui_elev_control) {
-            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Sm);
+            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Xs);
         } else if (elevation == rui_elev_card) {
-            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Md);
-        } else if (elevation >= rui_elev_panel) {
+            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Sm);
+        } else if (elevation == rui_elev_panel) {
+            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Lg);
+        } else if (elevation == rui_elev_dialog) {
             hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Xl);
+        } else if (elevation >= rui_elev_window) {
+            hui::draw_shadow(canvas, rect, radius, hui::HuiShadowLevel::Xxl);
         }
         const hcpp::u32 fill = elevation >= rui_elev_panel
                                    ? hui::colors().surface_elev

@@ -10,6 +10,7 @@
 //   audio.volume      0..100   QS volume slider -> pullmix master gain
 //   ui.brightness     0..100   QS brightness slider (stub tunable)
 //   ui.theme          dark|light -> theme_set(theme_dark()/theme_light())
+//   ui.accent         blue|violet|emerald|rose -> theme_set_accent()
 //   ui.hard_shadow    bool      -> theme_set_hard_shadow()
 //   ui.lock_timeout_min 0..1440 -> idlelock auto-lock minutes (0 = off)
 //   desktop.wallpaper leaf name in U:/wallpapers, "gradient" or "" clears
