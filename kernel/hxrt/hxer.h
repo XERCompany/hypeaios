@@ -18,6 +18,10 @@ namespace hype::hxrt {
         char path[64];
         void (*entry)(AppCtx& ctx) noexcept;
         void (*on_close)(AppCtx& ctx) noexcept;
+        // Optional content-click handler: invoked by the window manager
+        // with absolute screen coords when a press lands inside the
+        // window's content region. Deserialized blobs leave it null.
+        void (*on_click)(AppCtx& ctx, hcpp::i32 x, hcpp::i32 y) noexcept;
     };
 
 }

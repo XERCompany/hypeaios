@@ -1143,6 +1143,14 @@ namespace hype::win {
         damage_add(region);
     }
 
+    void wm_invalidate_app(const char* app_name) noexcept {
+        for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
+            if (slots[i].id != 0 && name_equals(slots[i].app_name, app_name)) {
+                damage_add(slots[i].frame);
+            }
+        }
+    }
+
     void wm_invalidate_all() noexcept { damage_full = true; }
 
     bool wm_dirty() noexcept { return damaged || damage_full; }
@@ -1317,7 +1325,18 @@ namespace hype::win {
                 drag_zone = SnapZone::None;
                 return true;
             }
-            return wm_focus(w.id);
+            wm_focus(w.id);
+            // Press inside the content region: offer it to the app so
+            // interactive apps (RevDBGService controls) can react, then
+            // repaint the window in case state changed.
+            if (w.content_rect.contains(p)) {
+                const hxrt::HxerHeader* app = hxrt::hxrt_find(w.app_name);
+                if (app != nullptr && app->on_click != nullptr) {
+                    app->on_click(w.ctx, p.x, p.y);
+                    damage_add(w.frame);
+                }
+            }
+            return true;
         }
         // No window and no taskbar zone claimed the press: the click
         // landed on empty desktop — offer it to the icon band.

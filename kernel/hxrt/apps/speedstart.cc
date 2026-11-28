@@ -187,7 +187,7 @@ namespace hype::hxrt {
         const HxerHeader desc = {
             hxer_magic, 1, static_cast<hcpp::u8>(HxerKind::System), 0,
             "SpeedStart", "HYPEOS://S/apps/SpeedStart.hxersys",
-            ss_entry, ss_close};
+            ss_entry, ss_close, nullptr};
 
     }
 

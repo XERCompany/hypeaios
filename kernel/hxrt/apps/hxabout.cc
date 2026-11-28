@@ -39,7 +39,7 @@ namespace hype::hxrt {
         const HxerHeader desc = {
             hxer_magic, 1, static_cast<hcpp::u8>(HxerKind::System), 0,
             "HxAbout", "HYPEOS://S/apps/HxAbout.hxersys",
-            hxabout_entry, hxabout_close};
+            hxabout_entry, hxabout_close, nullptr};
 
     }
 

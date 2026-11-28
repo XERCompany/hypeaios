@@ -9,7 +9,9 @@ namespace hype::svc {
     constexpr hcpp::size_t svc_name_max = 24;
     constexpr hcpp::size_t svc_log_entries = 32;
     constexpr hcpp::size_t svc_log_line_max = 64;
-    constexpr hcpp::size_t svc_data_size = 256;
+    constexpr hcpp::size_t svc_data_pairs = 8;
+    constexpr hcpp::size_t svc_data_key_max = 16;
+    constexpr hcpp::size_t svc_data_val_max = 40;
     constexpr hcpp::u32 svc_invalid_id = 0xFFFFFFFFu;
 
     enum class SvcState : hcpp::u8 {
@@ -61,7 +63,15 @@ namespace hype::svc {
     const char *svc_log_read(hcpp::u32 id, hcpp::u32 index) noexcept;
     hcpp::u32 svc_log_count(hcpp::u32 id) noexcept;
 
-    hcpp::u8 *svc_data(hcpp::u32 id) noexcept;
+    // Per-service local data: a tiny key/value store (svc_data_pairs slots)
+    // for fast lookups without touching the vfs.
+    bool svc_data_set(hcpp::u32 id, const char *key,
+                      const char *value) noexcept;
+    const char *svc_data_get(hcpp::u32 id, const char *key) noexcept;
+
+    // Installs the klog tee so klog lines of the form "svc:<name> <text>"
+    // are appended to <name>'s log ring. Idempotent.
+    void svc_attach_klog() noexcept;
 
     const char *svc_state_name(SvcState state) noexcept;
     bool svc_selftest() noexcept;

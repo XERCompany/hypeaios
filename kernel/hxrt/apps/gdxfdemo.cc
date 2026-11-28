@@ -230,7 +230,7 @@ namespace hype::hxrt {
         const HxerHeader desc = {
             hxer_magic, 1, static_cast<hcpp::u8>(HxerKind::User), 0,
             "GDXFDemo", "HYPEOS://U/apps/GDXFDemo.hxer", gdxfdemo_entry,
-            gdxfdemo_close};
+            gdxfdemo_close, nullptr};
 
     }  // namespace
 

@@ -28,6 +28,19 @@ namespace klog {
 
     inline void set_timestamps(bool enabled) noexcept { timestamps_ref() = enabled; }
 
+    // Optional tee: every emitted line is forwarded to the sink after the
+    // serial write. revsvc uses this to mirror "svc:<name> ..." lines into
+    // per-service ring buffers.
+    using Sink = void (*)(Level level, hcpp::StringView tag,
+                          hcpp::StringView message) noexcept;
+
+    inline Sink& sink_ref() noexcept {
+        static Sink sink = nullptr;
+        return sink;
+    }
+
+    inline void set_sink(Sink sink) noexcept { sink_ref() = sink; }
+
     inline void log(Level level, hcpp::StringView tag, hcpp::StringView message) noexcept {
         if (static_cast<hcpp::u8>(level) < static_cast<hcpp::u8>(min_level_ref())) {
             return;
@@ -42,6 +55,10 @@ namespace klog {
         serial::write("] ");
         serial::write(message);
         serial::write("\r\n");
+        const Sink sink = sink_ref();
+        if (sink != nullptr) {
+            sink(level, tag, message);
+        }
     }
 
     inline void debug(hcpp::StringView tag, hcpp::StringView message) noexcept {
