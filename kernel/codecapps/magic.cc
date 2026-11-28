@@ -1,4 +1,5 @@
 #include "kernel/codecapps/arena.h"
+#include "kernel/codecapps/archive/archive.h"
 #include "kernel/codecapps/audio/adpcm.h"
 #include "kernel/codecapps/audio/alac_codec.h"
 #include "kernel/codecapps/audio/flac.h"
@@ -6,6 +7,7 @@
 #include "kernel/codecapps/audio/ogg.h"
 #include "kernel/codecapps/audio/vorbis.h"
 #include "kernel/codecapps/audio/wav.h"
+#include "kernel/codecapps/avi.h"
 #include "kernel/codecapps/codec.h"
 #include "kernel/codecapps/image/bmp.h"
 #include "kernel/codecapps/image/exif.h"
@@ -18,6 +20,7 @@
 #include "kernel/codecapps/image/qoi.h"
 #include "kernel/codecapps/image/tga.h"
 #include "kernel/codecapps/registry.h"
+#include "kernel/serial.hpp"
 #include "kernel/video/videodecoder.h"
 
 namespace hype::codec {
@@ -229,6 +232,18 @@ namespace hype::codec {
             return bytes_eq(b, n, 0, "\x1A\x45\xDF\xA3", 4);
         }
 
+        bool probe_zip(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return archive::zip_probe(b, n);
+        }
+
+        bool probe_gzip(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return archive::gzip_probe(b, n);
+        }
+
+        bool probe_tar(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return archive::tar_probe(b, n);
+        }
+
         const CodecDescriptor builtin_descriptors[] = {
             {"bmp", CodecKind::Image, CodecId::Bmp,
              codec_flag_decode | codec_flag_encode, probe_bmp, image::bmp_decode,
@@ -296,12 +311,19 @@ namespace hype::codec {
              video::video_mpeg2_decode, codec_stub_encode},
             {"h264", CodecKind::Video, CodecId::H264, 0, probe_h264, codec_stub_decode,
              codec_stub_encode},
-            {"avi", CodecKind::Container, CodecId::Avi, 0, probe_avi, codec_stub_decode,
-             codec_stub_encode},
+            {"avi", CodecKind::Container, CodecId::Avi, codec_flag_decode, probe_avi,
+             avi_decode, codec_stub_encode},
             {"ts", CodecKind::Container, CodecId::Ts, 0, probe_ts, codec_stub_decode,
              codec_stub_encode},
             {"mkv", CodecKind::Container, CodecId::Mkv, 0, probe_mkv, codec_stub_decode,
              codec_stub_encode},
+            {"zip", CodecKind::Archive, CodecId::Zip, codec_flag_decode, probe_zip,
+             archive::zip_decode, codec_stub_encode},
+            {"gzip", CodecKind::Archive, CodecId::Gzip,
+             codec_flag_decode | codec_flag_encode, probe_gzip, archive::gzip_decode,
+             archive::gzip_encode},
+            {"tar", CodecKind::Archive, CodecId::Tar, codec_flag_decode, probe_tar,
+             archive::tar_decode, codec_stub_encode},
         };
 
         struct ProbeCase {
@@ -369,6 +391,8 @@ namespace hype::codec {
              {'R', 'I', 'F', 'F', 0x10, 0x00, 0x00, 0x00, 'A', 'V', 'I', ' '},
              12},
             {CodecId::Mkv, {0x1A, 0x45, 0xDF, 0xA3}, 4},
+            {CodecId::Zip, {'P', 'K', 0x03, 0x04}, 4},
+            {CodecId::Gzip, {0x1F, 0x8B, 0x08, 0x00}, 4},
         };
 
         const hcpp::u8 unknown_blob[] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
@@ -383,8 +407,17 @@ namespace hype::codec {
 
     bool codec_probe_selftest() noexcept {
         for (hcpp::size_t i = 0; i < sizeof(probe_cases) / sizeof(probe_cases[0]); ++i)
-            if (codec_probe(probe_cases[i].bytes, probe_cases[i].size) != probe_cases[i].id)
+            if (codec_probe(probe_cases[i].bytes, probe_cases[i].size) != probe_cases[i].id) {
+                serial::write("probe fail idx=");
+                serial::write_dec32(static_cast<hcpp::u32>(i));
+                serial::write(" id=");
+                serial::write(codec_id_name(probe_cases[i].id));
+                serial::write(" got=");
+                serial::write(codec_id_name(
+                    codec_probe(probe_cases[i].bytes, probe_cases[i].size)));
+                serial::write("\r\n");
                 return false;
+            }
         return codec_probe(unknown_blob, sizeof(unknown_blob)) == CodecId::Unknown &&
                codec_probe(nullptr, 0) == CodecId::Unknown;
     }

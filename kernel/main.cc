@@ -19,6 +19,7 @@
 #include "kernel/boot/bootseq.h"
 #include "kernel/boot/bootsplash.h"
 #include "kernel/boot_info.hpp"
+#include "kernel/codecapps/archive/archive.h"
 #include "kernel/codecapps/audio/selftest.h"
 #include "kernel/codecapps/image/image.h"
 #include "kernel/codecapps/image/jpeg.h"
@@ -385,6 +386,9 @@ namespace {
         // ZText DEFLATE/zlib/gzip codec (issue #176) — prints the
         // ztext crc32/inflate/deflate/zlib/gzip/errors/big markers.
         report("ztext selftest=", hype::ztext::ztext_selftest());
+        // Archives + container decode (issue #180): prints zip/tar/gzip/avi
+        // markers and the `codec archive=` roll-up.
+        report("codec archive=", hype::codec::archive::archive_selftest());
     }
 
     void stage_memory() noexcept {

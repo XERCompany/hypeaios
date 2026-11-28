@@ -6,7 +6,7 @@
 
 namespace hype::codec {
 
-    enum class CodecKind : hcpp::u8 { Image, Audio, Container, Video };
+    enum class CodecKind : hcpp::u8 { Image, Audio, Container, Video, Archive };
 
     enum class CodecId : hcpp::u8 {
         Unknown,
@@ -44,6 +44,9 @@ namespace hype::codec {
         Avi,
         Ts,
         Mkv,
+        Zip,
+        Gzip,
+        Tar,
         Count
     };
 
