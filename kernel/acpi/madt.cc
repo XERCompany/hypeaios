@@ -53,6 +53,10 @@ namespace hype::acpi {
                 const auto* lapic = reinterpret_cast<const LocalApicEntry*>(header);
                 ++current.local_apic_count;
                 if ((lapic->flags & 1) != 0) ++current.enabled_cpu_count;
+                if (current.cpu_list_count < madt_max_cpus) {
+                    current.cpus[current.cpu_list_count++] = {lapic->acpi_processor_id, lapic->apic_id,
+                                                            (lapic->flags & 1) != 0};
+                }
             } else if (header->type == static_cast<hcpp::u8>(MadtEntryType::IoApic) &&
                        header->length >= sizeof(IoApicEntry)) {
                 const auto* ioapic = reinterpret_cast<const IoApicEntry*>(header);

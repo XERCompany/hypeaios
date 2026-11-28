@@ -4,6 +4,7 @@
 #include "kernel/acpi/apic.h"
 #include "kernel/acpi/madt.h"
 #include "kernel/arch/x86/apic.h"
+#include "kernel/arch/x86/smp.h"
 #include "kernel/core_services.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/klog.h"
@@ -64,6 +65,16 @@ namespace hype::runtime {
             current.ioapics = acpi::madt_info().ioapic_count;
             current.apic_supported = acpi::apic_info().cpuid_supported && acpi::apic_info().msr_enabled;
             current.apic_base = acpi::apic_info().apic_base;
+            return true;
+        }
+        bool smp_enter(void*) noexcept {
+            // Runs after interrupts.foundation (the LAPIC MMIO window
+            // carries the INIT-SIPI-SIPI IPIs) and after time.timer
+            // (uptime_ns backs the inter-IPI delays and the bounded
+            // started-flag wait). Never fails the boot: on a 1-CPU
+            // machine or with no live LAPIC it just prints
+            // "smp cpus=1" and returns false internally.
+            x86::smp_initialize();
             return true;
         }
         bool usb_enter(void*) noexcept {
@@ -128,6 +139,7 @@ namespace hype::runtime {
         RuntimeStage acpi_stage{"acpi.discover", 40, acpi_enter, nullptr, StageState::Pending};
         RuntimeStage interrupt_stage{"interrupts.foundation", 50, interrupt_enter, nullptr, StageState::Pending};
         RuntimeStage timer_stage{"time.timer", 55, timer_enter, nullptr, StageState::Pending};
+        RuntimeStage smp_stage{"smp.ap", 56, smp_enter, nullptr, StageState::Pending};
         RuntimeStage usb_stage{"usb.xhci", 57, usb_enter, nullptr, StageState::Pending};
         RuntimeStage context_stage{"sched.context", 60, context_enter, nullptr, StageState::Pending};
     }  // namespace
@@ -144,6 +156,7 @@ namespace hype::runtime {
         register_stage(acpi_stage);
         register_stage(interrupt_stage);
         register_stage(timer_stage);
+        register_stage(smp_stage);
         register_stage(usb_stage);
         register_stage(context_stage);
         current.stages_registered = stage_count;

@@ -2,6 +2,7 @@
 
 #include "kernel/arch/x86/apic.h"
 #include "kernel/arch/x86/cpu.h"
+#include "kernel/arch/x86/smp.h"
 #include "kernel/arch/x86/io.h"
 #include "kernel/functionemitkeys.h"
 #include "kernel/input/keyring.h"
@@ -35,7 +36,12 @@ namespace hype::interrupts {
             hcpp::u16 limit;
             hcpp::u64 base;
         } __attribute__((packed));
-        void timer_handler(void*, hcpp::u32) noexcept { ticks = ticks + 1; }
+        void timer_handler(void*, hcpp::u32) noexcept {
+            // Every online CPU's LAPIC timer lands on vector 32; the
+            // shared time base belongs to the BSP alone or it would
+            // run N-times fast on an N-CPU machine.
+            if (x86::smp_is_bsp()) ticks = ticks + 1;
+        }
         void keyboard_handler(void*, hcpp::u32) noexcept {
             const input::DecodedKey key = input::scancode_decode(hype_port_in8(0x60));
             if (key.valid)
@@ -84,9 +90,12 @@ namespace hype::interrupts {
     void idt_initialize() noexcept {
         for (auto& entry : vector_entries) entry = {};
         for (hcpp::size_t i = 0; i < 256; ++i) set_gate(i, reinterpret_cast<hcpp::uintptr_t>(isr_stub_table[i]));
+        idt_load();
+        initialized = true;
+    }
+    void idt_load() noexcept {
         const IdtPointer pointer{sizeof(entries) - 1, reinterpret_cast<hcpp::u64>(entries)};
         asm volatile("lidt %0" ::"m"(pointer));
-        initialized = true;
     }
     void pic_initialize() noexcept {
         hype_port_out8(0x20, 0x11);

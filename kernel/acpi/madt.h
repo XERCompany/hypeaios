@@ -28,6 +28,17 @@ namespace hype::acpi {
     };
 
     constexpr hcpp::size_t madt_max_isos = 16;
+    constexpr hcpp::size_t madt_max_cpus = 32;
+
+    // One MADT Processor Local APIC entry (type 0): ACPI processor uid,
+    // the LAPIC id INIT-SIPI-SIPI targets, and the enabled bit from the
+    // MADT flags field (bit 0). Entries are recorded even when disabled
+    // so firmware's full topology stays visible; `enabled` gates bring-up.
+    struct MadtCpu {
+        hcpp::u8 acpi_uid;
+        hcpp::u8 lapic_id;
+        bool enabled;
+    };
 
     struct MadtInfo {
         bool present;
@@ -39,6 +50,8 @@ namespace hype::acpi {
         hcpp::size_t interrupt_override_count;
         hcpp::uintptr_t first_ioapic_address;
         hcpp::uintptr_t effective_lapic_address;
+        MadtCpu cpus[madt_max_cpus];
+        hcpp::size_t cpu_list_count;
         MadtIso iso_overrides[madt_max_isos];
         hcpp::size_t iso_override_count;
     };

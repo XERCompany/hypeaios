@@ -13,6 +13,10 @@ namespace hype::interrupts {
     } __attribute__((packed));
     static_assert(sizeof(IdtEntry) == 16);
     void idt_initialize() noexcept;
+    // Loads IDTR on the calling CPU with the shared table built by
+    // idt_initialize(). APs must call it before enabling interrupts —
+    // IDTR is per-CPU and an AP starts with an unloaded one.
+    void idt_load() noexcept;
     void pic_initialize() noexcept;
     void pic_mask_all() noexcept;
     void pic_unmask(hcpp::u8 irq) noexcept;
