@@ -42,8 +42,8 @@ namespace hype::win {
         constexpr hcpp::i32 chrome_btn = 18;
         constexpr hcpp::i32 chrome_gap = 6;
         constexpr hcpp::i32 chrome_pad = 8;
-        // Caption-dot hit boxes: 22 px cells keep the macOS traffic
-        // light trio tight (~10 px dots, ~12 px pitch).
+        // Caption-button hit boxes: 22 px cells for the min/max/close
+        // trio at the right of the title strip.
         constexpr hcpp::i32 ctl_btn_w = 22;
         constexpr hcpp::i32 ctl_btn_h = 24;
         // Aero Snap zones: edge proximity 16 px, corner boxes 32 px.
@@ -500,44 +500,44 @@ namespace hype::win {
             }
         }
 
-        // Caption-dot kinds for paint_caption_dot.
+        // Caption-button kinds for paint_caption_btn.
         constexpr hcpp::u8 dot_min = 0;
         constexpr hcpp::u8 dot_max = 1;
         constexpr hcpp::u8 dot_close = 2;
 
-        // macOS-style caption dots (reskin v2): a traffic-light trio at
-        // the right of the strip — amber minimize, green maximize, red
-        // close — dimmed on unfocused windows, revealing a dark glyph
-        // on hover. Colors come straight from the destructive/warning/
-        // success tokens so both palettes work.
-        void paint_caption_dot(Canvas& canvas, const Rect& cell,
-                               hcpp::u32 rgb, hcpp::u8 kind, bool lit,
-                               bool hover, bool maximized) noexcept {
+        // HypeUI caption buttons (reskin v3): flat square cells at the
+        // right of the strip — at rest they are transparent with a muted
+        // glyph; on hover they fill (min/max -> muted, close ->
+        // destructive) and the glyph flips to the foreground tone.
+        void paint_caption_btn(Canvas& canvas, const Rect& cell,
+                               const Theme& theme, hcpp::u8 kind,
+                               bool focused, bool hover,
+                               bool maximized) noexcept {
             const hcpp::i32 cx = cell.x + cell.w / 2;
             const hcpp::i32 cy = cell.y + cell.h / 2;
-            const hcpp::u32 dot = canvas.color(
-                lit ? rgb : hype::ui::rui_shade(rgb, 0x60));
-            canvas.fill_circle(cx, cy, 5, dot);
-            if (!hover) {
-                return;
+            const bool danger = kind == dot_close;
+            if (hover) {
+                canvas.fill_rounded_rect(
+                    cell, static_cast<hcpp::i32>(theme.radius_xs),
+                    canvas.color(danger ? theme.destructive : theme.muted));
             }
-            // Hover reveal: a darker shade of the same hue reads as the
-            // engraved macOS glyph on the lit dot.
-            const hcpp::u32 mark =
-                canvas.color(hype::ui::rui_shade(rgb, 0xA0));
+            const hcpp::u32 mark = canvas.color(
+                hover ? (danger ? theme.accent_fg : theme.card_fg)
+                      : (focused ? theme.muted_fg
+                                 : hype::ui::rui_shade(theme.muted_fg, 0x60)));
             if (kind == dot_close) {
-                canvas.draw_line(cx - 3, cy - 3, cx + 3, cy + 3, mark);
-                canvas.draw_line(cx - 3, cy + 3, cx + 3, cy - 3, mark);
+                canvas.draw_line(cx - 4, cy - 4, cx + 4, cy + 4, mark);
+                canvas.draw_line(cx - 4, cy + 4, cx + 4, cy - 4, mark);
             } else if (kind == dot_max) {
                 if (maximized) {
                     // Restore: two overlapping squares.
-                    canvas.stroke_rect(Rect{cx - 1, cy - 4, 5, 5}, mark, 1);
-                    canvas.stroke_rect(Rect{cx - 4, cy - 1, 5, 5}, mark, 1);
+                    canvas.stroke_rect(Rect{cx - 1, cy - 4, 6, 6}, mark, 1);
+                    canvas.stroke_rect(Rect{cx - 5, cy - 1, 6, 6}, mark, 1);
                 } else {
-                    canvas.stroke_rect(Rect{cx - 3, cy - 3, 7, 7}, mark, 1);
+                    canvas.stroke_rect(Rect{cx - 4, cy - 4, 9, 9}, mark, 1);
                 }
             } else {
-                canvas.fill_rect(Rect{cx - 4, cy - 1, 9, 2}, mark);
+                canvas.fill_rect(Rect{cx - 5, cy + 2, 10, 2}, mark);
             }
         }
 
@@ -601,18 +601,16 @@ namespace hype::win {
                     glyph);
             }
 
-            // Caption dots: min (amber) / max (green) / close (red),
-            // matching the menu/right-side hit rects. Unfocused windows
-            // paint the dots dimmed.
-            paint_caption_dot(canvas, min_btn_rect(w), theme.warning,
-                              dot_min, focused, hot && hover_part == hot_min,
-                              false);
-            paint_caption_dot(canvas, max_btn_rect(w), theme.success,
-                              dot_max, focused, hot && hover_part == hot_max,
+            // Caption buttons: flat min / max / close cells matching the
+            // right-side hit rects. Unfocused windows get dimmer glyphs.
+            paint_caption_btn(canvas, min_btn_rect(w), theme, dot_min,
+                              focused, hot && hover_part == hot_min, false);
+            paint_caption_btn(canvas, max_btn_rect(w), theme, dot_max,
+                              focused, hot && hover_part == hot_max,
                               w.maximized);
-            paint_caption_dot(canvas, close_btn_rect(w), theme.destructive,
-                              dot_close, focused,
-                              hot && hover_part == hot_close, false);
+            paint_caption_btn(canvas, close_btn_rect(w), theme, dot_close,
+                              focused, hot && hover_part == hot_close,
+                              false);
 
             const hcpp::i32 title_x = strip.x + ui::ui_px(chrome_pad) + 12;
             const hcpp::i32 max_text =
