@@ -885,6 +885,11 @@ namespace hype::win {
             if (hype::ui::deskbar_clip_key(e.code)) {
                 return;
             }
+            // While the calendar flyout is up it takes Esc and the
+            // Left/Right month nav; every other key flows to the app.
+            if (hype::ui::deskbar_cal_key(e.code)) {
+                return;
+            }
             // Ctrl+C/X/V dispatch: the focused XAU window's WndProc
             // answers via XAU_MSG_COPY/CUT/PASTE (apps own what the
             // selection is; the wm only routes the chord).

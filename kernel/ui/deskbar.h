@@ -76,4 +76,16 @@ namespace hype::ui {
     // when the flyout is open and consumed the key.
     bool deskbar_clip_key(hcpp::u16 code) noexcept;
 
+    // Calendar + clock flyout (issue #132): the tray-clock cell toggles a
+    // bottom-right panel with a big HH:MM clock, the full date line and a
+    // navigable month grid (prev/next arrows, Monday-first columns,
+    // today accent-marked, ±120-month bound). An outside click or Esc
+    // closes it; prints "cal open=ok" / "cal nav=<y-m>".
+    bool deskbar_cal_open() noexcept;
+    void deskbar_close_cal() noexcept;
+    // Scancode handler from winman's key hook: Esc closes, Left/Right
+    // step the viewed month. Returns true only when the flyout is open
+    // and consumed the key.
+    bool deskbar_cal_key(hcpp::u16 code) noexcept;
+
 }
