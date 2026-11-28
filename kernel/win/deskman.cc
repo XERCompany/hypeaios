@@ -166,7 +166,7 @@ namespace hype::win {
             // same region it painted so no overlay pixels get stranded
             // in the surface.
             hype::ui::Rect dirty = clip;
-            if (wm_menu_visible() || wm_ctx_visible() ||
+            if (wm_overlay_open() ||
                 (dirty.empty() && first)) {
                 dirty = screen;
             }

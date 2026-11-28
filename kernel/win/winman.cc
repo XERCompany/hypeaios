@@ -12,13 +12,17 @@
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/clipboard.h"
 #include "kernel/ui/deskbar.h"
+#include "kernel/ui/focus.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/screenshot.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget.h"
+#include "kernel/ui/widgets/commandpalette.h"
+#include "kernel/ui/widgets/contextmenu.h"
 #include "kernel/win/deskicons.h"
+#include "kernel/win/deskman.h"
 
 namespace hype::win {
 
@@ -47,9 +51,6 @@ namespace hype::win {
         constexpr hcpp::i32 menu_item_h = 22;
         constexpr hcpp::i32 menu_pad = 4;
         constexpr hcpp::u32 menu_item_count = 3;
-        constexpr hcpp::i32 ctx_menu_width = 180;
-        constexpr hcpp::i32 ctx_item_h = 28;
-        constexpr hcpp::i32 ctx_sep_h = 9;
         constexpr hcpp::i32 cascade_w = 520;
         constexpr hcpp::i32 cascade_h = 340;
         constexpr hcpp::u32 cascade_wrap = 6;
@@ -63,6 +64,14 @@ namespace hype::win {
         constexpr hcpp::u16 key_tab = 15;
         constexpr hcpp::u16 key_ctrl = 29;
         constexpr hcpp::u16 key_alt = 56;
+        // Set-1 scancodes routed to the command palette while it owns
+        // the keyboard (widgets wave-2): Backspace edits the query,
+        // Up/Down move the selection, Enter commits.
+        constexpr hcpp::u16 key_backspace = 14;
+        constexpr hcpp::u16 key_enter = 28;
+        constexpr hcpp::u16 key_k = 37;      // Ctrl+K opens the palette
+        constexpr hcpp::u16 key_up = 72;
+        constexpr hcpp::u16 key_down = 80;
         // Set-1 scancodes used by the clipboard chords (Ctrl/Win both
         // decode to these codes, incl. the E0-prefixed right variants).
         constexpr hcpp::u16 key_x = 45;
@@ -95,12 +104,14 @@ namespace hype::win {
         hcpp::u32 menu_win = 0;
         Point menu_anchor{};
         Rect menu_screen{0, 0, 1024, 768};
-        WmCtxItem ctx_items[wm_ctx_max_items];
-        hcpp::u32 ctx_count = 0;
-        Point ctx_anchor{};
-        WmCtxPick ctx_pick = nullptr;
-        void* ctx_user = nullptr;
+        // Right-click menus ride the DropdownMenu-backed ContextMenu
+        // widget (widgets wave-2); ctx_active marks the overlay slot as
+        // owned by it.
+        hype::ui::ContextMenu ctx_menu;
         bool ctx_active = false;
+        // Command palette (Ctrl+K launcher) — shares the overlay slot.
+        hype::ui::CommandPalette palette;
+        bool palette_open = false;
         Rect damage{};
         bool damaged = false;
         bool damage_full = false;
@@ -378,103 +389,117 @@ namespace hype::win {
 
         WinMenu menu_widget;
 
-        hcpp::i32 ctx_row_h(const WmCtxItem& item) noexcept {
-            return (item.flags & wm_ctx_separator) != 0 ? ctx_sep_h
-                                                        : ctx_item_h;
+        // Command palette action ids — app entries carry their
+        // hxrt registry index, so action ids start above any real index.
+        constexpr hcpp::u32 palette_act_base = 0x8000;
+        constexpr hcpp::u32 palette_act_lock = palette_act_base + 0;
+        constexpr hcpp::u32 palette_act_power = palette_act_base + 1;
+        constexpr hcpp::u32 palette_act_desk = palette_act_base + 2;
+        constexpr hcpp::u32 palette_act_shot = palette_act_base + 3;
+
+        void palette_close() noexcept {
+            if (!palette_open) {
+                return;
+            }
+            palette_open = false;
+            overlays.close();
+            damage_full = true;
         }
 
-        Rect ctx_rect_now() noexcept {
-            hcpp::i32 h = menu_pad * 2;
-            for (hcpp::u32 i = 0; i < ctx_count; ++i) {
-                h += ctx_row_h(ctx_items[i]);
-            }
-            Rect r{ctx_anchor.x, ctx_anchor.y, ctx_menu_width, h};
-            if (r.right() > menu_screen.right() - 2) {
-                r.x = menu_screen.right() - 2 - r.w;
-            }
-            if (r.bottom() > menu_screen.bottom() - 2) {
-                r.y = menu_screen.bottom() - 2 - r.h;
-            }
-            if (r.x < menu_screen.x + 2) {
-                r.x = menu_screen.x + 2;
-            }
-            if (r.y < menu_screen.y + 2) {
-                r.y = menu_screen.y + 2;
-            }
-            return r;
-        }
-
-        // Returns the item index under `p`, including separator rows so
-        // callers can tell "inside the menu" from "outside".
-        hcpp::i32 ctx_item_at(Point p) noexcept {
-            const Rect r = ctx_rect_now();
-            if (!r.contains(p)) {
-                return -1;
-            }
-            hcpp::i32 row_y = r.y + menu_pad;
-            for (hcpp::u32 i = 0; i < ctx_count; ++i) {
-                const hcpp::i32 h = ctx_row_h(ctx_items[i]);
-                if (p.y >= row_y && p.y < row_y + h) {
-                    return static_cast<hcpp::i32>(i);
-                }
-                row_y += h;
-            }
-            return -1;
-        }
-
-        class CtxMenu : public hype::ui::Widget {
-        public:
-            Size measure(Size available) noexcept override {
-                (void)available;
-                return preferred_size();
-            }
-
-            void layout(const Rect& rect) noexcept override {
-                (void)rect;
-                set_bounds(ctx_rect_now());
-            }
-
-            void paint(Canvas& canvas) noexcept override {
-                const Rect box = bounds();
-                if (box.empty()) {
+        // Commits a palette pick: hxrt ids launch via desk_open_app,
+        // action ids dispatch real shell calls.
+        void palette_accept(hype::ui::CommandPalette&,
+                            hcpp::u32 id, void*) noexcept {
+            if (id < palette_act_base) {
+                const hxrt::HxerHeader* const* list =
+                    hxrt::hxrt_list();
+                if (id < hxrt::hxrt_count() && list[id] != nullptr) {
+                    serial::write("palette launch=");
+                    serial::write_line(list[id]->name);
+                    palette_close();
+                    desk_open_app(list[id]->name);
                     return;
                 }
-                const Theme& theme = hype::ui::theme_active();
-                hype::ui::rui_panel(canvas, box, hype::ui::rui_elev_panel);
-                const hcpp::i32 line = hype::font::hypefont_ready()
-                                           ? hype::font::text_line_height(13)
-                                           : 16;
-                hcpp::i32 row_y = box.y + menu_pad;
-                for (hcpp::u32 i = 0; i < ctx_count; ++i) {
-                    const WmCtxItem& item = ctx_items[i];
-                    const hcpp::i32 h = ctx_row_h(item);
-                    const Rect row{box.x + 1, row_y, box.w - 2, h};
-                    if ((item.flags & wm_ctx_separator) != 0) {
-                        canvas.fill_rect(
-                            Rect{row.x + 8, row.y + h / 2, row.w - 16, 1},
-                            canvas.color(theme.border));
-                    } else {
-                        canvas.fill_rect(
-                            row, canvas.color(hype::ui::rui_lift(
-                                     theme.card, hype::ui::rui_elev_panel)));
-                        hcpp::i32 top = row.y + (row.h - line) / 2;
-                        if (top < row.y) {
-                            top = row.y;
-                        }
-                        paint_label(
-                            canvas, row.x + 10, top,
-                            item.label != nullptr ? item.label : "",
-                            (item.flags & wm_ctx_disabled) != 0
-                                ? theme.muted_fg
-                                : theme.card_fg,
-                            13);
-                    }
-                    row_y += h;
+            } else {
+                serial::write("palette act=");
+                serial::write_dec32(id - palette_act_base);
+                serial::write("\r\n");
+                palette_close();
+                switch (id) {
+                    case palette_act_lock:
+                        hype::session::session_lock();
+                        break;
+                    case palette_act_power:
+                        hype::session::session_power_dialog();
+                        break;
+                    case palette_act_desk:
+                        vdesk_new();
+                        break;
+                    case palette_act_shot:
+                        hype::ui::screenshot_request(false);
+                        break;
+                    default:
+                        break;
+                }
+                return;
+            }
+            palette_close();
+        }
+
+        void palette_dismiss(hype::ui::CommandPalette&,
+                             void*) noexcept {
+            palette_close();
+        }
+
+        void palette_show() noexcept {
+            if (palette_open) {
+                palette_close();
+                return;
+            }
+            palette.clear_items();
+            const hxrt::HxerHeader* const* list = hxrt::hxrt_list();
+            const hcpp::u32 apps = hxrt::hxrt_count();
+            for (hcpp::u32 i = 0; i < apps; ++i) {
+                if (list[i] != nullptr && !hxrt::hxrt_is_system(i)) {
+                    palette.add_item({}, hcpp::StringView{list[i]->name},
+                                     "App", i);
                 }
             }
-        };
+            palette.add_item(">", "Lock screen", "Action",
+                             palette_act_lock);
+            palette.add_item(">", "Shut down", "Action",
+                             palette_act_power);
+            palette.add_item(">", "New desktop", "Action",
+                             palette_act_desk);
+            palette.add_item(">", "Take screenshot", "Action",
+                             palette_act_shot);
+            palette.reset();
+            palette.set_on_accept(&palette_accept, nullptr);
+            palette.set_on_dismiss(&palette_dismiss, nullptr);
+            // The palette shares the overlay slot: drop whatever held it.
+            if (overlays.is_open()) {
+                overlays.close();
+            }
+            menu_win = 0;
+            ctx_active = false;
+            ctx_menu.close();
+            if (overlays.open(&palette)) {
+                palette_open = true;
+                damage_full = true;
+                serial::write_line("palette open=1");
+            }
+        }
 
-        CtxMenu ctx_widget;
+        // The DropdownMenu inside ctx_menu closes itself on commit /
+        // outside-dismiss / Esc; when that happens the overlay slot must
+        // be released too.
+        void ctx_sync() noexcept {
+            if (ctx_active && !ctx_menu.is_open()) {
+                ctx_active = false;
+                overlays.close();
+                damage_full = true;
+            }
+        }
 
         void paint_chrome(Canvas& canvas, const Win& w) noexcept {
             const Theme& theme = hype::ui::theme_active();
@@ -903,6 +928,9 @@ namespace hype::win {
             if (switcher_open) {
                 alttab_close(false);
             }
+            if (palette_open) {
+                palette_close();
+            }
             if (wm_menu_visible()) {
                 wm_menu_close();
             }
@@ -977,6 +1005,32 @@ namespace hype::win {
                     pressed ? input::scancode_last_ascii() : '\0');
                 return;
             }
+            // The open command palette owns the keyboard too (widgets
+            // wave-2): scancodes map to the widget's key alphabet —
+            // printable chars feed the query, Backspace edits,
+            // Up/Down move the selection, Enter commits, Esc dismisses.
+            if (palette_open) {
+                if (!pressed) {
+                    return;
+                }
+                char key = '\0';
+                switch (e.code) {
+                    case key_escape: key = 27; break;
+                    case key_backspace: key = '\b'; break;
+                    case key_enter: key = '\n'; break;
+                    case key_up: key = hype::ui::keys::up; break;
+                    case key_down: key = hype::ui::keys::down; break;
+                    default:
+                        key = input::scancode_last_ascii();
+                        break;
+                }
+                overlays.handle_key(key);
+                if (!overlays.is_open()) {
+                    palette_open = false;
+                }
+                damage_full = true;
+                return;
+            }
             if (e.code == key_alt) {
                 if (!pressed && switcher_open) {
                     alttab_close(true);
@@ -1049,6 +1103,12 @@ namespace hype::win {
             // While the calendar flyout is up it takes Esc and the
             // Left/Right month nav; every other key flows to the app.
             if (hype::ui::deskbar_cal_key(e.code)) {
+                return;
+            }
+            // Ctrl+K toggles the command palette (widgets wave-2) —
+            // the keyboard launcher for apps and shell actions.
+            if (ctrl && !gui && e.code == key_k) {
+                palette_show();
                 return;
             }
             // Ctrl+C/X/V dispatch: the focused XAU window's WndProc
@@ -1466,7 +1526,8 @@ namespace hype::win {
         menu_anchor = {btn.x, btn.bottom() + 2};
         menu_win = id;
         ctx_active = false;
-        ctx_count = 0;
+        ctx_menu.close();
+        palette_open = false;
         menu_widget.set_preferred_size(
             Size{menu_width,
                  menu_pad * 2 +
@@ -1484,7 +1545,7 @@ namespace hype::win {
         overlays.close();
         menu_win = 0;
         ctx_active = false;
-        ctx_count = 0;
+        ctx_menu.close();
     }
 
     bool wm_menu_visible() noexcept {
@@ -1499,31 +1560,31 @@ namespace hype::win {
         if (count > wm_ctx_max_items) {
             count = wm_ctx_max_items;
         }
-        // Both menus share the single overlay slot: drop the window menu.
+        // Every shell menu shares the single overlay slot: drop whatever
+        // holds it now (window menu, context menu, command palette).
         if (overlays.is_open()) {
             overlays.close();
         }
         menu_win = 0;
+        palette_open = false;
+        // WmCtxItem -> ContextMenu::Item translation; the flag bits are
+        // identical (separator=1, disabled=2) so values pass through.
+        hype::ui::ContextMenu::Item rows[wm_ctx_max_items];
         for (hcpp::u32 i = 0; i < count; ++i) {
-            ctx_items[i] = items[i];
+            rows[i] = {items[i].label, items[i].id, items[i].flags};
         }
-        ctx_count = count;
-        ctx_anchor = {x, y};
-        ctx_pick = pick;
-        ctx_user = user;
-        hcpp::i32 h = menu_pad * 2;
-        for (hcpp::u32 i = 0; i < ctx_count; ++i) {
-            h += ctx_row_h(ctx_items[i]);
+        ctx_menu.set_screen(menu_screen);
+        if (!ctx_menu.open_at(Point{x, y}, rows, count, pick, user)) {
+            return false;
         }
-        ctx_widget.set_preferred_size(Size{ctx_menu_width, h});
-        if (!overlays.open(&ctx_widget)) {
-            ctx_count = 0;
+        if (!overlays.open(&ctx_menu)) {
+            ctx_menu.close();
             return false;
         }
         ctx_active = true;
         damage_full = true;
         serial::write("ctx menu=open items=");
-        serial::write_dec32(ctx_count);
+        serial::write_dec32(count);
         serial::write("\r\n");
         return true;
     }
@@ -1533,16 +1594,16 @@ namespace hype::win {
             return;
         }
         damage_full = true;
+        ctx_menu.close();
         overlays.close();
         ctx_active = false;
-        ctx_count = 0;
-        ctx_pick = nullptr;
-        ctx_user = nullptr;
     }
 
     bool wm_ctx_visible() noexcept {
         return ctx_active && overlays.is_open();
     }
+
+    bool wm_overlay_open() noexcept { return overlays.is_open(); }
 
     bool wm_handle_mouse(hcpp::i32 x, hcpp::i32 y, bool pressed) noexcept {
         if (!pressed) {
@@ -1568,23 +1629,23 @@ namespace hype::win {
             return false;
         }
         const Point p{x, y};
-        if (wm_ctx_visible()) {
-            const hcpp::i32 item = ctx_item_at(p);
-            if (item >= 0) {
-                const WmCtxItem it = ctx_items[item];
-                if ((it.flags &
-                     (wm_ctx_separator | wm_ctx_disabled)) == 0 &&
-                    ctx_pick != nullptr) {
-                    const hcpp::u32 id = it.id;
-                    WmCtxPick pick = ctx_pick;
-                    void* user = ctx_user;
-                    wm_ctx_close();
-                    pick(id, user);
-                }
-                // Separator/disabled rows keep the menu open.
-                return true;
+        if (palette_open) {
+            // Press-to-commit parity with the menus: Down arms a row,
+            // Up commits it; a press outside asks the widget to dismiss.
+            palette.handle_mouse(p, hype::ui::PaletteMouse::Down);
+            if (palette_open) {
+                palette.handle_mouse(p, hype::ui::PaletteMouse::Up);
             }
-            wm_ctx_close();
+            damage_full = true;
+            return true;
+        }
+        if (wm_ctx_visible()) {
+            // Same press-to-commit parity the bespoke ctx menu had.
+            ctx_menu.handle_mouse(p, hype::ui::MenuMouse::Down);
+            if (ctx_menu.is_open()) {
+                ctx_menu.handle_mouse(p, hype::ui::MenuMouse::Up);
+            }
+            ctx_sync();
             return true;
         }
         if (wm_menu_visible()) {
@@ -1661,6 +1722,10 @@ namespace hype::win {
 
     bool wm_handle_mouse_r(hcpp::i32 x, hcpp::i32 y) noexcept {
         const Point p{x, y};
+        if (palette_open) {
+            palette_close();
+            return true;
+        }
         if (wm_ctx_visible()) {
             wm_ctx_close();
             return true;
@@ -1707,6 +1772,15 @@ namespace hype::win {
 
     bool wm_handle_move(hcpp::i32 x, hcpp::i32 y) noexcept {
         bool used = false;
+        // Hover tracking for the open menus: moves the highlight (full
+        // repaint is already guaranteed while an overlay is up).
+        if (palette_open) {
+            palette.handle_mouse({x, y}, hype::ui::PaletteMouse::Move);
+            used = true;
+        } else if (wm_ctx_visible()) {
+            ctx_menu.handle_mouse({x, y}, hype::ui::MenuMouse::Move);
+            used = true;
+        }
         if (drag_win != 0) {
             Win* w = slot_for(drag_win);
             if (w == nullptr || w->state == WinState::Minimized) {
@@ -1813,8 +1887,11 @@ namespace hype::win {
             if (!overlays.is_open()) {
                 damage_full = true;
                 menu_win = 0;
+                palette_open = false;
                 ctx_active = false;
-                ctx_count = 0;
+                ctx_menu.close();
+            } else {
+                ctx_sync();
             }
             return consumed;
         }
@@ -2030,6 +2107,9 @@ namespace hype::win {
         persist_desk_count();
         if (switcher_open) {
             alttab_close(false);
+        }
+        if (palette_open) {
+            palette_close();
         }
         if (wm_menu_visible()) {
             wm_menu_close();

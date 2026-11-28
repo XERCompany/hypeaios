@@ -16,6 +16,8 @@
 #include "kernel/ui/widgets/badge.h"
 #include "kernel/ui/widgets/chart.h"
 #include "kernel/ui/widgets/checkbox.h"
+#include "kernel/ui/widgets/commandpalette.h"
+#include "kernel/ui/widgets/contextmenu.h"
 #include "kernel/ui/widgets/dialog.h"
 #include "kernel/ui/widgets/dropdownmenu.h"
 #include "kernel/ui/widgets/empty.h"
@@ -25,10 +27,13 @@
 #include "kernel/ui/widgets/label.h"
 #include "kernel/ui/widgets/listbox.h"
 #include "kernel/ui/widgets/marquee.h"
+#include "kernel/ui/widgets/menubar.h"
 #include "kernel/ui/widgets/numticker.h"
 #include "kernel/ui/widgets/panel.h"
 #include "kernel/ui/widgets/progress.h"
 #include "kernel/ui/widgets/radiogroup.h"
+#include "kernel/ui/widgets/scrollarea.h"
+#include "kernel/ui/widgets/select.h"
 #include "kernel/ui/widgets/separator.h"
 #include "kernel/ui/widgets/skeleton.h"
 #include "kernel/ui/widgets/slider.h"
@@ -74,6 +79,66 @@ namespace hype::ui {
                 *slot = index;
             }
             (void)menu;
+        }
+
+        void wave2_palette_accept(CommandPalette& palette, hcpp::u32 id,
+                                  void* context) noexcept {
+            hcpp::u32* slot = static_cast<hcpp::u32*>(context);
+            if (slot != nullptr) {
+                *slot = id;
+            }
+            (void)palette;
+        }
+
+        void wave2_palette_dismiss(CommandPalette& palette,
+                                   void* context) noexcept {
+            bool* flag = static_cast<bool*>(context);
+            if (flag != nullptr) {
+                *flag = true;
+            }
+            (void)palette;
+        }
+
+        void wave2_ctx_pick(hcpp::u32 id, void* user) noexcept {
+            hcpp::u32* slot = static_cast<hcpp::u32*>(user);
+            if (slot != nullptr) {
+                *slot = id;
+            }
+        }
+
+        void wave2_select_change(Select& select, hcpp::size_t index,
+                                 void* context) noexcept {
+            hcpp::size_t* slot = static_cast<hcpp::size_t*>(context);
+            if (slot != nullptr) {
+                *slot = index;
+            }
+            (void)select;
+        }
+
+        void wave2_menubar_fill(MenuBar& bar, hcpp::size_t menu,
+                                DropdownMenu& content,
+                                void* context) noexcept {
+            (void)bar;
+            (void)context;
+            if (menu == 0) {
+                content.add_item("New");
+                content.add_item("Open");
+                content.add_separator();
+                content.add_item("Quit");
+            } else {
+                content.add_item("Undo");
+                content.add_item("Redo");
+            }
+        }
+
+        void wave2_menubar_select(MenuBar& bar, hcpp::size_t menu,
+                                  hcpp::size_t item,
+                                  void* context) noexcept {
+            hcpp::u32* packed = static_cast<hcpp::u32*>(context);
+            if (packed != nullptr) {
+                *packed = static_cast<hcpp::u32>(menu * 100 + item);
+            }
+            (void)bar;
         }
 
     }  // namespace
@@ -1419,6 +1484,293 @@ namespace hype::ui {
         serial::write("\r\n");
         ok = ok && slider_paint_ok && input_ok;
         serial::write_line(ok ? "widgets w1=ok" : "widgets w1=fail");
+        return ok;
+    }
+
+    // Widgets wave-2 showcase (issue #178 follow-up): CommandPalette,
+    // ContextMenu, Select, MenuBar, ScrollArea — paint/scroll/state
+    // asserts for each, serial marker "widgets w2=ok".
+    bool wave2_selftest() noexcept {
+        static hcpp::u8 pixels[320 * 240 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 320, 240, 320 * 4, 32, 8,
+                                           16, 8, 8, 8, 0);
+        if (!target.valid()) {
+            return false;
+        }
+        Canvas canvas(target);
+        const Theme& theme = theme_active();
+        const Rect screen{0, 0, 320, 240};
+        const hcpp::u32 bg = canvas.color(theme.bg);
+        const hcpp::u32 c_card = canvas.color(theme.card);
+        const hcpp::u32 c_elev = canvas.color(hui::colors().surface_elev);
+        const hcpp::u32 c_muted = canvas.color(theme.muted);
+        bool ok = true;
+
+        // --- CommandPalette: build, fuzzy rank, keys, accept, paint ---
+        static CommandPalette palette;
+        static hcpp::u32 palette_pick = 0;
+        static bool palette_dismissed = false;
+        palette.clear_items();
+        palette.set_on_accept(&wave2_palette_accept, &palette_pick);
+        palette.set_on_dismiss(&wave2_palette_dismiss, &palette_dismissed);
+        bool pal_ok =
+            palette.add_item({}, "HxFiles", "App", 0) &&
+            palette.add_item({}, "HxSettings", "App", 1) &&
+            palette.add_item(">", "Lock screen", "Action", 10) &&
+            palette.add_item(">", "Take screenshot", "Action", 11) &&
+            palette.item_count() == 4;
+        palette.reset();
+        pal_ok = pal_ok && palette.result_count() == 4 &&
+                 palette.query_length() == 0 && palette.selected() == 0;
+        // Fuzzy: subsequence, no-match, consecutive-runs outrank sparse.
+        const bool pal_fuzzy_ok =
+            CommandPalette::fuzzy_score("hx", "HxFiles") > 0 &&
+            CommandPalette::fuzzy_score("zzz", "HxFiles") < 0 &&
+            CommandPalette::fuzzy_score("ls", "Lock screen") > 0 &&
+            CommandPalette::fuzzy_score("hxf", "HxFiles") >
+                CommandPalette::fuzzy_score("hls", "HxFiles");
+        // Type "lo" -> only "Lock screen" survives the filter.
+        palette.handle_key('l');
+        palette.handle_key('o');
+        pal_ok = pal_ok && palette.query_length() == 2 &&
+                 palette.result_count() == 1 &&
+                 palette.result_item(0).id == 10;
+        palette.handle_key('\b');
+        palette.handle_key('\b');
+        pal_ok = pal_ok && palette.result_count() == 4;
+        // Down -> row 1, Enter commits that row's id.
+        palette_pick = 0xFFFF;
+        const bool pal_key_ok =
+            palette.handle_key(keys::down) && palette.selected() == 1 &&
+            palette.handle_key(keys::enter) && palette_pick == 1;
+        // Sorted order is app-registration order at empty query.
+        const bool pal_paint_ready = pal_ok && pal_fuzzy_ok && pal_key_ok;
+
+        const Size pal_size = palette.measure({320, 240});
+        palette.layout(Rect{0, 30, pal_size.width, pal_size.height});
+        canvas.fill_rect(screen, bg);
+        palette.paint(canvas);
+        const Rect field = palette.input_rect();
+        const bool pal_paint_ok =
+            pal_paint_ready &&
+            target.get_pixel(static_cast<hcpp::u32>(palette.bounds().x +
+                                                    palette.bounds().w / 2),
+                             static_cast<hcpp::u32>(palette.bounds().y + 2)) ==
+                c_elev &&
+            target.get_pixel(static_cast<hcpp::u32>(field.right() - 8),
+                             static_cast<hcpp::u32>(field.y +
+                                                    field.h / 2)) ==
+                canvas.color(theme.surface_sunk);
+        // Outside-press asks for dismissal.
+        palette_dismissed = false;
+        const bool pal_dismiss_ok =
+            palette.handle_mouse(Point{5, 5}, PaletteMouse::Down) &&
+            palette_dismissed;
+        if (!pal_paint_ok || !pal_dismiss_ok) {
+            ok = false;
+        }
+        serial::write("w2 palette=");
+        serial::write_dec32(pal_paint_ok && pal_dismiss_ok ? 1 : 0);
+        serial::write("\r\n");
+
+        // --- ContextMenu: DropdownMenu-backed, picks ids, dismiss ---
+        static ContextMenu ctx;
+        static hcpp::u32 ctx_pick = 0;
+        ctx.set_screen(screen);
+        const ContextMenu::Item ctx_items[] = {
+            {"Open", 1, 0},
+            {nullptr, 0, menu_f_separator},
+            {"Rename", 2, menu_f_disabled},
+            {"Delete", 3, menu_f_destructive},
+        };
+        bool ctx_ok =
+            ctx.open_at(Point{20, 60}, ctx_items, 4, &wave2_ctx_pick,
+                        &ctx_pick) &&
+            ctx.is_open() && ctx.menu_rect().x == 20 &&
+            ctx.menu_rect().y == 60 && ctx.menu().item_count() == 4 &&
+            ctx.highlighted() == 0;
+        // Down skips separator+disabled -> row 3; Enter picks id 3.
+        ctx_pick = 0;
+        ctx_ok = ctx_ok && ctx.handle_key(keys::down) &&
+                 ctx.highlighted() == 3 &&
+                 ctx.handle_key(keys::enter) && !ctx.is_open() &&
+                 ctx_pick == 3;
+        // Re-open for paint + outside-dismiss probes.
+        ctx.open_at(Point{20, 60}, ctx_items, 4, &wave2_ctx_pick,
+                    &ctx_pick);
+        ctx.layout(Rect{});
+        canvas.fill_rect(screen, bg);
+        ctx.paint(canvas);
+        const Rect cr = ctx.menu_rect();
+        const bool ctx_paint_ok =
+            target.get_pixel(static_cast<hcpp::u32>(cr.x + cr.w / 2),
+                             static_cast<hcpp::u32>(cr.y + 3)) == c_card;
+        const bool ctx_outside_ok =
+            ctx.handle_mouse(Point{300, 230}, MenuMouse::Down) &&
+            !ctx.is_open();
+        if (!ctx_ok || !ctx_paint_ok || !ctx_outside_ok) {
+            ok = false;
+        }
+        serial::write("w2 ctxmenu=");
+        serial::write_dec32((ctx_ok && ctx_paint_ok && ctx_outside_ok)
+                                ? 1
+                                : 0);
+        serial::write("\r\n");
+
+        // --- Select: closed trigger, popup opens, commit sets value ---
+        static Select select{"Theme"};
+        static hcpp::size_t select_changed = Select::no_selection;
+        select.clear_options();
+        select.set_on_change(&wave2_select_change, &select_changed);
+        select.set_screen(screen);
+        bool sel_ok = select.add_option("Dark") &&
+                      select.add_option("Light") &&
+                      select.option_count() == 2 &&
+                      select.selected() == Select::no_selection &&
+                      select.value().size() == 5;  // "Theme" placeholder
+        select.layout(Rect{10, 100, 120, Select::trigger_height});
+        canvas.fill_rect(screen, bg);
+        select.paint(canvas);
+        const bool sel_closed_ok =
+            target.get_pixel(15, 110) == canvas.color(theme.secondary) &&
+            !select.is_open();
+        // Press-release on the trigger opens the popup.
+        sel_ok = sel_ok &&
+                 select.handle_mouse(Point{20, 110}, SelectMouse::Down) &&
+                 select.handle_mouse(Point{20, 110}, SelectMouse::Up) &&
+                 select.is_open() &&
+                 select.popup_rect().y == 100 + Select::trigger_height;
+        // Down -> row 1 ("Light"), Enter commits + closes.
+        select_changed = Select::no_selection;
+        sel_ok = sel_ok && select.on_key(keys::down) &&
+                 select.on_key(keys::enter) && !select.is_open() &&
+                 select.selected() == 1 && select_changed == 1 &&
+                 select.value().size() == 5 && select.value()[0] == 'L' &&
+                 select.value()[1] == 'i';
+        // Paint the committed state: trigger shows the value.
+        canvas.fill_rect(screen, bg);
+        select.paint(canvas);
+        const bool sel_paint_ok =
+            target.get_pixel(15, 110) == canvas.color(theme.secondary);
+        if (!sel_ok || !sel_closed_ok || !sel_paint_ok) {
+            ok = false;
+        }
+        serial::write("w2 select=");
+        serial::write_dec32((sel_ok && sel_closed_ok && sel_paint_ok)
+                                ? 1
+                                : 0);
+        serial::write("\r\n");
+
+        // --- MenuBar: titles, open via click, switch, pick ---
+        static MenuBar bar;
+        static hcpp::u32 bar_pick = 0;
+        bar.clear_menus();
+        bar.set_on_menu(&wave2_menubar_fill, nullptr);
+        bar.set_on_select(&wave2_menubar_select, &bar_pick);
+        bar.set_screen(screen);
+        bool bar_ok = bar.add_menu("File") && bar.add_menu("Edit") &&
+                      bar.menu_count() == 2;
+        bar.layout(Rect{0, 0, 200, MenuBar::bar_height});
+        const Rect file_title = bar.title_rect(0);
+        bar_ok = bar_ok && !file_title.empty() &&
+                 bar.title_at({file_title.x + 2, file_title.y + 2}) == 0;
+        // Press on "File" opens its popup anchored under the title.
+        bar_ok = bar_ok &&
+                 bar.handle_mouse(Point{file_title.x + 4, file_title.y + 4},
+                                  MenuMouse::Down) &&
+                 bar.is_open() && bar.open_menu_index() == 0 &&
+                 bar.popup_rect().y == file_title.bottom();
+        // Right switches to "Edit"; Enter commits item 0 of menu 1.
+        bar_pick = 0;
+        bar_ok = bar_ok && bar.handle_key(keys::right) &&
+                 bar.open_menu_index() == 1 &&
+                 bar.handle_key(keys::enter) && !bar.is_open() &&
+                 bar_pick == 100;
+        // Reopen + paint probes: card bar, highlighted title wash.
+        bar.open_menu(0);
+        canvas.fill_rect(screen, bg);
+        bar.paint(canvas);
+        const bool bar_paint_ok =
+            target.get_pixel(file_title.x + file_title.w / 2,
+                             file_title.y) == c_card &&
+            target.get_pixel(file_title.x + 4, file_title.y + 15) ==
+                canvas.color(theme.secondary);
+        const bool bar_close_ok =
+            bar.handle_key(27) && !bar.is_open();
+        if (!bar_ok || !bar_paint_ok || !bar_close_ok) {
+            ok = false;
+        }
+        serial::write("w2 menubar=");
+        serial::write_dec32((bar_ok && bar_paint_ok && bar_close_ok)
+                                ? 1
+                                : 0);
+        serial::write("\r\n");
+
+        // --- ScrollArea: clip, thumb geometry, wheel/key/drag scroll ---
+        static ScrollArea area;
+        static Box content(Size{60, 200}, 0x336699);
+        area.set_content(&content);
+        area.layout(Rect{200, 60, 80, 60});
+        bool sc_ok = area.scrollable() && area.max_scroll() == 140 &&
+                     area.scroll() == 0 &&
+                     area.content()->bounds().y == 60;
+        const Rect thumb0 = area.thumb_rect();
+        sc_ok = sc_ok && !thumb0.empty() && thumb0.h == 24 &&
+                thumb0.w == ScrollArea::bar_width - 4;
+        // Wheel/key scroll clamps and relayouts the content.
+        sc_ok = sc_ok && area.scroll_by(50) && area.scroll() == 50 &&
+                area.content()->bounds().y == 10 &&
+                area.scroll_by(200) && area.scroll() == 140 &&
+                !area.scroll_by(10) &&
+                area.content()->bounds().y == -80;
+        sc_ok = sc_ok && area.handle_key(keys::up) &&
+                area.scroll() == 140 - ScrollArea::scroll_step;
+        // Thumb drag: grab then move down 10 track px.
+        area.layout(Rect{200, 60, 80, 60});
+        const hcpp::i32 scroll_before = area.scroll();
+        const Rect thumb = area.thumb_rect();
+        const bool drag_ok =
+            area.handle_mouse(Point{thumb.x + 2, thumb.y + 4},
+                              ScrollMouse::Down) &&
+            area.grabbed() &&
+            area.handle_mouse(Point{thumb.x + 2, thumb.y + 14},
+                              ScrollMouse::Move) &&
+            area.scroll() > scroll_before &&
+            area.handle_mouse(Point{thumb.x + 2, thumb.y + 14},
+                              ScrollMouse::Up) &&
+            !area.grabbed();
+        // Paint: rail hairline + thumb pixels inside the track.
+        canvas.fill_rect(screen, bg);
+        area.paint(canvas);
+        const Rect rail = area.track_rect();
+        const Rect th = area.thumb_rect();
+        const bool sc_paint_ok =
+            target.get_pixel(static_cast<hcpp::u32>(rail.x),
+                             static_cast<hcpp::u32>(rail.y + 10)) ==
+                canvas.color(theme.border) &&
+            target.get_pixel(static_cast<hcpp::u32>(th.x + th.w / 2),
+                             static_cast<hcpp::u32>(th.y + th.h / 2)) ==
+                c_muted;
+        // Clip: content paints inside the viewport but never outside
+        // the area bounds.
+        area.layout(Rect{200, 60, 80, 60});
+        canvas.fill_rect(screen, bg);
+        area.paint_tree(canvas);
+        const bool sc_clip_ok =
+            target.get_pixel(205, 65) ==
+                canvas.color(content.fill_rgb()) &&
+            target.get_pixel(205, 118) ==
+                canvas.color(content.fill_rgb()) &&
+            target.get_pixel(205, 121) == bg;
+        if (!sc_ok || !drag_ok || !sc_paint_ok || !sc_clip_ok) {
+            ok = false;
+        }
+        serial::write("w2 scroll=");
+        serial::write_dec32(
+            (sc_ok && drag_ok && sc_paint_ok && sc_clip_ok) ? 1 : 0);
+        serial::write("\r\n");
+
+        serial::write_line(ok ? "widgets w2=ok" : "widgets w2=fail");
         return ok;
     }
 
