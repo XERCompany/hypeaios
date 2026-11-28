@@ -50,8 +50,14 @@
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/klog.h"
+#include "kernel/log/logger.h"
+#include "kernel/log/logger-dummy.h"
+#include "kernel/log/loggeru16550.h"
+#include "kernel/log/lmpu401.h"
+#include "kernel/log/lmpu401-trace.h"
 #include "kernel/net/net.h"
 #include "kernel/panic.h"
+#include "kernel/runner/runnervx.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
 #include "kernel/session/session.h"
@@ -789,6 +795,34 @@ namespace {
         hype::gdxf::gdxf_selftest();
     }
 
+    void stage_loggers() noexcept {
+        // Logging sinks (issue #115): the u16550 sink reuses the live
+        // COM1 port and adds "T+<ms>ms" uptime stamps; the dummy sink is
+        // the always-on fallback so log_write() never drops.
+        hype::log::logger_u16550_init(serial::COM1);
+        hype::log::logger_add_sink(hype::log::logger_u16550_sink());
+        hype::log::logger_add_sink(hype::log::logger_dummy_sink());
+        serial::write("logger sinks=");
+        serial::write_dec32(
+            static_cast<hcpp::u32>(hype::log::logger_sink_count()));
+        serial::write("\r\n");
+        hype::log::log_write("logger core online");
+        // MPU-401 UART MIDI port (0x330/0x331): prints
+        // "mpu401 dev=ok port=0x330" or "mpu401 dev=absent".
+        hype::midi::lmpu401_init();
+        report("mpu401 trace selftest=", hype::midi::lmpu401_trace_selftest());
+        // RunnerVX v-executor: job/command runner pumped from the idle
+        // loop next to net_poll().
+        serial::write("runnervx core=");
+        serial::write_line(hype::vx::runnervx_init() ? "ok" : "fail");
+        const bool vx_ok = hype::vx::runnervx_selftest();
+        serial::write("runnervx pump=");
+        serial::write(vx_ok ? "ok" : "fail");
+        serial::write(" cmds=");
+        serial::write_dec32(hype::vx::runnervx_stats().executed);
+        serial::write("\r\n");
+    }
+
     void stage_net() noexcept {
         // Probe is graceful: prints "virtio-net dev=absent" and returns
         // without touching PMM queues or DHCP when no NIC is present.
@@ -875,11 +909,12 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"hxrt", 92, stage_hxrt},
         {"ui", 95, stage_ui},
         {"input", 96, stage_input},
+        {"vx", 97, stage_loggers},
         {"net", 97, stage_net},
         {"svc", 98, stage_svc},
         {"gdxf", 99, stage_gdxf},
     };
-    hype::boot::bootseq_run(boot_steps, 12);
+    hype::boot::bootseq_run(boot_steps, 13);
 
     // XDP render manager (issue #108): probe the backend ladder
     // (software -> virtio-gpu -> bare Vulkan/OpenCL-class GPUs), bind
@@ -1044,6 +1079,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         }
         hype::audio::hasio_pump_active();
         hype::net::net_poll();
+        // RunnerVX: execute queued commands posted by drivers/services
+        // since the last idle pass.
+        hype::vx::runnervx_pump();
+        hype::midi::lmpu401_poll();
         // FireWire idle path: drain the iso receive ring into the AMDTP
         // codec + capture ring, and lazily register it with pullmix once
         // the mixer is up (same contract as the mp3 source above).
