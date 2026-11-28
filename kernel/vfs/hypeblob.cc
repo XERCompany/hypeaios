@@ -2,6 +2,7 @@
 
 #include "hcpp/memory.hpp"
 #include "kernel/ata.h"
+#include "kernel/block/blockdev.h"
 #include "kernel/vfs/hypefs.h"
 
 namespace {
@@ -88,8 +89,7 @@ namespace {
         while (remaining != 0) {
             const hcpp::u32 count =
                 remaining < read_chunk ? remaining : read_chunk;
-            if (!hype::ata::ata_pio_read(static_cast<hcpp::u32>(lba), out,
-                                        static_cast<hcpp::u8>(count))) {
+            if (!hype::block::block_read(lba, out, count)) {
                 return false;
             }
             lba += count;
@@ -107,9 +107,7 @@ namespace {
         while (remaining != 0) {
             const hcpp::u32 count =
                 remaining < write_chunk ? remaining : write_chunk;
-            if (!hype::ata::ata_write_sectors(static_cast<hcpp::u32>(lba),
-                                              data,
-                                              static_cast<hcpp::u8>(count))) {
+            if (!hype::block::block_write(lba, data, count)) {
                 return false;
             }
             lba += count;
@@ -127,8 +125,7 @@ namespace {
             hype::vfs::hypeblob_data_lba + offset / sector_size;
         const hcpp::u32 sectors = bytes / sector_size;
         for (hcpp::u32 s = 0; s < sectors; ++s) {
-            if (!hype::ata::ata_pio_read(static_cast<hcpp::u32>(lba + s),
-                                         verify_buf, 1)) {
+            if (!hype::block::block_read(lba + s, verify_buf, 1)) {
                 return false;
             }
             if (hcpp::compare(verify_buf, data + s * sector_size,
@@ -247,14 +244,14 @@ namespace hype::vfs {
 
     BlobMount hypeblob_mount() noexcept {
         BlobMount out{};
-        out.ata_ok = hype::ata::ata_present();
+        out.ata_ok = hype::block::block_present();
         if (!out.ata_ok) return out;
 
         // Logs "ata model=... sectors=N"; informational only.
         hype::ata::AtaInfo ident{};
-        hype::ata::ata_identify(ident);
+        hype::block::block_identify(ident);
 
-        if (!hype::ata::ata_pio_read(hypeblob_data_lba, header_buf, 1)) {
+        if (!hype::block::block_read(hypeblob_data_lba, header_buf, 1)) {
             return out;
         }
         out.lba_ok = true;
@@ -272,9 +269,9 @@ namespace hype::vfs {
         // rewrite: enable hypeblob_sync() from here on.
         blob_mounted = true;
         if (header_sectors > 1 &&
-            !hype::ata::ata_pio_read(hypeblob_data_lba + 1,
+            !hype::block::block_read(hypeblob_data_lba + 1,
                                      header_buf + sector_size,
-                                     static_cast<hcpp::u8>(header_sectors - 1))) {
+                                     header_sectors - 1)) {
             return out;
         }
 
@@ -303,7 +300,7 @@ namespace hype::vfs {
         // Guard: never write before a valid on-disk blob has been seen, so
         // boot-time fs_write()s (hxer installs, seeds) cannot clobber the
         // region before mount.
-        if (!blob_mounted || !hype::ata::ata_present()) return false;
+        if (!blob_mounted || !hype::block::block_present()) return false;
 
         // Collect persistable files. U:* -> "u/<path>", T:* -> "t/<path>",
         // S:/data subtree -> "<path>" (the mount routing's inverse). Other
@@ -379,7 +376,7 @@ namespace hype::vfs {
                  verify_sectors(0, header_buf,
                                 header_sectors * sector_size);
         }
-        if (!hype::ata::ata_flush_cache()) ok = false;
+        if (!hype::block::block_flush()) ok = false;
         return ok;
     }
 

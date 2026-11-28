@@ -15,6 +15,7 @@
 #include "kernel/audio/audioes1370.h"
 #include "kernel/audio/hasio.h"
 #include "kernel/audio/pullmix.h"
+#include "kernel/block/blockdev.h"
 #include "kernel/boot/bootseq.h"
 #include "kernel/boot/bootsplash.h"
 #include "kernel/boot_info.hpp"
@@ -490,6 +491,11 @@ namespace {
         serial::write("vfs hxer=");
         serial::write_dec32(hxer_files);
         serial::write("\r\n");
+        // AHCI/SATA probe (needs PCI + PMM from earlier stages). On a
+        // live disk the "ahci dev=ok ports=N"/"ahci rw=ok" markers
+        // print and all blob I/O below routes through DMA; absent keeps
+        // the ATA PIO path.
+        hype::block::block_initialize();
         const hype::vfs::BlobMount blob = hype::vfs::hypeblob_mount();
         serial::write("blob ata=");
         serial::write_line(blob.ata_ok ? "ok" : "fail");

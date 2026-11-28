@@ -16,7 +16,8 @@ namespace hype::vfs {
         hcpp::u64 bytes;
     };
 
-    // Reads the HYPEDATA region via ATA PIO and mounts every entry as a
+    // Reads the HYPEDATA region through the block layer (AHCI DMA when a
+    // SATA disk is live, ATA PIO otherwise) and mounts every entry as a
     // memfs file. Entries named "<disk>/<path>" ("u", "s" or "t") mount at
     // "HYPEOS://<DISK>/<path>"; all others mount under HYPEOS://S/data/.
     BlobMount hypeblob_mount() noexcept;
