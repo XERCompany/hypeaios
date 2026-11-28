@@ -70,6 +70,7 @@
 #include "kernel/runtime/runtime.h"
 #include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
+#include "kernel/session/idlelock.h"
 #include "kernel/session/session.h"
 #include "kernel/svc/revsvc.h"
 #include "kernel/time/rtc.h"
@@ -1188,6 +1189,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         // Settings save debounce (issue #130): a settings change that
         // landed inside the 500 ms window flushes hype.cfg from here.
         hype::cfg::settings_pump();
+        // Idle-timeout auto-lock (issue #134): drops the lock veil once
+        // ui.lock_timeout_min minutes pass without real input activity;
+        // no-op while logged out, already locked or disabled (=0).
+        hype::session::idle_lock_pump();
         hype::interrupts::pit_wait_ticks(1);
     }
 }

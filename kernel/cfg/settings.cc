@@ -3,6 +3,7 @@
 #include "kernel/audio/pullmix.h"
 #include "kernel/hxrt/apps/dxbg.h"
 #include "kernel/serial.hpp"
+#include "kernel/session/idlelock.h"
 #include "kernel/time/timer.h"
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/theme.h"
@@ -32,6 +33,7 @@ namespace {
         {"ui.brightness", CfgType::Int, "75", 0, 100},
         {"ui.theme", CfgType::Str, "dark", 0, 0},
         {"ui.hard_shadow", CfgType::Bool, "0", 0, 1},
+        {"ui.lock_timeout_min", CfgType::Int, "5", 0, 1440},
         {"desktop.wallpaper", CfgType::Str, "", 0, 0},
     };
     constexpr hcpp::u32 key_count = sizeof(keys) / sizeof(keys[0]);
@@ -389,6 +391,12 @@ namespace hype::cfg {
                 settings_get_bool("ui.hard_shadow"));
             hype::win::wm_invalidate_all();
             return true;
+        }
+        if (str_eq(key, "ui.lock_timeout_min")) {
+            // Idle-timeout auto-lock (issue #134): pushes the minute
+            // value into the idlelock armed cache and re-stamps the
+            // activity clock (prints "idlelock arm=<min>m").
+            return hype::session::idle_lock_apply();
         }
         if (str_eq(key, "desktop.wallpaper")) {
             const char* name = settings_get("desktop.wallpaper");

@@ -8,6 +8,7 @@
 #include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
 #include "kernel/usb/xhci.h"
+#include "kernel/session/idlelock.h"
 #include "kernel/session/session.h"
 #include "kernel/win/winman.h"
 
@@ -139,12 +140,14 @@ namespace hype::input {
         const hcpp::u8 before = ptr_buttons();
         const hcpp::u32 n = msaux_poll(packets, 16);
         bool moved = false;
+        bool wheeled = false;
         for (hcpp::u32 i = 0; i < n; ++i) {
             ptr_apply(packets[i]);
             if (packets[i].dx != 0 || packets[i].dy != 0) {
                 moved = true;
             }
             if (packets[i].wheel != 0) {
+                wheeled = true;
                 route_wheel(packets[i].wheel);
             }
         }
@@ -160,11 +163,19 @@ namespace hype::input {
                 moved = true;
             }
             if (packets[i].wheel != 0) {
+                wheeled = true;
                 route_wheel(packets[i].wheel);
             }
         }
         route_mode();
         const hcpp::u8 after = ptr_buttons();
+        // Idle-lock pet (issue #134): real pointer activity only —
+        // motion, button edges or wheel packets arriving from the
+        // PS/2/USB queues above. Polls that drain empty queues (the
+        // common case) never reach this pet.
+        if (moved || wheeled || before != after) {
+            hype::session::idle_lock_pet();
+        }
         if (before != after) {
             route_buttons(before, after, ptr_x(), ptr_y());
         }

@@ -7,6 +7,7 @@
 #include "kernel/power.h"
 #include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
+#include "kernel/session/idlelock.h"
 #include "kernel/session/lockscr.h"
 #include "kernel/svc/revsvc.h"
 #include "kernel/time/rtc.h"
@@ -181,6 +182,9 @@ namespace hype::session {
             }
             active_uid = uid;
             current_state = SessionState::LoggedIn;
+            // Reset the idle clock (issue #134): the login itself is
+            // activity, so a long greeter dwell cannot re-lock instantly.
+            idle_lock_reset();
             serial::write_line("session auth=ok");
             log_login_timestamp();
             return true;
@@ -332,6 +336,9 @@ namespace hype::session {
             return;
         }
         current_state = SessionState::LoggedIn;
+        // Reset the idle clock (issue #134): however long the veil was
+        // up, the unlock gesture itself counts as activity.
+        idle_lock_reset();
         serial::write_line("session locked=0");
         // Force a full desktop repaint under the lifted veil.
         win::wm_invalidate_all();
@@ -526,6 +533,7 @@ namespace hype::session {
         }
         active_uid = uid;
         current_state = SessionState::LoggedIn;
+        idle_lock_reset();
         serial::write_line("session auth=ok");
         log_login_timestamp();
         return 1;

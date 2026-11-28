@@ -1,5 +1,7 @@
 #include "kernel/input/scancode.h"
 
+#include "kernel/session/idlelock.h"
+
 namespace hype::input {
     namespace {
         constexpr hcpp::u16 left_shift = 42;
@@ -30,6 +32,12 @@ namespace hype::input {
     }
 
     DecodedKey scancode_decode(hcpp::u8 scancode) noexcept {
+        // Idle-lock pet (issue #134): every byte here is a real
+        // hardware scancode — the PS/2 IRQ1 handler and the xHCI HID
+        // report path both decode through this choke point, while the
+        // synthetic emitters (gdxf selftest, input_device_report_key)
+        // bypass it by calling emit_key_event directly.
+        hype::session::idle_lock_pet();
         if (scancode == 0xE0 || scancode == 0xE1) {
             extended_prefix = true;
             return {0, 0, false, true, false};
