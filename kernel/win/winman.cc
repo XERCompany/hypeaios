@@ -60,7 +60,6 @@ namespace hype::win {
         constexpr hcpp::u16 key_alt = 56;
         // Set-1 scancodes used by the clipboard chords (Ctrl/Win both
         // decode to these codes, incl. the E0-prefixed right variants).
-        constexpr hcpp::u16 key_ctrl = 29;
         constexpr hcpp::u16 key_x = 45;
         constexpr hcpp::u16 key_c = 46;
         constexpr hcpp::u16 key_v = 47;
@@ -897,7 +896,6 @@ namespace hype::win {
                 } else if (e.code == key_v) {
                     hype::ui::clip_paste();
                 }
->>>>>>> devin/p21-clipb
             }
         }
 
