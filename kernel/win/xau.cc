@@ -48,7 +48,7 @@ namespace hype::win {
         };
 
         struct XauPost {
-            XAU hwnd = XAU_INVALID;
+            XAU xau_win = XAU_INVALID;
             hcpp::u32 msg = 0;
             hcpp::u64 wparam = 0;
             hcpp::u64 lparam = 0;
@@ -56,7 +56,7 @@ namespace hype::win {
 
         struct XauTimer {
             bool used = false;
-            XAU hwnd = XAU_INVALID;
+            XAU xau_win = XAU_INVALID;
             hcpp::u32 timer_id = 0;
             hcpp::u64 period = 0;
             hcpp::u64 next = 0;
@@ -117,29 +117,29 @@ namespace hype::win {
             return (r.gen << 8) | wm_id;
         }
 
-        hcpp::u32 handle_wm_id(XAU hwnd) noexcept {
-            const hcpp::u32 id = hwnd & 0xFFu;
+        hcpp::u32 handle_wm_id(XAU xau_win) noexcept {
+            const hcpp::u32 id = xau_win & 0xFFu;
             if (id == 0 || id > wm_max_windows) {
                 return 0;
             }
             const XauRec& r = recs[id - 1];
-            if (!r.bound || r.gen == 0 || (hwnd >> 8) != r.gen) {
+            if (!r.bound || r.gen == 0 || (xau_win >> 8) != r.gen) {
                 return 0;
             }
             return id;
         }
 
-        hcpp::i32 dispatch(XAU hwnd, hcpp::u32 msg, hcpp::u64 wparam,
+        hcpp::i32 dispatch(XAU xau_win, hcpp::u32 msg, hcpp::u64 wparam,
                            hcpp::u64 lparam) noexcept {
-            const hcpp::u32 id = handle_wm_id(hwnd);
+            const hcpp::u32 id = handle_wm_id(xau_win);
             if (id == 0) {
                 return 0;
             }
             const XauRec& r = recs[id - 1];
             if (r.proc != nullptr) {
-                return r.proc(hwnd, msg, wparam, lparam);
+                return r.proc(xau_win, msg, wparam, lparam);
             }
-            return xau_defproc(hwnd, msg, wparam, lparam);
+            return xau_defproc(xau_win, msg, wparam, lparam);
         }
 
         // Binds a wm slot to a WndProc and delivers XAU_MSG_CREATE.
@@ -164,22 +164,22 @@ namespace hype::win {
             r.proc = proc;
             r.class_idx = class_idx;
             copy_text(r.title, title, 24);
-            const XAU hwnd = make_handle(wm_id);
-            serial::write("xau create hwnd=");
-            serial::write_dec32(hwnd);
+            const XAU xau_win = make_handle(wm_id);
+            serial::write("xau create xau_win=");
+            serial::write_dec32(xau_win);
             serial::write("\r\n");
             serial::write("xau app=");
             serial::write(title != nullptr ? title : "?");
             serial::write_line(" ok");
-            dispatch(hwnd, XAU_MSG_CREATE, 0, 0);
+            dispatch(xau_win, XAU_MSG_CREATE, 0, 0);
             const Win* w = wm_window(wm_id);
             if (w != nullptr) {
                 wm_invalidate(w->frame);
             }
-            return hwnd;
+            return xau_win;
         }
 
-        void unbind(hcpp::u32 wm_id, XAU hwnd) noexcept {
+        void unbind(hcpp::u32 wm_id, XAU xau_win) noexcept {
             XauRec& r = recs[wm_id - 1];
             if (!r.bound) {
                 return;
@@ -189,8 +189,8 @@ namespace hype::win {
             r.close_sent = false;
             r.in_wm_close = false;
             r.paint_seen = false;
-            serial::write("xau destroy hwnd=");
-            serial::write_dec32(hwnd);
+            serial::write("xau destroy xau_win=");
+            serial::write_dec32(xau_win);
             serial::write("\r\n");
         }
 
@@ -207,9 +207,9 @@ namespace hype::win {
 
         // Resolves a wm window id to an XAU handle, adopting lazily.
         XAU resolve(hcpp::u32 wm_id) noexcept {
-            XAU hwnd = make_handle(wm_id);
-            if (hwnd != XAU_INVALID) {
-                return hwnd;
+            XAU xau_win = make_handle(wm_id);
+            if (xau_win != XAU_INVALID) {
+                return xau_win;
             }
             const Win* w = wm_window(wm_id);
             if (w == nullptr) {
@@ -236,8 +236,8 @@ namespace hype::win {
         // ---- wm -> xau hooks ---------------------------------------------
 
         bool xau_wm_paint(hcpp::u32 wm_id, hype::hxrt::AppCtx& ctx) noexcept {
-            const XAU hwnd = resolve(wm_id);
-            if (hwnd == XAU_INVALID) {
+            const XAU xau_win = resolve(wm_id);
+            if (xau_win == XAU_INVALID) {
                 return false;
             }
             XauRec& r = recs[wm_id - 1];
@@ -249,7 +249,7 @@ namespace hype::win {
                 serial::write_line("xau msg=PAINT");
             }
             const XauDC dc{ctx.fb, ctx.region, ctx.paint_clip()};
-            dispatch(hwnd, XAU_MSG_PAINT, 0,
+            dispatch(xau_win, XAU_MSG_PAINT, 0,
                      reinterpret_cast<hcpp::u64>(&dc));
             return true;
         }
@@ -260,36 +260,36 @@ namespace hype::win {
                 // Fires inside wm_close: deliver CLOSE once, then DESTROY
                 // and drop the binding — the wm slot is going away either
                 // way, so a WndProc that vetoes close only loses its hook.
-                const XAU hwnd = make_handle(wm_id);
-                if (hwnd == XAU_INVALID) {
+                const XAU xau_win = make_handle(wm_id);
+                if (xau_win == XAU_INVALID) {
                     return false;
                 }
                 XauRec& r = recs[wm_id - 1];
                 r.in_wm_close = true;
                 if (!r.close_sent) {
                     r.close_sent = true;
-                    dispatch(hwnd, XAU_MSG_CLOSE, 0, 0);
+                    dispatch(xau_win, XAU_MSG_CLOSE, 0, 0);
                 }
                 if (r.bound) {
-                    dispatch(hwnd, XAU_MSG_DESTROY, 0, 0);
-                    unbind(wm_id, hwnd);
+                    dispatch(xau_win, XAU_MSG_DESTROY, 0, 0);
+                    unbind(wm_id, xau_win);
                 }
                 r.in_wm_close = false;
                 return true;
             }
-            const XAU hwnd = resolve(wm_id);
-            if (hwnd == XAU_INVALID) {
+            const XAU xau_win = resolve(wm_id);
+            if (xau_win == XAU_INVALID) {
                 return false;
             }
             switch (ev) {
                 case wm_xau_ev_size:
-                    dispatch(hwnd, XAU_MSG_SIZE, 0, pack_xy(a, b));
+                    dispatch(xau_win, XAU_MSG_SIZE, 0, pack_xy(a, b));
                     return true;
                 case wm_xau_ev_move:
-                    dispatch(hwnd, XAU_MSG_MOVE, 0, pack_xy(a, b));
+                    dispatch(xau_win, XAU_MSG_MOVE, 0, pack_xy(a, b));
                     return true;
                 case wm_xau_ev_lbuttondown:
-                    dispatch(hwnd, XAU_MSG_LBUTTONDOWN, 0,
+                    dispatch(xau_win, XAU_MSG_LBUTTONDOWN, 0,
                              pack_client(wm_id, a, b));
                     // The WndProc may have destroyed its own window.
                     if (const Win* w = wm_window(wm_id)) {
@@ -297,28 +297,28 @@ namespace hype::win {
                     }
                     return true;
                 case wm_xau_ev_lbuttonup:
-                    dispatch(hwnd, XAU_MSG_LBUTTONUP, 0,
+                    dispatch(xau_win, XAU_MSG_LBUTTONUP, 0,
                              pack_client(wm_id, a, b));
                     return true;
                 case wm_xau_ev_rbuttondown:
-                    dispatch(hwnd, XAU_MSG_RBUTTONDOWN, 0,
+                    dispatch(xau_win, XAU_MSG_RBUTTONDOWN, 0,
                              pack_client(wm_id, a, b));
                     return true;
                 case wm_xau_ev_mousemove:
-                    dispatch(hwnd, XAU_MSG_MOUSEMOVE, 0,
+                    dispatch(xau_win, XAU_MSG_MOUSEMOVE, 0,
                              pack_client(wm_id, a, b));
                     return false;
                 case wm_xau_ev_minimize:
                     recs[wm_id - 1].hidden = a != 0;
-                    dispatch(hwnd, XAU_MSG_MINIMIZE,
+                    dispatch(xau_win, XAU_MSG_MINIMIZE,
                              static_cast<hcpp::u64>(a), 0);
                     return true;
                 case wm_xau_ev_maximize:
-                    dispatch(hwnd, XAU_MSG_MAXIMIZE,
+                    dispatch(xau_win, XAU_MSG_MAXIMIZE,
                              static_cast<hcpp::u64>(a), 0);
                     return true;
                 case wm_xau_ev_focus:
-                    dispatch(hwnd, XAU_MSG_FOCUS,
+                    dispatch(xau_win, XAU_MSG_FOCUS,
                              static_cast<hcpp::u64>(a), 0);
                     return true;
                 default:
@@ -337,20 +337,20 @@ namespace hype::win {
             if (focused == nullptr) {
                 return;
             }
-            const XAU hwnd = resolve(focused->id);
-            if (hwnd == XAU_INVALID) {
+            const XAU xau_win = resolve(focused->id);
+            if (xau_win == XAU_INVALID) {
                 return;
             }
             const bool pressed =
                 e.value !=
                 static_cast<hcpp::u32>(input::KeyState::Released);
             const char ascii = pressed ? input::scancode_last_ascii() : '\0';
-            dispatch(hwnd,
+            dispatch(xau_win,
                      pressed ? XAU_MSG_KEYDOWN : XAU_MSG_KEYUP,
                      static_cast<hcpp::u64>(e.code),
                      static_cast<hcpp::u64>(static_cast<hcpp::u8>(ascii)));
             if (pressed && ascii >= 32 && ascii < 127) {
-                dispatch(hwnd, XAU_MSG_CHAR,
+                dispatch(xau_win, XAU_MSG_CHAR,
                          static_cast<hcpp::u64>(
                              static_cast<hcpp::u8>(ascii)),
                          static_cast<hcpp::u64>(e.code));
@@ -457,8 +457,8 @@ namespace hype::win {
         const char* shown =
             (title != nullptr && title[0] != '\0') ? title : wm_name;
         wm_set_caption(wm_id, shown);
-        const XAU hwnd = bind(wm_id, use, ci, shown);
-        if (hwnd == XAU_INVALID) {
+        const XAU xau_win = bind(wm_id, use, ci, shown);
+        if (xau_win == XAU_INVALID) {
             wm_close(wm_id);
             return XAU_INVALID;
         }
@@ -467,11 +467,11 @@ namespace hype::win {
         } else if ((flags & XAU_WS_MAXIMIZED) != 0) {
             wm_set_maximized(wm_id, true);
         }
-        return hwnd;
+        return xau_win;
     }
 
-    bool xau_destroy(XAU hwnd) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_destroy(XAU xau_win) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0) {
             return false;
         }
@@ -485,12 +485,12 @@ namespace hype::win {
         if (wm_window(wm_id) != nullptr) {
             return wm_close(wm_id);
         }
-        unbind(wm_id, hwnd);
+        unbind(wm_id, xau_win);
         return true;
     }
 
-    bool xau_show(XAU hwnd) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_show(XAU xau_win) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0) {
             return false;
         }
@@ -504,8 +504,8 @@ namespace hype::win {
         return ok;
     }
 
-    bool xau_hide(XAU hwnd) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_hide(XAU xau_win) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0) {
             return false;
         }
@@ -513,8 +513,8 @@ namespace hype::win {
         return wm_set_minimized(wm_id, true);
     }
 
-    bool xau_move(XAU hwnd, hcpp::i32 x, hcpp::i32 y) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_move(XAU xau_win, hcpp::i32 x, hcpp::i32 y) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0) {
             return false;
         }
@@ -525,8 +525,8 @@ namespace hype::win {
         return wm_set_frame(wm_id, Rect{x, y, w->frame.w, w->frame.h});
     }
 
-    bool xau_get_rect(XAU hwnd, Rect& out) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_get_rect(XAU xau_win, Rect& out) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0) {
             return false;
         }
@@ -538,16 +538,16 @@ namespace hype::win {
         return true;
     }
 
-    bool xau_set_rect(XAU hwnd, const Rect& frame) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_set_rect(XAU xau_win, const Rect& frame) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0 || frame.empty()) {
             return false;
         }
         return wm_set_frame(wm_id, frame);
     }
 
-    bool xau_invalidate(XAU hwnd, const Rect* rect) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_invalidate(XAU xau_win, const Rect* rect) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0) {
             return false;
         }
@@ -565,8 +565,8 @@ namespace hype::win {
         return true;
     }
 
-    bool xau_set_title(XAU hwnd, const char* title) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_set_title(XAU xau_win, const char* title) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0 || title == nullptr) {
             return false;
         }
@@ -575,16 +575,16 @@ namespace hype::win {
         return true;
     }
 
-    bool xau_focus(XAU hwnd) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_focus(XAU xau_win) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0) {
             return false;
         }
         return wm_focus(wm_id);
     }
 
-    bool xau_client_rect(XAU hwnd, Rect& out) noexcept {
-        const hcpp::u32 wm_id = handle_wm_id(hwnd);
+    bool xau_client_rect(XAU xau_win, Rect& out) noexcept {
+        const hcpp::u32 wm_id = handle_wm_id(xau_win);
         if (wm_id == 0) {
             return false;
         }
@@ -596,7 +596,7 @@ namespace hype::win {
         return true;
     }
 
-    bool xau_valid(XAU hwnd) noexcept { return handle_wm_id(hwnd) != 0; }
+    bool xau_valid(XAU xau_win) noexcept { return handle_wm_id(xau_win) != 0; }
 
     XAU xau_focused() noexcept {
         const Win* w = wm_focused();
@@ -606,29 +606,29 @@ namespace hype::win {
         return make_handle(w->id);
     }
 
-    hcpp::i32 xau_send(XAU hwnd, hcpp::u32 msg, hcpp::u64 wparam,
+    hcpp::i32 xau_send(XAU xau_win, hcpp::u32 msg, hcpp::u64 wparam,
                        hcpp::u64 lparam) noexcept {
-        return dispatch(hwnd, msg, wparam, lparam);
+        return dispatch(xau_win, msg, wparam, lparam);
     }
 
-    bool xau_post(XAU hwnd, hcpp::u32 msg, hcpp::u64 wparam,
+    bool xau_post(XAU xau_win, hcpp::u32 msg, hcpp::u64 wparam,
                   hcpp::u64 lparam) noexcept {
         const hcpp::u32 next = (post_tail + 1) % xau_post_capacity;
         if (next == post_head) {
             return false;
         }
-        post_q[post_tail] = XauPost{hwnd, msg, wparam, lparam};
+        post_q[post_tail] = XauPost{xau_win, msg, wparam, lparam};
         post_tail = next;
         return true;
     }
 
-    bool xau_set_timer(XAU hwnd, hcpp::u32 timer_id,
+    bool xau_set_timer(XAU xau_win, hcpp::u32 timer_id,
                        hcpp::u64 ticks) noexcept {
-        if (handle_wm_id(hwnd) == 0 || ticks == 0) {
+        if (handle_wm_id(xau_win) == 0 || ticks == 0) {
             return false;
         }
         for (hcpp::u32 i = 0; i < xau_max_timers; ++i) {
-            if (timers[i].used && timers[i].hwnd == hwnd &&
+            if (timers[i].used && timers[i].xau_win == xau_win &&
                 timers[i].timer_id == timer_id) {
                 timers[i].period = ticks;
                 timers[i].next = hype::interrupts::pit_ticks() + ticks;
@@ -637,7 +637,7 @@ namespace hype::win {
         }
         for (hcpp::u32 i = 0; i < xau_max_timers; ++i) {
             if (!timers[i].used) {
-                timers[i] = XauTimer{true, hwnd, timer_id, ticks,
+                timers[i] = XauTimer{true, xau_win, timer_id, ticks,
                                      hype::interrupts::pit_ticks() + ticks};
                 return true;
             }
@@ -645,9 +645,9 @@ namespace hype::win {
         return false;
     }
 
-    bool xau_kill_timer(XAU hwnd, hcpp::u32 timer_id) noexcept {
+    bool xau_kill_timer(XAU xau_win, hcpp::u32 timer_id) noexcept {
         for (hcpp::u32 i = 0; i < xau_max_timers; ++i) {
-            if (timers[i].used && timers[i].hwnd == hwnd &&
+            if (timers[i].used && timers[i].xau_win == xau_win &&
                 timers[i].timer_id == timer_id) {
                 timers[i] = XauTimer{};
                 return true;
@@ -663,26 +663,26 @@ namespace hype::win {
                 continue;
             }
             timers[i].next = now + timers[i].period;
-            if (handle_wm_id(timers[i].hwnd) == 0) {
+            if (handle_wm_id(timers[i].xau_win) == 0) {
                 timers[i] = XauTimer{};
                 continue;
             }
-            dispatch(timers[i].hwnd, XAU_MSG_TIMER, timers[i].timer_id,
+            dispatch(timers[i].xau_win, XAU_MSG_TIMER, timers[i].timer_id,
                      0);
         }
         while (post_head != post_tail) {
             const XauPost m = post_q[post_head];
             post_head = (post_head + 1) % xau_post_capacity;
-            dispatch(m.hwnd, m.msg, m.wparam, m.lparam);
+            dispatch(m.xau_win, m.msg, m.wparam, m.lparam);
         }
     }
 
-    hcpp::i32 xau_defproc(XAU hwnd, hcpp::u32 msg, hcpp::u64 wparam,
+    hcpp::i32 xau_defproc(XAU xau_win, hcpp::u32 msg, hcpp::u64 wparam,
                           hcpp::u64 lparam) noexcept {
         (void)wparam;
         switch (msg) {
             case XAU_MSG_CLOSE:
-                xau_destroy(hwnd);
+                xau_destroy(xau_win);
                 return 0;
             case XAU_MSG_PAINT: {
                 const XauDC* dc =
@@ -691,7 +691,7 @@ namespace hype::win {
                     !dc->fb->valid()) {
                     return 0;
                 }
-                const hcpp::u32 wm_id = handle_wm_id(hwnd);
+                const hcpp::u32 wm_id = handle_wm_id(xau_win);
                 hcpp::u32 bg = hype::ui::theme_active().card;
                 if (wm_id != 0 &&
                     recs[wm_id - 1].class_idx != 0xFFFFFFFFu) {

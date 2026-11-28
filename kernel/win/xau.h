@@ -30,7 +30,7 @@ namespace hype::win {
     // WndProc signature. Return convention matches Windows: message-
     // specific, 0 when handled; unhandled messages should be forwarded
     // to xau_defproc.
-    using XauWndProc = hcpp::i32 (*)(XAU hwnd, hcpp::u32 msg,
+    using XauWndProc = hcpp::i32 (*)(XAU xau_win, hcpp::u32 msg,
                                    hcpp::u64 wparam,
                                    hcpp::u64 lparam) noexcept;
 
@@ -86,40 +86,40 @@ namespace hype::win {
                    hcpp::i32 y, hcpp::i32 w, hcpp::i32 h, hcpp::u32 flags,
                    XauWndProc proc) noexcept;
 
-    bool xau_destroy(XAU hwnd) noexcept;
-    bool xau_show(XAU hwnd) noexcept;
-    bool xau_hide(XAU hwnd) noexcept;
-    bool xau_move(XAU hwnd, hcpp::i32 x, hcpp::i32 y) noexcept;
-    bool xau_get_rect(XAU hwnd, hype::ui::Rect& out) noexcept;
-    bool xau_set_rect(XAU hwnd, const hype::ui::Rect& frame) noexcept;
+    bool xau_destroy(XAU xau_win) noexcept;
+    bool xau_show(XAU xau_win) noexcept;
+    bool xau_hide(XAU xau_win) noexcept;
+    bool xau_move(XAU xau_win, hcpp::i32 x, hcpp::i32 y) noexcept;
+    bool xau_get_rect(XAU xau_win, hype::ui::Rect& out) noexcept;
+    bool xau_set_rect(XAU xau_win, const hype::ui::Rect& frame) noexcept;
     // Client-space invalidation; nullptr rect invalidates the whole
     // window frame.
-    bool xau_invalidate(XAU hwnd, const hype::ui::Rect* rect) noexcept;
-    bool xau_set_title(XAU hwnd, const char* title) noexcept;
-    bool xau_focus(XAU hwnd) noexcept;
+    bool xau_invalidate(XAU xau_win, const hype::ui::Rect* rect) noexcept;
+    bool xau_set_title(XAU xau_win, const char* title) noexcept;
+    bool xau_focus(XAU xau_win) noexcept;
 
     // Returns the client (content) rect in screen coordinates.
-    bool xau_client_rect(XAU hwnd, hype::ui::Rect& out) noexcept;
-    bool xau_valid(XAU hwnd) noexcept;
+    bool xau_client_rect(XAU xau_win, hype::ui::Rect& out) noexcept;
+    bool xau_valid(XAU xau_win) noexcept;
     XAU xau_focused() noexcept;
 
     // Send = synchronous dispatch to the WndProc. Post = enqueue into a
     // 64-entry FIFO drained by xau_pump (wired into the desktop frame
     // loop).
-    hcpp::i32 xau_send(XAU hwnd, hcpp::u32 msg, hcpp::u64 wparam,
+    hcpp::i32 xau_send(XAU xau_win, hcpp::u32 msg, hcpp::u64 wparam,
                        hcpp::u64 lparam) noexcept;
-    bool xau_post(XAU hwnd, hcpp::u32 msg, hcpp::u64 wparam,
+    bool xau_post(XAU xau_win, hcpp::u32 msg, hcpp::u64 wparam,
                   hcpp::u64 lparam) noexcept;
     void xau_pump() noexcept;
 
     // Periodic XAU_MSG_TIMER delivery; `ticks` is in PIT ticks.
-    bool xau_set_timer(XAU hwnd, hcpp::u32 timer_id,
+    bool xau_set_timer(XAU xau_win, hcpp::u32 timer_id,
                        hcpp::u64 ticks) noexcept;
-    bool xau_kill_timer(XAU hwnd, hcpp::u32 timer_id) noexcept;
+    bool xau_kill_timer(XAU xau_win, hcpp::u32 timer_id) noexcept;
 
     // Default window proc: paints the client background on PAINT,
     // destroys the window on CLOSE, swallows everything else.
-    hcpp::i32 xau_defproc(XAU hwnd, hcpp::u32 msg, hcpp::u64 wparam,
+    hcpp::i32 xau_defproc(XAU xau_win, hcpp::u32 msg, hcpp::u64 wparam,
                         hcpp::u64 lparam) noexcept;
 
 }

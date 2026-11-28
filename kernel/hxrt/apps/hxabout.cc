@@ -41,7 +41,7 @@ namespace hype::hxrt {
         // XAU WndProc: the "HxAbout" window class renders and handles
         // input through the Windows-style message dispatch. wm windows
         // opened under the app name are adopted by the xau paint hook.
-        hcpp::i32 hxabout_wndproc(hype::win::XAU hwnd, hcpp::u32 msg,
+        hcpp::i32 hxabout_wndproc(hype::win::XAU xau_win, hcpp::u32 msg,
                                   hcpp::u64 wparam,
                                   hcpp::u64 lparam) noexcept {
             switch (msg) {
@@ -56,10 +56,10 @@ namespace hype::hxrt {
                 }
                 case hype::win::XAU_MSG_LBUTTONDOWN:
                     // Click in the client area repaints the window.
-                    hype::win::xau_invalidate(hwnd, nullptr);
+                    hype::win::xau_invalidate(xau_win, nullptr);
                     return 0;
                 default:
-                    return hype::win::xau_defproc(hwnd, msg, wparam,
+                    return hype::win::xau_defproc(xau_win, msg, wparam,
                                                   lparam);
             }
         }
