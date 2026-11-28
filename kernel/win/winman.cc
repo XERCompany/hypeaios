@@ -1442,6 +1442,12 @@ namespace hype::win {
             wm_menu_close();
             return true;
         }
+        // Open shell flyouts (notification center) get right-click first:
+        // a press on a history row dismisses it, a press outside closes
+        // the flyout and falls through to normal routing.
+        if (hype::ui::deskbar_handle_mouse_r(x, y)) {
+            return true;
+        }
         // Right-click inside a window frame opens that window's system
         // menu, same overlay path as the chrome menu button.
         hcpp::u32 order[wm_max_windows];

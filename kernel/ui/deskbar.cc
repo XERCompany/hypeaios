@@ -9,7 +9,9 @@
 #include "kernel/input/ptrmv.h"
 #include "kernel/net/net.h"
 #include "kernel/serial.hpp"
+#include "kernel/session/session.h"
 #include "kernel/time/rtc.h"
+#include "kernel/time/timer.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/toast.h"
@@ -49,6 +51,16 @@ namespace hype::ui {
         constexpr hcpp::i32 qs_btn_h = 30;
         constexpr hcpp::i32 qs_anim_ticks = 6;
         constexpr hcpp::i32 qs_anim_px = 6;  // px of slide per tick
+        // Notification-center flyout (bottom-right anchored above the bar,
+        // same slide-in machinery as quick settings).
+        constexpr hcpp::i32 nc_w = 320;
+        constexpr hcpp::i32 nc_h = 400;
+        constexpr hcpp::i32 nc_pad = 12;
+        constexpr hcpp::i32 nc_head_h = 26;
+        constexpr hcpp::i32 nc_row_h = 46;
+        constexpr hcpp::i32 nc_anim_ticks = 6;
+        constexpr hcpp::i32 nc_anim_px = 6;
+        constexpr hcpp::u32 hist_max = 24;
         constexpr hcpp::i32 toast_col_w = 352;
         constexpr hcpp::i32 menu_w = 180;
         constexpr hcpp::i32 menu_pad = 4;
@@ -89,6 +101,23 @@ namespace hype::ui {
         hcpp::u32 unread = 0;
         hcpp::u32 net_last_ip = 0;
         bool net_ip_seen = false;
+
+        // Notification-center state. The history ring is the archive of
+        // every deskbar_notify() push, independent of the transient toast
+        // cards: toasts expire, history rows persist until dismissed.
+        struct HistEntry {
+            char title[32];
+            char msg[96];
+            hcpp::u64 timestamp_ms;  // uptime_ms() at push
+            hcpp::u8 hour;           // RTC wall clock at push (0xFF = n/a)
+            hcpp::u8 minute;
+            ToastKind kind;
+        };
+        HistEntry hist[hist_max];
+        hcpp::u32 hist_head = 0;   // next write slot
+        hcpp::u32 hist_count = 0;  // live entries (<= hist_max)
+        bool nc_open = false;
+        hcpp::u32 nc_age = nc_anim_ticks;
 
         void invalidate(const Rect& region) noexcept {
             if (!region.empty()) {
@@ -201,6 +230,101 @@ namespace hype::ui {
 
         Rect qs_track_hit(const Rect& row) noexcept {
             return {row.x + 18, row.y, row.w - 18, row.h};
+        }
+
+        // Notification-center panel at its final anchor.
+        Rect compute_nc() noexcept {
+            if (bar.empty()) {
+                return {};
+            }
+            Rect r{bar.right() - bar_pad - nc_w, bar.y - 6 - nc_h, nc_w,
+                   nc_h};
+            if (r.y < 2) {
+                r.y = 2;
+            }
+            return r;
+        }
+
+        Rect nc_rect_now() noexcept {
+            if (!nc_open) {
+                return {};
+            }
+            Rect r = compute_nc();
+            const hcpp::u32 left =
+                nc_age < nc_anim_ticks ? nc_anim_ticks - nc_age : 0;
+            r.y += static_cast<hcpp::i32>(left) * nc_anim_px;
+            return r;
+        }
+
+        Rect nc_anim_region() noexcept {
+            Rect r = compute_nc();
+            r.h += nc_anim_ticks * nc_anim_px;
+            return rui_paint_bounds(r);
+        }
+
+        Rect nc_clear_btn(const Rect& panel) noexcept {
+            return {panel.right() - nc_pad - 52,
+                    panel.y + nc_pad - 2, 52, nc_head_h + 4};
+        }
+
+        // Scrollable-looking list band under the header; only the newest
+        // rows that fit are painted (no scroll offset yet).
+        Rect nc_list(const Rect& panel) noexcept {
+            const hcpp::i32 top = panel.y + nc_pad + nc_head_h + 6;
+            return {panel.x + 6, top, panel.w - 12,
+                    panel.bottom() - nc_pad - top};
+        }
+
+        Rect nc_row_rect(const Rect& panel, hcpp::u32 index) noexcept {
+            const Rect list = nc_list(panel);
+            return {list.x + 2,
+                    list.y + static_cast<hcpp::i32>(index) * nc_row_h,
+                    list.w - 4, nc_row_h - 4};
+        }
+
+        hcpp::u32 nc_rows_fit(const Rect& panel) noexcept {
+            const hcpp::i32 fit = nc_list(panel).h / nc_row_h;
+            hcpp::u32 rows = hist_count;
+            if (rows > static_cast<hcpp::u32>(fit < 0 ? 0 : fit)) {
+                rows = static_cast<hcpp::u32>(fit < 0 ? 0 : fit);
+            }
+            return rows;
+        }
+
+        // Small "x" dismiss hitbox at a row's top-right corner.
+        Rect nc_row_x(const Rect& row) noexcept {
+            return {row.right() - 20, row.y + 4, 16, 16};
+        }
+
+        // Ring slot of the entry shown at `visible` (0 = newest).
+        hcpp::u32 hist_slot(hcpp::u32 visible) noexcept {
+            return (hist_head + hist_max - 1 - visible) % hist_max;
+        }
+
+        // Drops the entry at `visible`; older entries shift one slot
+        // newer. The head is unchanged so append order is preserved.
+        void hist_remove(hcpp::u32 visible) noexcept {
+            if (visible >= hist_count) {
+                return;
+            }
+            for (hcpp::u32 j = visible + 1; j < hist_count; ++j) {
+                hist[hist_slot(j - 1)] = hist[hist_slot(j)];
+            }
+            --hist_count;
+        }
+
+        hcpp::u32 nc_kind_rgb(ToastKind kind, const Theme& theme) noexcept {
+            switch (kind) {
+                case ToastKind::Success:
+                    return theme.success;
+                case ToastKind::Warning:
+                    return theme.warning;
+                case ToastKind::Error:
+                    return theme.destructive;
+                case ToastKind::Info:
+                default:
+                    return theme.primary;
+            }
         }
 
         void copy_text(char* dst, hcpp::size_t cap,
@@ -318,6 +442,9 @@ namespace hype::ui {
             if (qs_open) {
                 deskbar_close_qs();
             }
+            if (nc_open) {
+                deskbar_close_nc();
+            }
             build_menu_order();
             start_open = true;
             serial::write_line("start menu=open");
@@ -338,6 +465,9 @@ namespace hype::ui {
             if (hype::win::wm_ctx_visible()) {
                 hype::win::wm_ctx_close();
             }
+            if (nc_open) {
+                deskbar_close_nc();
+            }
             if (qs_vol < 0) {
                 // First open: adopt the mixer master gain (Q8, 256 = 100%).
                 qs_vol = clamp_pct(
@@ -350,6 +480,34 @@ namespace hype::ui {
             qs_age = 0;
             serial::write_line("tray qs=open");
             invalidate(qs_anim_region().united(speaker_zone()));
+        }
+
+        void open_nc() noexcept {
+            if (nc_open) {
+                return;
+            }
+            // One flyout at a time, like the real shells.
+            if (start_open) {
+                deskbar_close_start();
+            }
+            if (qs_open) {
+                deskbar_close_qs();
+            }
+            if (hype::win::wm_menu_visible()) {
+                hype::win::wm_menu_close();
+            }
+            if (hype::win::wm_ctx_visible()) {
+                hype::win::wm_ctx_close();
+            }
+            nc_open = true;
+            nc_age = 0;
+            serial::write_line("notif center=open");
+            // Opening the archive marks everything read.
+            if (unread != 0) {
+                unread = 0;
+                serial::write_line("tray unread=0");
+            }
+            invalidate(nc_anim_region().united(bell_zone()));
         }
 
         hcpp::i32 slider_pct_at(hcpp::i32 x, const Rect& row) noexcept {
@@ -661,8 +819,8 @@ namespace hype::ui {
             paint_label(canvas, net.right() - 88, label_top(net),
                         hcpp::StringView{status}, theme.muted_fg, 13);
 
-            // Lock / Power buttons (no session-lock or ACPI API yet — the
-            // actions report through serial markers).
+            // Lock / Power buttons: real session calls (lock veil /
+            // shutdown-restart dialog) with serial markers.
             const Rect lock = qs_lock_btn(panel);
             const Rect power = qs_power_btn(panel);
             rui_control_bg(canvas, lock, theme.secondary, theme.border);
@@ -673,6 +831,87 @@ namespace hype::ui {
             paint_label(canvas, power.x + (power.w - 36) / 2,
                         label_top(power), "Power", theme.card_fg, 13);
 
+            if (rui_dark_surface()) {
+                hype::gfx::gfx_inner_glow_edge(
+                    canvas, panel.inset(Insets::uniform(1)),
+                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
+            }
+        }
+
+        // One history row: kind-tinted icon, title + clipped message,
+        // "HH:MM" wall-clock stamp and a top-right "x" dismiss hitbox.
+        void paint_nc_row(Canvas& canvas, const Theme& theme,
+                          const Rect& row, const HistEntry& e) noexcept {
+            canvas.fill_rect(
+                row, canvas.color(rui_lift(theme.card, rui_elev_panel)));
+            const Rect icon{row.x + 8, row.y + 7, 14, 14};
+            const hcpp::u32 krgb = nc_kind_rgb(e.kind, theme);
+            rui_rounded_gradient(canvas, icon, 4, rui_lift(krgb, 1), krgb);
+            char mono[2] = {upper(e.title[0]), '\0'};
+            paint_label(canvas, icon.x + 4, icon.y + 1,
+                        hcpp::StringView{mono, 1}, theme.primary_fg, 11);
+
+            const Rect xbox = nc_row_x(row);
+            char clk[6]{"--:--"};
+            if (e.hour != 0xFF) {
+                clk[0] = static_cast<char>('0' + e.hour / 10);
+                clk[1] = static_cast<char>('0' + e.hour % 10);
+                clk[2] = ':';
+                clk[3] = static_cast<char>('0' + e.minute / 10);
+                clk[4] = static_cast<char>('0' + e.minute % 10);
+                clk[5] = '\0';
+            }
+            paint_label(canvas, xbox.x - 38, row.y + 5,
+                        hcpp::StringView{clk, 5}, theme.muted_fg, 11);
+            // "x" glyph drawn as strokes so it reads at 11px.
+            const hcpp::u32 xrgb = canvas.color(theme.muted_fg);
+            canvas.draw_line(xbox.x + 4, xbox.y + 4, xbox.x + 11,
+                             xbox.y + 11, xrgb);
+            canvas.draw_line(xbox.x + 11, xbox.y + 4, xbox.x + 4,
+                             xbox.y + 11, xrgb);
+
+            const Rect saved_clip = canvas.clip();
+            const Rect title_clip{row.x + 28, row.y,
+                                  xbox.x - 44 - (row.x + 28), 20};
+            canvas.set_clip(saved_clip.intersection(title_clip));
+            paint_label(canvas, row.x + 30, row.y + 5,
+                        hcpp::StringView{e.title}, theme.card_fg, 13);
+            const Rect msg_clip{row.x + 28, row.y + 20,
+                                row.w - 36, row.h - 20};
+            canvas.set_clip(saved_clip.intersection(msg_clip));
+            paint_label(canvas, row.x + 30, row.y + 24,
+                        hcpp::StringView{e.msg}, theme.muted_fg, 12);
+            canvas.set_clip(saved_clip);
+        }
+
+        void paint_nc(Canvas& canvas, const Theme& theme,
+                      const Rect& panel) noexcept {
+            rui_panel(canvas, panel, rui_elev_panel);
+            const Rect head{panel.x + nc_pad, panel.y + nc_pad,
+                            panel.w - 2 * nc_pad, nc_head_h};
+            canvas.fill_circle(head.x + 4, head.y + head.h / 2, 4,
+                               canvas.color(theme.accent));
+            paint_label(canvas, head.x + 16, label_top(head),
+                        "Notifications", theme.card_fg, 13);
+            const Rect clear = nc_clear_btn(panel);
+            rui_control_bg(canvas, clear, theme.secondary, theme.border);
+            paint_label(canvas, clear.x + (clear.w - 28) / 2,
+                        label_top(clear), "Clear", theme.card_fg, 13);
+            canvas.fill_rect(
+                Rect{panel.x + nc_pad, head.bottom() + 2,
+                     panel.w - 2 * nc_pad, 1},
+                canvas.color(theme.border));
+
+            const hcpp::u32 rows = nc_rows_fit(panel);
+            if (rows == 0) {
+                const Rect list = nc_list(panel);
+                paint_label(canvas, list.x + 10, list.y + 12,
+                            "No notifications", theme.muted_fg, 13);
+            }
+            for (hcpp::u32 i = 0; i < rows; ++i) {
+                paint_nc_row(canvas, theme, nc_row_rect(panel, i),
+                             hist[hist_slot(i)]);
+            }
             if (rui_dark_surface()) {
                 hype::gfx::gfx_inner_glow_edge(
                     canvas, panel.inset(Insets::uniform(1)),
@@ -719,6 +958,10 @@ namespace hype::ui {
         if (qs_open && qs_age < qs_anim_ticks) {
             ++qs_age;
             invalidate(qs_anim_region());
+        }
+        if (nc_open && nc_age < nc_anim_ticks) {
+            ++nc_age;
+            invalidate(nc_anim_region());
         }
         // Toast TTL counts down inside ToastHost::paint — keep the stack
         // column damaged while any card is alive so expiry and the
@@ -797,14 +1040,16 @@ namespace hype::ui {
                      bar.h - bar_pad * 2};
         const Rect menu = compute_menu();
         const Rect qs = qs_rect_now();
+        const Rect nc = nc_rect_now();
         const Rect area = bar.intersection(clip);
         const Rect menu_area = menu.intersection(clip);
         const Rect qs_area = qs.intersection(clip);
+        const Rect nc_area = nc.intersection(clip);
         const Rect toast_area = toasts.count() > 0
                                     ? toast_region().intersection(clip)
                                     : Rect{};
         if (area.empty() && menu_area.empty() && qs_area.empty() &&
-            toast_area.empty()) {
+            nc_area.empty() && toast_area.empty()) {
             return;
         }
         Canvas canvas(fb);
@@ -835,6 +1080,9 @@ namespace hype::ui {
         }
         if (!qs_area.empty()) {
             paint_qs(canvas, theme, qs);
+        }
+        if (!nc_area.empty()) {
+            paint_nc(canvas, theme, nc);
         }
         // Toasts sit in the band above the bar, topmost of the shell UI.
         if (toasts.count() > 0 && !toast_region().empty()) {
@@ -884,13 +1132,15 @@ namespace hype::ui {
                     return true;
                 }
                 if (qs_lock_btn(panel).contains(p)) {
-                    serial::write_line("power action=lock");
+                    serial::write_line("qs lock=real");
                     deskbar_close_qs();
+                    hype::session::session_lock();
                     return true;
                 }
                 if (qs_power_btn(panel).contains(p)) {
-                    serial::write_line("power action=shutdown");
+                    serial::write_line("qs power=real");
                     deskbar_close_qs();
+                    hype::session::session_power_dialog();
                     return true;
                 }
                 return true;
@@ -898,6 +1148,33 @@ namespace hype::ui {
             // Click outside dismisses the flyout, then the same click is
             // free to hit the bar/tray zones below.
             deskbar_close_qs();
+        }
+        const bool was_nc = nc_open;
+        if (nc_open) {
+            const Rect panel = nc_rect_now();
+            if (panel.contains(p)) {
+                if (nc_clear_btn(panel).contains(p)) {
+                    hist_count = 0;
+                    serial::write_line("notif hist=0");
+                    invalidate(rui_paint_bounds(panel));
+                    return true;
+                }
+                const hcpp::u32 rows = nc_rows_fit(panel);
+                for (hcpp::u32 i = 0; i < rows; ++i) {
+                    if (!nc_row_x(nc_row_rect(panel, i)).contains(p)) {
+                        continue;
+                    }
+                    hist_remove(i);
+                    serial::write("notif hist=");
+                    serial::write_dec32(hist_count);
+                    serial::write("\r\n");
+                    invalidate(rui_paint_bounds(panel));
+                    return true;
+                }
+                return true;
+            }
+            // Click outside dismisses, then the click may hit the bar.
+            deskbar_close_nc();
         }
         if (bar.empty() || !bar.contains(p)) {
             return false;
@@ -914,10 +1191,10 @@ namespace hype::ui {
                 return true;
             }
             if (bell_zone().contains(p)) {
-                if (unread != 0) {
-                    unread = 0;
-                    serial::write_line("tray unread=0");
-                    invalidate(bell_zone());
+                // Bell toggles the notification-center flyout; opening it
+                // also marks the archive read (unread -> 0).
+                if (!was_nc) {
+                    open_nc();
                 }
                 return true;
             }
@@ -956,6 +1233,24 @@ namespace hype::ui {
                      static_cast<hcpp::u32>(ToastHost::max_toasts);
         copy_text(slot.title, sizeof(slot.title), title);
         copy_text(slot.msg, sizeof(slot.msg), msg);
+        // Archive a copy in the persistent history ring (overwrites the
+        // oldest entry once full); the toast card stays transient.
+        HistEntry& e = hist[hist_head];
+        hist_head = (hist_head + 1) % hist_max;
+        if (hist_count < hist_max) {
+            ++hist_count;
+        }
+        copy_text(e.title, sizeof(e.title), title);
+        copy_text(e.msg, sizeof(e.msg), msg);
+        e.timestamp_ms = hype::time::uptime_ms();
+        e.kind = ToastKind::Info;
+        e.hour = 0xFF;
+        e.minute = 0xFF;
+        hype::time::RtcTime stamp{};
+        if (hype::time::rtc_now(stamp)) {
+            e.hour = stamp.hour;
+            e.minute = stamp.minute;
+        }
         if (toasts.count() >= ToastHost::max_toasts) {
             toasts.dismiss(0);
         }
@@ -968,7 +1263,15 @@ namespace hype::ui {
         serial::write("tray unread=");
         serial::write_dec32(unread);
         serial::write("\r\n");
-        invalidate(toast_region().united(bell_zone()));
+        serial::write("notif hist=");
+        serial::write_dec32(hist_count);
+        serial::write("\r\n");
+        Rect dirty = toast_region().united(bell_zone());
+        if (nc_open) {
+            // A push while the archive is open must repaint the new row.
+            dirty = dirty.united(rui_paint_bounds(nc_rect_now()));
+        }
+        invalidate(dirty);
     }
 
     bool deskbar_qs_open() noexcept { return qs_open; }
@@ -983,6 +1286,46 @@ namespace hype::ui {
         qs_drag = 0;
         serial::write_line("tray qs=close");
         invalidate(gone.united(speaker_zone()));
+    }
+
+    bool deskbar_nc_open() noexcept { return nc_open; }
+
+    void deskbar_close_nc() noexcept {
+        if (!nc_open) {
+            return;
+        }
+        // Include the panel shadow spill so dismiss leaves no shadow ring.
+        const Rect gone = rui_paint_bounds(nc_rect_now());
+        nc_open = false;
+        serial::write_line("notif center=close");
+        invalidate(gone.united(bell_zone()));
+    }
+
+    // Right-click inside the open notification center dismisses the row
+    // under the cursor (same result as its "x" hitbox).
+    bool deskbar_handle_mouse_r(hcpp::i32 x, hcpp::i32 y) noexcept {
+        if (!nc_open) {
+            return false;
+        }
+        const Point p{x, y};
+        const Rect panel = nc_rect_now();
+        if (!panel.contains(p)) {
+            deskbar_close_nc();
+            return false;
+        }
+        const hcpp::u32 rows = nc_rows_fit(panel);
+        for (hcpp::u32 i = 0; i < rows; ++i) {
+            if (!nc_row_rect(panel, i).contains(p)) {
+                continue;
+            }
+            hist_remove(i);
+            serial::write("notif hist=");
+            serial::write_dec32(hist_count);
+            serial::write("\r\n");
+            invalidate(rui_paint_bounds(panel));
+            return true;
+        }
+        return true;
     }
 
     bool deskbar_start_open() noexcept { return start_open; }
