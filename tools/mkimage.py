@@ -5,7 +5,7 @@ from pathlib import Path
 
 SECTOR_SIZE = 512
 STAGE2_SECTORS = 32
-KERNEL_SECTORS = 4096
+KERNEL_SECTORS = 8192
 DATA_LBA = 1 + STAGE2_SECTORS + KERNEL_SECTORS  # 4129
 
 # Compact image by default: stage1 + stage2 + kernel + HYPEDATA blob.
