@@ -3,6 +3,7 @@
 #include "kernel/arch/x86/cpu.h"
 #include "kernel/arch/x86/smp.h"
 #include "kernel/memory/pmm.h"
+#include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
 #include "kernel/time/timer.h"
 
@@ -164,6 +165,11 @@ namespace hype::sched {
         cs.current = next;
         ++cs.switches;
         __atomic_fetch_add(&total_switches, 1ull, __ATOMIC_RELAXED);
+        // Watchdog heartbeat (issue #140): a dispatch that reaches this
+        // point proves the scheduler still makes forward progress. The
+        // pet is lock-free/IRQ-safe, so it is fine under rq_lock; a
+        // wedged scheduler simply stops the "sched" source and trips.
+        wdt::wdt_pet_name("sched");
         hype_context_switch(&cur->rsp, next->rsp);
     }
 

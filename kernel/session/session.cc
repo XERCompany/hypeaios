@@ -5,6 +5,7 @@
 #include "kernel/hello/hello.h"
 #include "kernel/input/scancode.h"
 #include "kernel/power.h"
+#include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
 #include "kernel/session/lockscr.h"
 #include "kernel/svc/revsvc.h"
@@ -380,6 +381,11 @@ namespace hype::session {
         if (current_state != SessionState::Locked) {
             return false;
         }
+        // Watchdog heartbeat (issue #140): the locked branch of the
+        // shell idle loop calls this every pass — the "ui" source must
+        // stay fed while the lock veil owns the screen instead of
+        // deskbar_idle().
+        wdt::wdt_pet_name("ui");
         shell_fb = &fb;
         return lockscr_frame(fb);
     }

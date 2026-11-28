@@ -11,6 +11,7 @@
 #include "kernel/irq.h"
 #include "kernel/panic.h"
 #include "kernel/sched/thread.h"
+#include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
 
 extern "C" hcpp::uintptr_t isr_stub_table[];
@@ -42,6 +43,13 @@ namespace hype::interrupts {
             // shared time base belongs to the BSP alone or it would
             // run N-times fast on an N-CPU machine.
             if (x86::smp_is_bsp()) ticks = ticks + 1;
+            // Watchdog deadline check (issue #140): runs BEFORE the
+            // scheduler tick on every CPU so a monitor-starvation panic
+            // fires even when this tick is about to park its frame on a
+            // preempted thread's stack for a long time — and even when
+            // the scheduler can no longer dispatch the watchdog thread
+            // at all (that's precisely the freeze being detected).
+            wdt::wdt_irq_check();
             // Preemption point: each CPU's own LAPIC timer drives its
             // scheduler tick. The IRQ0 EOI was already sent before
             // dispatch (interrupt_handle below) so sched may switch

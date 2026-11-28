@@ -66,6 +66,7 @@
 #include "kernel/rng/entropy.h"
 #include "kernel/runner/runnervx.h"
 #include "kernel/runtime/runtime.h"
+#include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
 #include "kernel/session/session.h"
 #include "kernel/svc/revsvc.h"
@@ -753,6 +754,17 @@ namespace {
         report("revdbg selftest=", hype::hxrt::revdbg_selftest());
     }
 
+    void stage_wdt() noexcept {
+        // Software watchdog (issue #140): registers the real heartbeat
+        // sources (sched ctx-switch, ui idle pump, input poll), spawns
+        // the "wdt" monitor thread and arms the timer-IRQ starvation
+        // check. Runs the log-only "wdt-test" trip selftest here — it
+        // needs the preemptive scheduler live, which stage_boot_devices
+        // already brought up. Prints "wdt arm=N sources",
+        // "wdt trip=wdt-test" and "wdt selftest=ok".
+        report("watchdog=", hype::wdt::wdt_initialize());
+    }
+
     void stage_hxrt() noexcept {
         hype::hxrt::hxrt_boot();
         report("dxbg selftest=", hype::hxrt::dxbg_selftest());
@@ -948,9 +960,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"vx", 97, stage_loggers},
         {"net", 97, stage_net},
         {"svc", 98, stage_svc},
+        {"wdt", 98, stage_wdt},
         {"gdxf", 99, stage_gdxf},
     };
-    hype::boot::bootseq_run(boot_steps, 13);
+    hype::boot::bootseq_run(boot_steps, 14);
 
     // XDP render manager (issue #108): probe the backend ladder
     // (software -> virtio-gpu -> bare Vulkan/OpenCL-class GPUs), bind
