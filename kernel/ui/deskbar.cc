@@ -76,6 +76,21 @@ namespace hype::ui {
         constexpr hcpp::i32 cv_anim_ticks = 6;
         constexpr hcpp::i32 cv_anim_px = 6;
         constexpr hcpp::u32 cv_preview_max = 40;
+        // Calendar + clock flyout (issue #132): tray-clock click toggles a
+        // bottom-right-anchored panel with a big clock, the full date and
+        // a navigable month grid (same slide-in machinery as quick
+        // settings).
+        constexpr hcpp::i32 cal_w = 280;
+        constexpr hcpp::i32 cal_h = 300;
+        constexpr hcpp::i32 cal_pad = 12;
+        constexpr hcpp::i32 cal_clock_h = 30;   // big "HH:MM" line
+        constexpr hcpp::i32 cal_date_h = 18;    // full-date line under it
+        constexpr hcpp::i32 cal_nav_h = 26;     // "< Month YYYY >" row
+        constexpr hcpp::i32 cal_wd_h = 16;      // weekday header row
+        constexpr hcpp::i32 cal_cell_h = 28;    // one month-grid row
+        constexpr hcpp::i32 cal_anim_ticks = 6;
+        constexpr hcpp::i32 cal_anim_px = 6;
+        constexpr hcpp::i32 cal_nav_max = 120;  // months either direction
         constexpr hcpp::i32 toast_col_w = 352;
         constexpr hcpp::i32 menu_w = 180;
         constexpr hcpp::i32 menu_pad = 4;
@@ -97,6 +112,8 @@ namespace hype::ui {
         constexpr hcpp::u16 key_backspace = 14;
         constexpr hcpp::u16 key_enter = 28;
         constexpr hcpp::u16 key_up = 72;
+        constexpr hcpp::u16 key_left = 75;
+        constexpr hcpp::u16 key_right = 77;
         constexpr hcpp::u16 key_down = 80;
         constexpr hcpp::u32 rtc_poll_mask = 31;
 
@@ -171,6 +188,15 @@ namespace hype::ui {
         // kernel/ui/clipboard.cc (clip_count/clip_history/clip_paste_at).
         bool cv_open = false;
         hcpp::u32 cv_age = cv_anim_ticks;
+
+        // Calendar flyout state: `cal_view_*` is the month on screen,
+        // `cal_nav` the signed offset in months from the real RTC month
+        // (bounded by cal_nav_max so the grid can never run away).
+        bool cal_open = false;
+        hcpp::u32 cal_age = cal_anim_ticks;
+        hcpp::i32 cal_nav = 0;
+        hcpp::i32 cal_view_y = 2026;
+        hcpp::u8 cal_view_m = 1;
 
         void invalidate(const Rect& region) noexcept {
             if (!region.empty()) {
@@ -427,6 +453,184 @@ namespace hype::ui {
                     panel.w - 12, cv_row_h - 4};
         }
 
+        // ---- calendar + clock flyout (issue #132) -----------------------
+
+        bool cal_is_leap(hcpp::i32 y) noexcept {
+            return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        }
+
+        hcpp::i32 cal_month_days(hcpp::i32 y, hcpp::i32 m) noexcept {
+            static const hcpp::u8 days[12] = {31, 28, 31, 30, 31, 30,
+                                              31, 31, 30, 31, 30, 31};
+            if (m < 1 || m > 12) {
+                return 30;
+            }
+            if (m == 2 && cal_is_leap(y)) {
+                return 29;
+            }
+            return days[m - 1];
+        }
+
+        // Serial day number: 1 Jan of year 1 == 1 (a Monday), so the
+        // Monday-first weekday index of a date is (day_num - 1) % 7.
+        hcpp::u32 cal_day_num(hcpp::i32 y, hcpp::i32 m,
+                              hcpp::i32 d) noexcept {
+            const hcpp::u32 yy = static_cast<hcpp::u32>(y - 1);
+            hcpp::u32 n = yy * 365 + yy / 4 - yy / 100 + yy / 400;
+            for (hcpp::i32 i = 1; i < m; ++i) {
+                n += static_cast<hcpp::u32>(cal_month_days(y, i));
+            }
+            return n + static_cast<hcpp::u32>(d);
+        }
+
+        // Weekday column, 0 = Monday .. 6 = Sunday.
+        hcpp::u32 cal_weekday(hcpp::i32 y, hcpp::i32 m,
+                              hcpp::i32 d) noexcept {
+            return (cal_day_num(y, m, d) - 1) % 7;
+        }
+
+        // Calendar panel at its final anchor (bottom-right above bar).
+        Rect compute_cal() noexcept {
+            if (bar.empty()) {
+                return {};
+            }
+            Rect r{bar.right() - bar_pad - cal_w, bar.y - 6 - cal_h, cal_w,
+                   cal_h};
+            if (r.y < 2) {
+                r.y = 2;
+            }
+            return r;
+        }
+
+        Rect cal_rect_now() noexcept {
+            if (!cal_open) {
+                return {};
+            }
+            Rect r = compute_cal();
+            const hcpp::u32 left =
+                cal_age < cal_anim_ticks ? cal_anim_ticks - cal_age : 0;
+            r.y += static_cast<hcpp::i32>(left) * cal_anim_px;
+            return r;
+        }
+
+        Rect cal_anim_region() noexcept {
+            Rect r = compute_cal();
+            r.h += cal_anim_ticks * cal_anim_px;
+            return rui_paint_bounds(r);
+        }
+
+        // Vertical bands inside the panel, top to bottom.
+        Rect cal_clock_row(const Rect& panel) noexcept {
+            return {panel.x + cal_pad, panel.y + cal_pad,
+                    panel.w - 2 * cal_pad, cal_clock_h};
+        }
+
+        Rect cal_date_row(const Rect& panel) noexcept {
+            const Rect clk = cal_clock_row(panel);
+            return {clk.x, clk.bottom() + 2, clk.w, cal_date_h};
+        }
+
+        Rect cal_nav_row(const Rect& panel) noexcept {
+            const Rect date = cal_date_row(panel);
+            // +8 clears the divider painted 4px under the date line.
+            return {date.x, date.bottom() + 8, date.w, cal_nav_h};
+        }
+
+        Rect cal_prev_btn(const Rect& panel) noexcept {
+            const Rect nav = cal_nav_row(panel);
+            return {nav.x, nav.y, 26, nav.h};
+        }
+
+        Rect cal_next_btn(const Rect& panel) noexcept {
+            const Rect nav = cal_nav_row(panel);
+            return {nav.right() - 26, nav.y, 26, nav.h};
+        }
+
+        Rect cal_wd_row(const Rect& panel) noexcept {
+            const Rect nav = cal_nav_row(panel);
+            return {nav.x, nav.bottom() + 2, nav.w, cal_wd_h};
+        }
+
+        Rect cal_grid(const Rect& panel) noexcept {
+            const Rect wd = cal_wd_row(panel);
+            return {wd.x, wd.bottom() + 4, wd.w, 6 * cal_cell_h};
+        }
+
+        Rect cal_cell(const Rect& panel, hcpp::u32 row,
+                      hcpp::u32 col) noexcept {
+            const Rect grid = cal_grid(panel);
+            const hcpp::i32 cw = grid.w / 7;
+            return {grid.x + static_cast<hcpp::i32>(col) * cw,
+                    grid.y + static_cast<hcpp::i32>(row) * cal_cell_h,
+                    cw, cal_cell_h};
+        }
+
+        // Steps the viewed month by `delta` (bounded by cal_nav_max) and
+        // prints the "cal nav=<y-m>" marker with the zero-padded month.
+        void cal_nav_month(hcpp::i32 delta) noexcept {
+            const hcpp::i32 next = cal_nav + delta;
+            if (next < -cal_nav_max || next > cal_nav_max) {
+                return;
+            }
+            cal_nav = next;
+            hcpp::i32 m = static_cast<hcpp::i32>(cal_view_m) + delta;
+            while (m < 1) {
+                m += 12;
+                --cal_view_y;
+            }
+            while (m > 12) {
+                m -= 12;
+                ++cal_view_y;
+            }
+            cal_view_m = static_cast<hcpp::u8>(m);
+            serial::write("cal nav=");
+            serial::write_dec32(static_cast<hcpp::u32>(cal_view_y));
+            serial::write_char('-');
+            if (cal_view_m < 10) {
+                serial::write_char('0');
+            }
+            serial::write_dec32(cal_view_m);
+            serial::write("\r\n");
+            invalidate(rui_paint_bounds(cal_rect_now()));
+        }
+
+        void open_cal() noexcept {
+            if (cal_open) {
+                return;
+            }
+            // One flyout at a time, like the real shells.
+            if (start_open) {
+                deskbar_close_start();
+            }
+            if (qs_open) {
+                deskbar_close_qs();
+            }
+            if (nc_open) {
+                deskbar_close_nc();
+            }
+            if (cv_open) {
+                deskbar_close_clip();
+            }
+            if (hype::win::wm_menu_visible()) {
+                hype::win::wm_menu_close();
+            }
+            if (hype::win::wm_ctx_visible()) {
+                hype::win::wm_ctx_close();
+            }
+            // Anchor the grid on the real RTC month; keep the last view
+            // as fallback when the RTC cannot be read.
+            cal_nav = 0;
+            hype::time::RtcTime now{};
+            if (hype::time::rtc_now(now)) {
+                cal_view_y = now.year;
+                cal_view_m = now.month;
+            }
+            cal_open = true;
+            cal_age = 0;
+            serial::write_line("cal open=ok");
+            invalidate(cal_anim_region().united(clock_rect()));
+        }
+
         void open_cv() noexcept {
             if (cv_open) {
                 return;
@@ -446,6 +650,9 @@ namespace hype::ui {
             }
             if (hype::win::wm_ctx_visible()) {
                 hype::win::wm_ctx_close();
+            }
+            if (cal_open) {
+                deskbar_close_cal();
             }
             cv_open = true;
             cv_age = 0;
@@ -821,6 +1028,9 @@ namespace hype::ui {
             if (cv_open) {
                 deskbar_close_clip();
             }
+            if (cal_open) {
+                deskbar_close_cal();
+            }
             build_menu_order();
             start_open = true;
             serial::write_line("start menu=open");
@@ -846,6 +1056,9 @@ namespace hype::ui {
             }
             if (cv_open) {
                 deskbar_close_clip();
+            }
+            if (cal_open) {
+                deskbar_close_cal();
             }
             if (qs_vol < 0) {
                 // First open: adopt the mixer master gain (Q8, 256 = 100%).
@@ -880,6 +1093,9 @@ namespace hype::ui {
             }
             if (cv_open) {
                 deskbar_close_clip();
+            }
+            if (cal_open) {
+                deskbar_close_cal();
             }
             nc_open = true;
             nc_age = 0;
@@ -1490,6 +1706,176 @@ namespace hype::ui {
             }
         }
 
+        // Centers `text` horizontally in `row` (top-anchored paint) and
+        // returns the x used — measurement matches paint_search_field:
+        // hypefont metrics when ready, 8px cells otherwise.
+        hcpp::i32 cal_text_center(const Rect& row, hcpp::StringView text,
+                                  hcpp::u32 px) noexcept {
+            const hcpp::i32 tw =
+                hype::font::hypefont_ready()
+                    ? hype::font::text_measure(text, px)
+                    : static_cast<hcpp::i32>(text.size()) *
+                          static_cast<hcpp::i32>(px) / 2;
+            hcpp::i32 x = row.x + (row.w - tw) / 2;
+            if (x < row.x) {
+                x = row.x;
+            }
+            return x;
+        }
+
+        void paint_cal(Canvas& canvas, const Theme& theme,
+                       const Rect& panel) noexcept {
+            static const char* const month_names[12] = {
+                "January",  "February", "March",    "April",
+                "May",      "June",     "July",     "August",
+                "September", "October", "November", "December"};
+            static const char* const wd_full[7] = {
+                "Monday", "Tuesday",  "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday"};
+            static const char* const wd_short[7] = {"Mo", "Tu", "We",
+                                                    "Th", "Fr", "Sa",
+                                                    "Su"};
+            rui_panel(canvas, panel, rui_elev_panel);
+            hype::time::RtcTime now{};
+            const bool have_rtc = hype::time::rtc_now(now);
+
+            // Big clock: same HH:MM state the tray cell paints.
+            char clk[6]{"--:--"};
+            if (clock_hour != 0xFF) {
+                clk[0] = static_cast<char>('0' + clock_hour / 10);
+                clk[1] = static_cast<char>('0' + clock_hour % 10);
+                clk[2] = ':';
+                clk[3] = static_cast<char>('0' + clock_minute / 10);
+                clk[4] = static_cast<char>('0' + clock_minute % 10);
+                clk[5] = '\0';
+            }
+            const Rect clk_row = cal_clock_row(panel);
+            paint_label(canvas,
+                        cal_text_center(clk_row,
+                                        hcpp::StringView{clk, 5}, 24),
+                        clk_row.y + 2, hcpp::StringView{clk, 5},
+                        theme.card_fg, 24);
+
+            // Full-date line: "Wednesday, 21 January 2026".
+            const Rect date_row = cal_date_row(panel);
+            char dbuf[48];
+            if (have_rtc) {
+                hcpp::size_t o = 0;
+                const char* wd = wd_full[cal_weekday(
+                    now.year, now.month, now.day)];
+                while (*wd != '\0') {
+                    dbuf[o++] = *wd++;
+                }
+                dbuf[o++] = ',';
+                dbuf[o++] = ' ';
+                o += fmt_u32(dbuf + o, now.day);
+                dbuf[o++] = ' ';
+                const char* mn = month_names[(now.month - 1) % 12];
+                while (*mn != '\0') {
+                    dbuf[o++] = *mn++;
+                }
+                dbuf[o++] = ' ';
+                o += fmt_u32(dbuf + o, now.year);
+                dbuf[o] = '\0';
+            } else {
+                copy_text(dbuf, sizeof(dbuf), "no clock");
+            }
+            paint_label(canvas,
+                        cal_text_center(date_row, hcpp::StringView{dbuf},
+                                        13),
+                        label_top(date_row), hcpp::StringView{dbuf},
+                        theme.muted_fg, 13);
+
+            canvas.fill_rect(
+                Rect{panel.x + cal_pad, date_row.bottom() + 4,
+                     panel.w - 2 * cal_pad, 1},
+                canvas.color(theme.border));
+
+            // Nav row: "<" prev, centered "Month YYYY", ">" next; the
+            // arrow greys out once the ±120-month bound is reached.
+            const Rect nav = cal_nav_row(panel);
+            const Rect prev = cal_prev_btn(panel);
+            const Rect next = cal_next_btn(panel);
+            rui_control_bg(canvas, prev, theme.secondary, theme.border);
+            rui_control_bg(canvas, next, theme.secondary, theme.border);
+            paint_label(canvas, prev.x + (prev.w - 8) / 2,
+                        label_top(prev), "<",
+                        cal_nav > -cal_nav_max ? theme.card_fg
+                                               : theme.muted_fg,
+                        13);
+            paint_label(canvas, next.x + (next.w - 8) / 2,
+                        label_top(next), ">",
+                        cal_nav < cal_nav_max ? theme.card_fg
+                                              : theme.muted_fg,
+                        13);
+            char nbuf[24];
+            hcpp::size_t o = 0;
+            const char* mn = month_names[(cal_view_m - 1) % 12];
+            while (*mn != '\0' && o + 1 < sizeof(nbuf)) {
+                nbuf[o++] = *mn++;
+            }
+            nbuf[o++] = ' ';
+            o += fmt_u32(nbuf + o,
+                         static_cast<hcpp::u32>(cal_view_y));
+            paint_label(canvas,
+                        cal_text_center(nav, hcpp::StringView{nbuf}, 13),
+                        label_top(nav), hcpp::StringView{nbuf},
+                        theme.card_fg, 13);
+
+            // Weekday header, Monday first (Mo..Su).
+            const Rect wdrow = cal_wd_row(panel);
+            const hcpp::i32 cw = wdrow.w / 7;
+            for (hcpp::u32 c = 0; c < 7; ++c) {
+                const Rect col{wdrow.x + static_cast<hcpp::i32>(c) * cw,
+                               wdrow.y, cw, wdrow.h};
+                paint_label(canvas,
+                            cal_text_center(
+                                col, hcpp::StringView{wd_short[c]}, 11),
+                            wdrow.y + 2, hcpp::StringView{wd_short[c]},
+                            theme.muted_fg, 11);
+            }
+
+            // Month grid: leading cells before the 1st stay empty; only
+            // the viewed month's days are drawn (no trailing grey days).
+            const hcpp::u32 col0 =
+                cal_weekday(cal_view_y, cal_view_m, 1);
+            const hcpp::i32 ndays =
+                cal_month_days(cal_view_y, cal_view_m);
+            for (hcpp::u32 i = 0; i < 42; ++i) {
+                const hcpp::i32 day =
+                    static_cast<hcpp::i32>(i) -
+                    static_cast<hcpp::i32>(col0) + 1;
+                if (day < 1 || day > ndays) {
+                    continue;
+                }
+                const Rect cell =
+                    cal_cell(panel, i / 7, i % 7);
+                char dnum[3];
+                dnum[0] = static_cast<char>('0' + day / 10);
+                dnum[1] = static_cast<char>('0' + day % 10);
+                const hcpp::u32 dlen = day > 9 ? 2 : 1;
+                const hcpp::StringView dtext{
+                    dnum + (day > 9 ? 0 : 1), dlen};
+                const bool today =
+                    have_rtc && now.year == cal_view_y &&
+                    now.month == cal_view_m && now.day == day;
+                if (today) {
+                    canvas.fill_circle(cell.x + cell.w / 2,
+                                       cell.y + cell.h / 2, 11,
+                                       canvas.color(theme.accent));
+                }
+                paint_label(canvas, cal_text_center(cell, dtext, 13),
+                            label_top(cell), dtext,
+                            today ? theme.primary_fg : theme.card_fg,
+                            13);
+            }
+            if (rui_dark_surface()) {
+                hype::gfx::gfx_inner_glow_edge(
+                    canvas, panel.inset(Insets::uniform(1)),
+                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
+            }
+        }
+
         void print_clock() noexcept {
             serial::write("tray clock=");
             serial::write_char(static_cast<char>('0' + clock_hour / 10));
@@ -1542,6 +1928,10 @@ namespace hype::ui {
             ++cv_age;
             invalidate(cv_anim_region());
         }
+        if (cal_open && cal_age < cal_anim_ticks) {
+            ++cal_age;
+            invalidate(cal_anim_region());
+        }
         // Toast TTL counts down inside ToastHost::paint — keep the stack
         // column damaged while any card is alive so expiry and the
         // slide-in both animate.
@@ -1582,6 +1972,10 @@ namespace hype::ui {
                 }
                 if (changed) {
                     invalidate(clock_rect());
+                    if (cal_open) {
+                        // The flyout's big clock rides the same minute.
+                        invalidate(rui_paint_bounds(cal_rect_now()));
+                    }
                 }
             }
         }
@@ -1621,16 +2015,19 @@ namespace hype::ui {
         const Rect qs = qs_rect_now();
         const Rect nc = nc_rect_now();
         const Rect cv = cv_rect_now();
+        const Rect cal = cal_rect_now();
         const Rect area = bar.intersection(clip);
         const Rect menu_area = menu.intersection(clip);
         const Rect qs_area = qs.intersection(clip);
         const Rect nc_area = nc.intersection(clip);
         const Rect cv_area = cv.intersection(clip);
+        const Rect cal_area = cal.intersection(clip);
         const Rect toast_area = toasts.count() > 0
                                     ? toast_region().intersection(clip)
                                     : Rect{};
         if (area.empty() && menu_area.empty() && qs_area.empty() &&
-            nc_area.empty() && cv_area.empty() && toast_area.empty()) {
+            nc_area.empty() && cv_area.empty() && cal_area.empty() &&
+            toast_area.empty()) {
             return;
         }
         Canvas canvas(fb);
@@ -1667,6 +2064,9 @@ namespace hype::ui {
         }
         if (!cv_area.empty()) {
             paint_cv(canvas, theme, cv);
+        }
+        if (!cal_area.empty()) {
+            paint_cal(canvas, theme, cal);
         }
         // Toasts sit in the band above the bar, topmost of the shell UI.
         if (toasts.count() > 0 && !toast_region().empty()) {
@@ -1780,6 +2180,25 @@ namespace hype::ui {
             // Click outside dismisses, then the click may hit the bar.
             deskbar_close_clip();
         }
+        const bool was_cal = cal_open;
+        if (cal_open) {
+            const Rect panel = cal_rect_now();
+            if (panel.contains(p)) {
+                // Only the nav arrows are clickable inside the panel;
+                // day cells are informational.
+                if (cal_prev_btn(panel).contains(p)) {
+                    cal_nav_month(-1);
+                    return true;
+                }
+                if (cal_next_btn(panel).contains(p)) {
+                    cal_nav_month(1);
+                    return true;
+                }
+                return true;
+            }
+            // Click outside dismisses, then the click may hit the bar.
+            deskbar_close_cal();
+        }
         if (bar.empty() || !bar.contains(p)) {
             return false;
         }
@@ -1802,7 +2221,14 @@ namespace hype::ui {
                 }
                 return true;
             }
-            // Clock cell / padding: consume without action.
+            if (clock_rect().contains(p)) {
+                // Clock cell toggles the calendar + clock flyout.
+                if (!was_cal) {
+                    open_cal();
+                }
+                return true;
+            }
+            // Remaining tray padding: consume without action.
             return true;
         }
         const hcpp::i32 limit = tray_rect().x - task_gap;
@@ -1930,6 +2356,16 @@ namespace hype::ui {
     // Right-click inside the open notification center dismisses the row
     // under the cursor (same result as its "x" hitbox).
     bool deskbar_handle_mouse_r(hcpp::i32 x, hcpp::i32 y) noexcept {
+        if (cal_open) {
+            // Same rule as the clipboard flyout: inside is consumed,
+            // outside closes and falls through to right-click routing.
+            const Point p{x, y};
+            if (cal_rect_now().contains(p)) {
+                return true;
+            }
+            deskbar_close_cal();
+            return false;
+        }
         if (cv_open) {
             // No right-click affordance in the clipboard flyout: inside
             // is consumed, outside closes and falls through to routing.
@@ -2003,6 +2439,40 @@ namespace hype::ui {
         if (code >= 2 && code <= 10) {
             clip_paste_at(code - 2);
             deskbar_close_clip();
+            return true;
+        }
+        return false;
+    }
+
+    bool deskbar_cal_open() noexcept { return cal_open; }
+
+    void deskbar_close_cal() noexcept {
+        if (!cal_open) {
+            return;
+        }
+        // Include the panel shadow spill so dismiss leaves no ring.
+        const Rect gone = rui_paint_bounds(cal_rect_now());
+        cal_open = false;
+        serial::write_line("cal open=close");
+        invalidate(gone.united(clock_rect()));
+    }
+
+    // Key hook while the calendar flyout is open: Esc closes, Left/Right
+    // step the viewed month (same bound as the on-panel arrows).
+    bool deskbar_cal_key(hcpp::u16 code) noexcept {
+        if (!cal_open) {
+            return false;
+        }
+        if (code == key_escape) {
+            deskbar_close_cal();
+            return true;
+        }
+        if (code == key_left) {
+            cal_nav_month(-1);
+            return true;
+        }
+        if (code == key_right) {
+            cal_nav_month(1);
             return true;
         }
         return false;
