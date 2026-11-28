@@ -1,5 +1,6 @@
 #include "kernel/win/winman.h"
 
+#include "kernel/cfg/settings.h"
 #include "kernel/font/hypefont.h"
 #include "kernel/functionemitkeys.h"
 #include "kernel/font/hypetext.h"
@@ -65,6 +66,14 @@ namespace hype::win {
         constexpr hcpp::u16 key_v = 47;
         constexpr hcpp::u16 key_lgui = 91;
         constexpr hcpp::u16 key_rgui = 92;
+        // Set-1 scancodes for the virtual-desktop chords (issue #135):
+        // Win+Ctrl+Left/Right switch, Win+Ctrl+D new, Win+Ctrl+F4/W
+        // delete, Win+Shift+Left/Right move the focused window.
+        constexpr hcpp::u16 key_w = 17;
+        constexpr hcpp::u16 key_d = 32;
+        constexpr hcpp::u16 key_f4 = 62;
+        constexpr hcpp::u16 key_left = 75;
+        constexpr hcpp::u16 key_right = 77;
         // Titlebar hot-tracking part ids.
         constexpr hcpp::u8 hot_none = 0;
         constexpr hcpp::u8 hot_menu = 1;
@@ -111,6 +120,14 @@ namespace hype::win {
         // content rendering to WndProc dispatch; event routes wm events.
         WmXauPaintHook xau_paint_hook = nullptr;
         WmXauEventHook xau_event_hook = nullptr;
+        // Virtual desktops (issue #135): every window carries a `vdesk`
+        // tag; only windows tagged with desk_current paint, hit-test,
+        // enumerate for the taskbar and enter the Alt-Tab MRU list.
+        // focus_mem remembers each desktop's focused window id so a
+        // switch back restores exactly where the user left off.
+        hcpp::u32 desk_count = vdesk_default;
+        hcpp::u32 desk_current = 0;
+        hcpp::u32 focus_mem[vdesk_max]{};
 
         void damage_add(const Rect& region) noexcept {
             if (region.empty()) {
@@ -599,10 +616,14 @@ namespace hype::win {
             }
         }
 
+        // Z-order of the visible windows ON THE CURRENT DESKTOP: every
+        // consumer (paint, hit tests, hover, XAU mouse delivery, MRU)
+        // goes through this, so filtering here is what hides the other
+        // desktops' windows (issue #135).
         hcpp::u32 collect_order(hcpp::u32* order, bool ascending) noexcept {
             hcpp::u32 n = 0;
             for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
-                if (slots[i].id != 0 &&
+                if (slots[i].id != 0 && slots[i].vdesk == desk_current &&
                     slots[i].state != WinState::Minimized) {
                     order[n++] = i;
                 }
@@ -707,7 +728,7 @@ namespace hype::win {
             hcpp::u32 mins[wm_max_windows];
             hcpp::u32 m = 0;
             for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
-                if (slots[i].id != 0 &&
+                if (slots[i].id != 0 && slots[i].vdesk == desk_current &&
                     slots[i].state == WinState::Minimized) {
                     mins[m++] = i;
                 }
@@ -818,6 +839,126 @@ namespace hype::win {
             damage_add(hype::ui::rui_paint_bounds(switcher_rect()));
         }
 
+        // ---- virtual-desktop core (issue #135) -------------------------
+
+        // Id of the Focused window anywhere in the slot table (the
+        // wm keeps at most one), or 0. vdesk-agnostic on purpose: desk
+        // transitions need the outgoing desktop's focus too.
+        hcpp::u32 focused_id() noexcept {
+            for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
+                if (slots[i].id != 0 &&
+                    slots[i].state == WinState::Focused) {
+                    return slots[i].id;
+                }
+            }
+            return 0;
+        }
+
+        // Demote every Focused window to Normal (chrome repaint + XAU
+        // focus-lost) — the same teardown wm_focus runs before raising.
+        void clear_focus() noexcept {
+            for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
+                if (slots[i].id != 0 &&
+                    slots[i].state == WinState::Focused) {
+                    damage_add(chrome_band(slots[i].frame));
+                    slots[i].state = WinState::Normal;
+                    if (xau_event_hook != nullptr) {
+                        xau_event_hook(slots[i].id, wm_xau_ev_focus, 0, 0);
+                    }
+                }
+            }
+        }
+
+        // Topmost non-minimized window on the current desktop, or 0.
+        hcpp::u32 top_window_on_desk() noexcept {
+            hcpp::u32 order[wm_max_windows];
+            const hcpp::u32 n = collect_order(order, false);
+            return n > 0 ? slots[order[0]].id : 0;
+        }
+
+        // Focus restore after desk_current changed (or tags renumbered):
+        // prefer `prefer` when it lives on the current desktop, else the
+        // remembered focus, else the topmost window; demote everything
+        // when the desktop is empty.
+        void desk_restore_focus(hcpp::u32 prefer) noexcept {
+            hcpp::u32 want = prefer;
+            const Win* w = slot_for(want);
+            if (w == nullptr || w->vdesk != desk_current ||
+                w->state == WinState::Minimized) {
+                want = focus_mem[desk_current];
+            }
+            w = slot_for(want);
+            if (w == nullptr || w->vdesk != desk_current ||
+                w->state == WinState::Minimized) {
+                want = top_window_on_desk();
+            }
+            if (want != 0) {
+                wm_focus(want);  // demotes the outgoing focus + raises
+            } else {
+                clear_focus();
+            }
+        }
+
+        // Core desktop transition: remember the outgoing desktop's focus,
+        // tear down desktop-pinned UI state (switcher, menus, drag,
+        // hover), restore the incoming desktop's focus and repaint.
+        // Serial markers and the toast are left to callers.
+        void desk_switch_apply(hcpp::u32 next) noexcept {
+            if (switcher_open) {
+                alttab_close(false);
+            }
+            if (wm_menu_visible()) {
+                wm_menu_close();
+            }
+            if (wm_ctx_visible()) {
+                wm_ctx_close();
+            }
+            // An in-flight titlebar drag or a hovered caption button is
+            // pinned to a window of the outgoing desktop — drop it.
+            preview_clear();
+            drag_zone = SnapZone::None;
+            drag_win = 0;
+            drag_engaged = false;
+            if (hover_win != 0) {
+                Win* hw = slot_for(hover_win);
+                if (hw != nullptr) {
+                    damage_add(chrome_band(hw->frame));
+                }
+                hover_win = 0;
+                hover_part = hot_none;
+            }
+            focus_mem[desk_current] = focused_id();
+            desk_current = next;
+            desk_restore_focus(0);
+            damage_full = true;
+        }
+
+        // Serial marker "vdesk switch=<i>/<n>" plus the deskbar toast —
+        // the on-screen affordance that names the landing desktop.
+        void desk_report(hcpp::u32 index) noexcept {
+            serial::write("vdesk switch=");
+            serial::write_dec32(index + 1);
+            serial::write_char('/');
+            serial::write_dec32(desk_count);
+            serial::write("\r\n");
+            char msg[8];
+            msg[0] = static_cast<char>('1' + index);
+            msg[1] = ' ';
+            msg[2] = '/';
+            msg[3] = ' ';
+            msg[4] = static_cast<char>('0' + desk_count);
+            msg[5] = '\0';
+            hype::ui::deskbar_notify("Desktop", msg);
+        }
+
+        // Persist the desktop count (issue #135 -> ui.vdesk_count, saved
+        // through the debounced hype.cfg pipeline from issue #130).
+        void persist_desk_count() noexcept {
+            hype::cfg::settings_set_int("ui.vdesk_count",
+                                        static_cast<hcpp::i32>(desk_count));
+            hype::cfg::settings_request_save();
+        }
+
         void wm_key_event(void*, const input::InputEvent& e) noexcept {
             if (e.type != input::InputEventType::Key) {
                 return;
@@ -878,6 +1019,30 @@ namespace hype::win {
             // Win+V toggles the clipboard-history flyout (deskbar).
             if (gui && e.code == key_v) {
                 hype::ui::deskbar_toggle_clip();
+                return;
+            }
+            // Virtual desktops (issue #135): Win+Ctrl+Left/Right switch
+            // desktops with wraparound, Win+Ctrl+D appends one,
+            // Win+Ctrl+F4 (or W) deletes the current one and
+            // Win+Shift+Left/Right moves the focused window to a
+            // neighboring desktop.
+            if (gui && ctrl) {
+                if (e.code == key_left || e.code == key_right) {
+                    vdesk_step(e.code == key_right ? 1 : -1);
+                    return;
+                }
+                if (e.code == key_d) {
+                    vdesk_new();
+                    return;
+                }
+                if (e.code == key_f4 || e.code == key_w) {
+                    vdesk_delete();
+                    return;
+                }
+            }
+            if (gui && !ctrl && input::scancode_shift_active() &&
+                (e.code == key_left || e.code == key_right)) {
+                vdesk_move_focused(e.code == key_right ? 1 : -1);
                 return;
             }
             // While the flyout is up it takes Esc and the number-row
@@ -1001,6 +1166,7 @@ namespace hype::win {
         Win& w = slots[slot];
         w = Win{};
         w.id = slot + 1;
+        w.vdesk = static_cast<hcpp::u8>(desk_current);
         copy_name(w.app_name, app_name);
         w.frame = frame;
         w.content_rect = content_for(frame);
@@ -1044,6 +1210,12 @@ namespace hype::win {
         }
         const Rect gone = w->frame;
         *w = Win{};
+        // Forget any per-desktop focus memory pointing at this slot.
+        for (hcpp::u32 i = 0; i < vdesk_max; ++i) {
+            if (focus_mem[i] == id) {
+                focus_mem[i] = 0;
+            }
+        }
         damage_add(hype::ui::rui_paint_bounds(gone));
         alttab_sync();
         if (was_focused) {
@@ -1060,6 +1232,14 @@ namespace hype::win {
         Win* w = slot_for(id);
         if (w == nullptr) {
             return false;
+        }
+        // Cross-desktop activation (issue #135): focusing a window that
+        // lives on another desktop switches to it first — same outcome
+        // as clicking its task button over there (e.g. reopening an
+        // already-running app from the Start menu).
+        if (w->vdesk != desk_current) {
+            desk_switch_apply(w->vdesk);
+            desk_report(w->vdesk);
         }
         for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
             if (slots[i].id != 0 && slots[i].state == WinState::Focused) {
@@ -1664,8 +1844,10 @@ namespace hype::win {
     const Win* wm_window(hcpp::u32 id) noexcept { return slot_for(id); }
 
     const Win* wm_window_at(hcpp::u32 index) noexcept {
+        // Enumerates only the current desktop's windows (issue #135) —
+        // this is what filters the deskbar task buttons per desktop.
         for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
-            if (slots[i].id == 0) {
+            if (slots[i].id == 0 || slots[i].vdesk != desk_current) {
                 continue;
             }
             if (index == 0) {
@@ -1678,7 +1860,8 @@ namespace hype::win {
 
     const Win* wm_focused() noexcept {
         for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
-            if (slots[i].id != 0 && slots[i].state == WinState::Focused) {
+            if (slots[i].id != 0 && slots[i].vdesk == desk_current &&
+                slots[i].state == WinState::Focused) {
                 return &slots[i];
             }
         }
@@ -1781,6 +1964,148 @@ namespace hype::win {
         }
         copy_name(w->caption, caption);
         damage_add(chrome_band(w->frame));
+    }
+
+    // --- Virtual desktops (issue #135) ------------------------------------
+
+    hcpp::u32 vdesk_count() noexcept { return desk_count; }
+
+    hcpp::u32 vdesk_current() noexcept { return desk_current; }
+
+    bool vdesk_switch(hcpp::u32 index) noexcept {
+        if (index >= desk_count) {
+            return false;
+        }
+        if (index == desk_current) {
+            return true;
+        }
+        desk_switch_apply(index);
+        desk_report(index);
+        return true;
+    }
+
+    bool vdesk_step(hcpp::i32 dir) noexcept {
+        const hcpp::u32 next = static_cast<hcpp::u32>(
+            (static_cast<hcpp::i32>(desk_current) + dir +
+             static_cast<hcpp::i32>(desk_count)) %
+            static_cast<hcpp::i32>(desk_count));
+        return vdesk_switch(next);
+    }
+
+    bool vdesk_new() noexcept {
+        if (desk_count >= vdesk_max) {
+            return false;
+        }
+        ++desk_count;
+        serial::write("vdesk new=");
+        serial::write_dec32(desk_count);
+        serial::write("\r\n");
+        persist_desk_count();
+        vdesk_switch(desk_count - 1);
+        return true;
+    }
+
+    bool vdesk_delete() noexcept {
+        if (desk_count <= vdesk_min) {
+            return false;
+        }
+        const hcpp::u32 gone = desk_current;
+        // The deleted desktop's focused window follows its windows to the
+        // surviving desktop and stays focused there.
+        const hcpp::u32 carried = focused_id();
+        // Windows on the deleted desktop move to the previous one (or
+        // absorb into the renumbered desk 0 when desktop 0 goes away —
+        // that's the "next" desktop after the shift); higher tags
+        // renumber down.
+        const hcpp::u32 into = gone > 0 ? gone - 1 : 0;
+        for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
+            if (slots[i].id == 0) {
+                continue;
+            }
+            if (slots[i].vdesk == gone) {
+                slots[i].vdesk = static_cast<hcpp::u8>(into);
+            } else if (slots[i].vdesk > gone) {
+                --slots[i].vdesk;
+            }
+        }
+        // Per-desktop focus memory shifts down over the deleted slot.
+        for (hcpp::u32 i = gone; i + 1 < desk_count; ++i) {
+            focus_mem[i] = focus_mem[i + 1];
+        }
+        focus_mem[desk_count - 1] = 0;
+        --desk_count;
+        serial::write("vdesk del=");
+        serial::write_dec32(desk_count);
+        serial::write("\r\n");
+        persist_desk_count();
+        if (switcher_open) {
+            alttab_close(false);
+        }
+        if (wm_menu_visible()) {
+            wm_menu_close();
+        }
+        if (wm_ctx_visible()) {
+            wm_ctx_close();
+        }
+        desk_current = gone > 0 ? gone - 1 : 0;
+        desk_restore_focus(carried);
+        damage_full = true;
+        desk_report(desk_current);
+        return true;
+    }
+
+    bool vdesk_move_focused(hcpp::i32 dir) noexcept {
+        Win* w = slot_for(focused_id());
+        if (w == nullptr) {
+            return false;
+        }
+        const hcpp::i32 target =
+            static_cast<hcpp::i32>(desk_current) + dir;
+        if (target < 0 || target >= static_cast<hcpp::i32>(desk_count)) {
+            return false;
+        }
+        w->vdesk = static_cast<hcpp::u8>(target);
+        // Remember it as the target desktop's focus so switching there
+        // lands on the moved window; the current desktop hands focus to
+        // its next topmost survivor.
+        focus_mem[target] = w->id;
+        focus_mem[desk_current] = 0;
+        desk_restore_focus(0);
+        damage_full = true;
+        serial::write("vdesk move=");
+        serial::write_dec32(static_cast<hcpp::u32>(target) + 1);
+        serial::write("\r\n");
+        return true;
+    }
+
+    void vdesk_set_count(hcpp::u32 count) noexcept {
+        if (count < vdesk_min) {
+            count = vdesk_min;
+        }
+        if (count > vdesk_max) {
+            count = vdesk_max;
+        }
+        if (count == desk_count) {
+            return;
+        }
+        if (count < desk_count) {
+            // Windows on dropped desktops merge into the last survivor.
+            for (hcpp::u32 i = 0; i < wm_max_windows; ++i) {
+                if (slots[i].id != 0 &&
+                    slots[i].vdesk >= count) {
+                    slots[i].vdesk = static_cast<hcpp::u8>(count - 1);
+                }
+            }
+            for (hcpp::u32 i = count; i < desk_count; ++i) {
+                focus_mem[i] = 0;
+            }
+            if (desk_current >= count) {
+                desk_current = count - 1;
+            }
+        }
+        desk_count = count;
+        desk_restore_focus(0);
+        damage_full = true;
     }
 
 }

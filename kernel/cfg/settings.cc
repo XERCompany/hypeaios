@@ -33,6 +33,7 @@ namespace {
         {"ui.theme", CfgType::Str, "dark", 0, 0},
         {"ui.hard_shadow", CfgType::Bool, "0", 0, 1},
         {"desktop.wallpaper", CfgType::Str, "", 0, 0},
+        {"ui.vdesk_count", CfgType::Int, "4", 2, 9},
     };
     constexpr hcpp::u32 key_count = sizeof(keys) / sizeof(keys[0]);
 
@@ -388,6 +389,14 @@ namespace hype::cfg {
             hype::ui::theme_set_hard_shadow(
                 settings_get_bool("ui.hard_shadow"));
             hype::win::wm_invalidate_all();
+            return true;
+        }
+        if (str_eq(key, "ui.vdesk_count")) {
+            // Virtual desktops (issue #135): resize the workspace count;
+            // windows on dropped desktops merge into the last one.
+            hype::win::vdesk_set_count(
+                static_cast<hcpp::u32>(
+                    settings_get_int("ui.vdesk_count")));
             return true;
         }
         if (str_eq(key, "desktop.wallpaper")) {
