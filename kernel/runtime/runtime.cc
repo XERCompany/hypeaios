@@ -6,6 +6,7 @@
 #include "kernel/arch/x86/apic.h"
 #include "kernel/arch/x86/smp.h"
 #include "kernel/core_services.h"
+#include "kernel/firewire/firewirebus.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/klog.h"
 #include "kernel/kvm/kvm.h"
@@ -93,6 +94,15 @@ namespace hype::runtime {
             kvm::kvm_initialize();
             return true;
         }
+
+        bool firewire_enter(void*) noexcept {
+            // Runs after pci.scan + memory.pmm (DMA buffers) and
+            // interrupts.foundation + time.timer (bounded waits). FW is
+            // optional hardware: fw_initialize() prints dev=absent and
+            // returns so this stage can never fail the boot.
+            fw::fw_initialize();
+            return true;
+        }
         bool context_enter(void*) noexcept {
             current.context_switch_ready = sched::context_selftest();
             sched::scheduler_initialize();
@@ -150,6 +160,7 @@ namespace hype::runtime {
         RuntimeStage smp_stage{"smp.ap", 56, smp_enter, nullptr, StageState::Pending};
         RuntimeStage usb_stage{"usb.xhci", 57, usb_enter, nullptr, StageState::Pending};
         RuntimeStage kvm_stage{"kvm.vmx", 58, kvm_enter, nullptr, StageState::Pending};
+        RuntimeStage firewire_stage{"firewire.ohci", 59, firewire_enter, nullptr, StageState::Pending};
         RuntimeStage context_stage{"sched.context", 60, context_enter, nullptr, StageState::Pending};
     }  // namespace
 
@@ -168,6 +179,7 @@ namespace hype::runtime {
         register_stage(smp_stage);
         register_stage(usb_stage);
         register_stage(kvm_stage);
+        register_stage(firewire_stage);
         register_stage(context_stage);
         current.stages_registered = stage_count;
     }
