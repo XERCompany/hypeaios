@@ -1422,4 +1422,78 @@ namespace hype::ui {
         return ok;
     }
 
+    bool reskin_selftest() noexcept {
+        // Reskin v2 verification (issue #177 follow-up): the desktop
+        // chrome repaint routes every surface through the token tables
+        // and shared rui_* paint, so probe that plumbing here — token
+        // projection, two-stop shadow recipes, panel fill/border and
+        // the Type-3 top edge on both palettes.
+        static hcpp::u8 pixels[160 * 120 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 160, 120, 160 * 4, 32,
+                                           8, 16, 8, 8, 8, 0);
+        if (!target.valid()) {
+            return false;
+        }
+
+        const Theme& dark = theme_dark();
+        theme_set(dark);
+        const hui::HuiColors& dc = hui::colors();
+        bool tokens_ok =
+            dc.surface == dark.card &&
+            dc.surface_sunk == dark.surface_sunk &&
+            dc.surface_elev == dark.secondary &&
+            dc.border == dark.border &&
+            dc.border_strong == dark.border_strong &&
+            dc.accent_soft == dark.accent_soft &&
+            dc.accent_soft_alpha != 0 && dc.scrim_alpha != 0 &&
+            dark.radius_xs == 4 && dark.radius_sm == 6 &&
+            dark.radius_md == 8 && dark.radius_lg == 12;
+
+        bool shadows_ok = true;
+        for (hcpp::u8 i = 0; i <= 5; ++i) {
+            const hui::HuiShadowRecipe& r =
+                hui::shadow_recipe(static_cast<hui::HuiShadowLevel>(i));
+            // Every elevation level carries a non-zero umbra; overlays
+            // (lg and up) also carry a real penumbra.
+            if (r.umbra.alpha == 0 ||
+                (i >= static_cast<hcpp::u8>(hui::HuiShadowLevel::Lg) &&
+                 r.penumbra.alpha == 0)) {
+                shadows_ok = false;
+            }
+        }
+
+        Canvas canvas(target);
+        const Rect screen{0, 0, 160, 120};
+        const Rect box{40, 40, 80, 50};
+        canvas.fill_rect(screen, canvas.color(dark.bg));
+        rui_panel(canvas, box, rui_elev_panel);
+        const bool dark_panel_ok =
+            target.get_pixel(80, 65) == canvas.color(dc.surface_elev) &&
+            target.get_pixel(80, 40) == canvas.color(dc.border) &&
+            target.get_pixel(40, 65) == canvas.color(dc.border);
+
+        theme_set(theme_light());
+        const hui::HuiColors& lc = hui::colors();
+        canvas.fill_rect(screen, canvas.color(theme_light().bg));
+        rui_panel(canvas, box, rui_elev_panel);
+        const bool light_panel_ok =
+            lc.surface == theme_light().card &&
+            lc.border == theme_light().border &&
+            target.get_pixel(80, 65) == canvas.color(lc.surface_elev) &&
+            target.get_pixel(80, 40) == canvas.color(lc.border);
+        theme_set(dark);
+
+        const bool ok = tokens_ok && shadows_ok && dark_panel_ok &&
+                        light_panel_ok;
+        serial::write("reskin tokens=");
+        serial::write(tokens_ok ? "ok" : "fail");
+        serial::write(" shadows=");
+        serial::write(shadows_ok ? "ok" : "fail");
+        serial::write(" panels=");
+        serial::write_line(dark_panel_ok && light_panel_ok ? "ok"
+                                                           : "fail");
+        serial::write_line(ok ? "reskin v2=ok" : "reskin v2=fail");
+        return ok;
+    }
+
 }  // namespace hype::ui

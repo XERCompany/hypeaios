@@ -1,5 +1,7 @@
 #include "kernel/hxrt/apps/speedstart.h"
 
+#include "kernel/font/hypefont.h"
+#include "kernel/font/hypetext.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/apps/builtins.h"
 #include "kernel/hxrt/hxrt.h"
@@ -7,6 +9,7 @@
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
+#include "kernel/ui/uiscale.h"
 #include "kernel/win/deskman.h"
 #include "kernel/win/winman.h"
 
@@ -25,7 +28,6 @@ namespace hype::hxrt {
         constexpr hcpp::i32 cell_w = 92;
         constexpr hcpp::i32 cell_h = 100;
         constexpr hcpp::i32 icon_size = 52;
-        constexpr hcpp::u32 name_max = 11;
 
         hcpp::u32 order[hxrt_max_apps];
         hcpp::u32 order_count = 0;
@@ -90,8 +92,8 @@ namespace hype::hxrt {
         }
 
         hcpp::i32 grid_cols() noexcept {
-            const hcpp::i32 usable = last_region.w - pad * 2;
-            const hcpp::i32 cols = usable / cell_w;
+            const hcpp::i32 usable = last_region.w - ui::ui_px(pad) * 2;
+            const hcpp::i32 cols = usable / ui::ui_px(cell_w);
             return cols > 0 ? cols : 1;
         }
 
@@ -106,20 +108,47 @@ namespace hype::hxrt {
             }
         }
 
-        hcpp::u32 copy_name(char* out, const char* name,
-                            hcpp::u32 max) noexcept {
-            hcpp::u32 n = 0;
-            while (n < max && name[n] != '\0') {
-                out[n] = name[n];
-                ++n;
+        hcpp::i32 measure_px(hcpp::StringView text,
+                             hcpp::u32 px) noexcept {
+            if (hype::font::hypefont_ready()) {
+                return hype::font::text_measure(text, px);
             }
-            return n;
+            return static_cast<hcpp::i32>(text.size()) * 8;
+        }
+
+        // Fits `name` into `max_w` px with a trailing U+2026 ellipsis
+        // (reskin v2): grid labels must clip to the tile, never collide
+        // with the neighbour cell's label.
+        hcpp::size_t ellipsize(char* buf, hcpp::size_t cap,
+                               const char* name, hcpp::i32 max_w) noexcept {
+            hcpp::size_t len = 0;
+            while (len + 4 < cap && name[len] != '\0') {
+                buf[len] = name[len];
+                ++len;
+            }
+            if (measure_px(hcpp::StringView{buf, len}, 13) <= max_w) {
+                return len;
+            }
+            while (len > 0) {
+                --len;
+                buf[len] = '\xE2';
+                buf[len + 1] = '\x80';
+                buf[len + 2] = '\xA6';
+                if (measure_px(hcpp::StringView{buf, len + 3}, 13) <=
+                    max_w) {
+                    return len + 3;
+                }
+            }
+            buf[0] = '\xE2';
+            buf[1] = '\x80';
+            buf[2] = '\xA6';
+            return 3;
         }
 
         void paint_tile(Canvas& canvas, const Theme& theme, const Rect& tile,
                         const HxerHeader* app) noexcept {
-            const Rect icon{tile.x + (tile.w - icon_size) / 2, tile.y + 4,
-                            icon_size, icon_size};
+            const Rect icon{tile.x + (tile.w - ui::ui_px(icon_size)) / 2, tile.y + 4,
+                            ui::ui_px(icon_size), ui::ui_px(icon_size)};
             hype::ui::rui_rounded_gradient(
                 canvas, icon, static_cast<hcpp::i32>(theme.radius_md),
                 hype::ui::rui_lift(theme.primary, 1), theme.primary);
@@ -138,16 +167,23 @@ namespace hype::hxrt {
                 canvas.fill_circle(icon.right() - 4, icon.y + 4, 3,
                                    canvas.color(theme.primary_fg));
             }
-            char label[name_max];
-            const hcpp::u32 len = copy_name(label, app->name, name_max);
-            const hcpp::i32 text_w = static_cast<hcpp::i32>(len) * 8;
+            // Label: ellipsis-fit to the tile so names cannot bleed
+            // into the next grid cell (reskin v2 overlap fix).
+            char label[36];
+            const hcpp::size_t len =
+                ellipsize(label, sizeof(label), app->name, tile.w - 8);
+            const hcpp::i32 text_w =
+                measure_px(hcpp::StringView{label, len}, 13);
             hcpp::i32 tx = tile.x + (tile.w - text_w) / 2;
             if (tx < tile.x) {
                 tx = tile.x;
             }
+            const Rect saved_clip = canvas.clip();
+            canvas.set_clip(saved_clip.intersection(tile));
             canvas.draw_text(tx, tile.bottom() - 8,
                              hcpp::StringView{label, len},
                              canvas.color(theme.fg));
+            canvas.set_clip(saved_clip);
         }
 
         void ss_entry(AppCtx& ctx) noexcept {
@@ -161,14 +197,18 @@ namespace hype::hxrt {
             const Theme& theme = hype::ui::theme_active();
             const Rect& box = ctx.region;
             canvas.fill_rect(box, canvas.color(theme.card));
-            const Rect search{box.x + pad, box.y + pad - 4,
-                              box.w - pad * 2, search_h};
-            hype::ui::rui_control_bg(canvas, search, theme.bg, theme.border);
+            const Rect search{box.x + ui::ui_px(pad), box.y + ui::ui_px(pad) - 4,
+                              box.w - ui::ui_px(pad) * 2, ui::ui_px(search_h)};
+            // Input at rest: sunk surface + border_strong edge (reskin
+            // v2 input contract).
+            hype::ui::rui_control_bg(canvas, search, theme.surface_sunk,
+                                     theme.border_strong);
             const hcpp::i32 lens_x = search.x + 18;
             const hcpp::i32 lens_y = search.y + search.h / 2;
             canvas.fill_circle(lens_x, lens_y, 5,
                                canvas.color(theme.muted_fg));
-            canvas.fill_circle(lens_x, lens_y, 3, canvas.color(theme.bg));
+            canvas.fill_circle(lens_x, lens_y, 3,
+                               canvas.color(theme.surface_sunk));
             canvas.draw_line(lens_x + 3, lens_y + 3, lens_x + 8, lens_y + 8,
                              canvas.color(theme.muted_fg));
             canvas.draw_text(search.x + 34, search.y + 20, "Search apps",
@@ -204,10 +244,10 @@ namespace hype::hxrt {
         }
         const hcpp::i32 cols = grid_cols();
         const hcpp::i32 i = static_cast<hcpp::i32>(index);
-        return {last_region.x + pad + (i % cols) * cell_w,
-                last_region.y + pad + search_h + grid_gap +
-                    (i / cols) * cell_h,
-                cell_w, cell_h};
+        return {last_region.x + ui::ui_px(pad) + (i % cols) * ui::ui_px(cell_w),
+                last_region.y + ui::ui_px(pad) + ui::ui_px(search_h) + ui::ui_px(grid_gap) +
+                    (i / cols) * ui::ui_px(cell_h),
+                ui::ui_px(cell_w), ui::ui_px(cell_h)};
     }
 
     hcpp::i32 ss_hit(hcpp::i32 x, hcpp::i32 y) noexcept {

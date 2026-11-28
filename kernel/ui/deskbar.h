@@ -23,6 +23,10 @@ namespace hype::ui {
     // Routes a primary-button click through the taskbar hit zones. Returns
     // true when the click was consumed (bar area or open Start menu).
     bool deskbar_handle_mouse(hcpp::i32 x, hcpp::i32 y, bool pressed) noexcept;
+    // Pointer-move hook (reskin v2): hot-tracks the bar chips
+    // (Start/task/tray/clock/vdesk) and damages the strip on zone
+    // changes so hover washes repaint.
+    void deskbar_handle_move(hcpp::i32 x, hcpp::i32 y) noexcept;
 
     // Key routing while the Start menu is open (issue #129): printable
     // `ascii` feeds the auto-focused search field, Backspace edits,

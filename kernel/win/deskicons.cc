@@ -1,6 +1,7 @@
 #include "kernel/win/deskicons.h"
 
 #include "kernel/cfg/settings.h"
+#include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/apps/dxbg.h"
@@ -9,6 +10,7 @@
 #include "kernel/time/timer.h"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/deskbar.h"
+#include "kernel/ui/huitokens.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/uiscale.h"
@@ -39,10 +41,8 @@ namespace hype::win {
 
         constexpr hcpp::u32 icon_max = 48;
         constexpr hcpp::u32 icon_name_cap = 31;
-        constexpr hcpp::u32 label_max = 11;
         constexpr hcpp::i32 glyph_size = 48;
         constexpr hcpp::u64 dblclick_ms = 500;
-        constexpr hcpp::u8 sel_alpha = 76;
 
         constexpr const char* user_root = "HYPEOS://U";
         constexpr const char* wall_dir = "HYPEOS://U/wallpapers";
@@ -319,14 +319,73 @@ namespace hype::win {
             canvas.fill_rect(Rect{px + 6, py + 28, 14, 2}, ink);
         }
 
+        // t/255 lerp of `top` over `base` — pre-blends translucent
+        // chips so fills stay rounded (the canvas has no rounded-alpha
+        // fill); same trick as the deskbar's accent_wash.
+        hcpp::u32 mix_rgb(hcpp::u32 base, hcpp::u32 top,
+                          hcpp::u8 t) noexcept {
+            const hcpp::u32 inv = 255 - t;
+            const hcpp::u32 r =
+                (((base >> 16) & 0xFF) * inv +
+                 ((top >> 16) & 0xFF) * t) / 255;
+            const hcpp::u32 g =
+                (((base >> 8) & 0xFF) * inv +
+                 ((top >> 8) & 0xFF) * t) / 255;
+            const hcpp::u32 b =
+                ((base & 0xFF) * inv + (top & 0xFF) * t) / 255;
+            return (r << 16) | (g << 8) | b;
+        }
+
+        hcpp::i32 measure_px(hcpp::StringView text,
+                             hcpp::u32 px) noexcept {
+            if (hype::font::hypefont_ready()) {
+                return hype::font::text_measure(text, px);
+            }
+            return static_cast<hcpp::i32>(text.size()) * 8;
+        }
+
+        // Fits `name` into `max_w` px with a trailing U+2026 ellipsis
+        // (reskin v2): labels clip to their cell so long names can
+        // never collide with a neighbour icon's label.
+        hcpp::size_t ellipsize(char* buf, hcpp::size_t cap,
+                               const char* name, hcpp::i32 max_w) noexcept {
+            hcpp::size_t len = 0;
+            while (len + 4 < cap && name[len] != '\0') {
+                buf[len] = name[len];
+                ++len;
+            }
+            if (measure_px(hcpp::StringView{buf, len}, 13) <= max_w) {
+                return len;
+            }
+            while (len > 0) {
+                --len;
+                buf[len] = '\xE2';
+                buf[len + 1] = '\x80';
+                buf[len + 2] = '\xA6';
+                if (measure_px(hcpp::StringView{buf, len + 3}, 13) <=
+                    max_w) {
+                    return len + 3;
+                }
+            }
+            buf[0] = '\xE2';
+            buf[1] = '\x80';
+            buf[2] = '\xA6';
+            return 3;
+        }
+
         void paint_icon(Canvas& canvas, const Theme& theme,
                         hcpp::u32 index) noexcept {
             const Rect cell = cell_rect(index);
             const DeskIcon& icon = icons[index];
             if (static_cast<hcpp::i32>(index) == selected) {
+                // Selected state: accent_soft wash box + accent edge
+                // (reskin v2 — was a flat solid accent tint).
                 const Rect sel_box = cell.inset(hype::ui::Insets::uniform(2));
-                canvas.fill_rect_alpha(sel_box, canvas.color(theme.accent),
-                                       sel_alpha);
+                canvas.fill_rounded_rect(
+                    sel_box, static_cast<hcpp::i32>(theme.radius_sm),
+                    canvas.color(
+                        mix_rgb(theme.bg, theme.accent_soft,
+                                theme.accent_soft_alpha)));
                 canvas.stroke_rounded_rect(
                     sel_box, static_cast<hcpp::i32>(theme.radius_sm),
                     canvas.color(theme.accent));
@@ -339,18 +398,15 @@ namespace hype::win {
             } else {
                 paint_glyph_file(canvas, theme, glyph);
             }
-            char label[label_max + 1];
-            hcpp::u32 len = 0;
-            while (len < label_max && icon.name[len] != '\0') {
-                label[len] = icon.name[len];
-                ++len;
-            }
-            label[len] = '\0';
+            char label[36];
+            const hcpp::size_t len = ellipsize(
+                label, sizeof(label), icon.name,
+                cell.w - hype::ui::ui_px(8));
             // Scaled-font-aware width (issue #174): the 8 px/em estimate
             // drifts once hypetext applies the DPI scale, so measure
             // through the same scaled path canvas.draw_text renders with.
-            hcpp::i32 text_w = hype::font::text_measure(
-                hcpp::StringView{label, len}, 13);
+            hcpp::i32 text_w =
+                measure_px(hcpp::StringView{label, len}, 13);
             if (text_w <= 0) {
                 text_w = static_cast<hcpp::i32>(len) * 8;
             }
@@ -358,9 +414,26 @@ namespace hype::win {
             if (tx < cell.x) {
                 tx = cell.x;
             }
+            // Label chip (reskin v2): a small r4 surface_sunk pill
+            // behind the text keeps it readable over any wallpaper.
+            const hcpp::i32 chip_pad = hype::ui::ui_px(4);
+            Rect chip{tx - chip_pad, cell.y + cell.h - 17,
+                      text_w + chip_pad * 2, 14};
+            if (chip.x < cell.x) {
+                chip.x = cell.x;
+            }
+            if (chip.right() > cell.right()) {
+                chip.w = cell.right() - chip.x;
+            }
+            canvas.fill_rounded_rect(
+                chip, static_cast<hcpp::i32>(theme.radius_xs),
+                canvas.color(mix_rgb(theme.bg, theme.card, 200)));
+            const Rect saved_clip = canvas.clip();
+            canvas.set_clip(saved_clip.intersection(chip));
             canvas.draw_text(tx, cell.y + cell.h - 14,
                              hcpp::StringView{label, len},
                              canvas.color(theme.fg));
+            canvas.set_clip(saved_clip);
         }
 
     }
