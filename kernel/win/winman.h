@@ -28,6 +28,9 @@ namespace hype::win {
     struct Win {
         hcpp::u32 id = 0;
         char app_name[24]{};
+        // Optional caption override (XAU windows carry a synthetic
+        // app_name; the user-facing title lives here). Empty = app_name.
+        char caption[24]{};
         hype::ui::Rect frame{};
         hype::ui::Rect content_rect{};
         WinState state = WinState::Normal;
@@ -83,5 +86,32 @@ namespace hype::win {
     const Win* wm_window_at(hcpp::u32 index) noexcept;
     const Win* wm_focused() noexcept;
     bool wm_selftest() noexcept;
+
+    // --- XAU windowing-layer hooks (implemented in kernel/win/xau.cc) ---
+    // Event ids reported to the registered xau event hook. Kept as plain
+    // constants so this header stays free of the xau types.
+    constexpr hcpp::u32 wm_xau_ev_close = 1;
+    constexpr hcpp::u32 wm_xau_ev_size = 2;
+    constexpr hcpp::u32 wm_xau_ev_move = 3;
+    constexpr hcpp::u32 wm_xau_ev_lbuttondown = 4;
+    constexpr hcpp::u32 wm_xau_ev_lbuttonup = 5;
+    constexpr hcpp::u32 wm_xau_ev_rbuttondown = 6;
+    constexpr hcpp::u32 wm_xau_ev_mousemove = 7;
+    constexpr hcpp::u32 wm_xau_ev_minimize = 8;
+    constexpr hcpp::u32 wm_xau_ev_maximize = 9;
+    constexpr hcpp::u32 wm_xau_ev_focus = 10;
+
+    // Paint hook: return true when the window's content was rendered by
+    // XAU (skips the hxrt::hxrt_exec fallback). Event hook: return true
+    // when the event was consumed (pointer coords are screen space).
+    using WmXauPaintHook = bool (*)(hcpp::u32 win_id,
+                                    hype::hxrt::AppCtx& ctx) noexcept;
+    using WmXauEventHook = bool (*)(hcpp::u32 win_id, hcpp::u32 ev,
+                                    hcpp::i32 a, hcpp::i32 b) noexcept;
+    void wm_set_xau_hooks(WmXauPaintHook paint,
+                          WmXauEventHook event) noexcept;
+    // Setters the xau layer needs on top of the read-only wm_window().
+    bool wm_set_frame(hcpp::u32 id, hype::ui::Rect frame) noexcept;
+    void wm_set_caption(hcpp::u32 id, const char* caption) noexcept;
 
 }

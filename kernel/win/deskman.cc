@@ -14,6 +14,7 @@
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 #include "kernel/win/winman.h"
+#include "kernel/win/xau.h"
 
 namespace hype::win {
 
@@ -188,6 +189,9 @@ namespace hype::win {
             serial::write_dec32(static_cast<hcpp::u32>(paint_us));
             serial::write("\r\n");
         }
+        // XAU message pump: drains the posted-message queue and fires
+        // XAU_MSG_TIMER deadlines once per desktop frame.
+        xau_pump();
         if (first) {
             hype::hxrt::ss_selftest();
         }
