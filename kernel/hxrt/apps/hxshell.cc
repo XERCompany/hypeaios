@@ -17,6 +17,7 @@
 #include "kernel/cfg/settings.h"
 #include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
+#include "kernel/hypejs/hjs.h"
 #include "kernel/input/scancode.h"
 #include "kernel/log/kring.h"
 #include "kernel/memory/heap.h"
@@ -755,6 +756,8 @@ namespace hype::hxrt {
             emit("  dmesg                 tail of kernel log", st_dim);
             emit("  ping <a.b.c.d>        4 icmp echoes", st_dim);
             emit("  resolve <name>        dns A record", st_dim);
+            emit("  js <code>             eval javascript (hypejs)", st_dim);
+            emit("  run <file.js>         run a .js file from vfs", st_dim);
             emit("  reboot | shutdown     power control", st_dim);
             emit("  exit                  close terminal", st_dim);
         }
@@ -1232,6 +1235,112 @@ namespace hype::hxrt {
             emit(b, ok ? st_ok : st_err);
         }
 
+        // ---- hypejs: `js <code>` / `run <file.js>` (issue #181) ----------------
+        //
+        // print()/console.log inside scripts lands here as the engine
+        // output sink; each call is one committed scrollback line.
+        void js_out(const char* text, hcpp::u32 len, void*) noexcept {
+            char line[k_line_max];
+            hcpp::u32 n = len < k_line_max - 1 ? len : k_line_max - 1;
+            for (hcpp::u32 i = 0; i < n; ++i) {
+                line[i] = text[i];
+            }
+            line[n] = '\0';
+            emit(line, st_normal);
+        }
+
+        void js_finish(hype::hjs::hjs_context* ctx,
+                       const hype::hjs::HjsResult& r) noexcept {
+            if (r.ok) {
+                if (r.value.type != hype::hjs::HJS_UNDEFINED) {
+                    char text[160];
+                    LBuf b;
+                    b.s("=> ");
+                    hjs_to_string_buf(ctx, r.value, text,
+                                      sizeof(text));
+                    b.s(text);
+                    emit(b, st_ok);
+                }
+            } else {
+                LBuf b;
+                b.s("js: ");
+                b.s(r.error);
+                emit(b, st_err);
+            }
+            LBuf b;
+            b.s("[hjs steps=");
+            b.dec(hype::hjs::hjs_steps_used(ctx));
+            b.s(" arena=");
+            b.dec(hype::hjs::hjs_arena_used(ctx) / 1024);
+            b.s("K]");
+            emit(b, st_dim);
+        }
+
+        void cmd_js(const char* arg) noexcept {
+            if (arg == nullptr || arg[0] == '\0') {
+                emit("usage: js <code>", st_err);
+                return;
+            }
+            hype::hjs::hjs_context* ctx = hype::hjs::hjs_create();
+            if (ctx == nullptr) {
+                emit("js: arena alloc failed", st_err);
+                return;
+            }
+            hype::hjs::hjs_set_output(ctx, &js_out, nullptr);
+            const hype::hjs::HjsResult r =
+                hype::hjs::hjs_eval(ctx, arg);
+            serial::write("hjs eval=");
+            serial::write_line(r.ok ? "ok" : "fail");
+            js_finish(ctx, r);
+            hype::hjs::hjs_destroy(ctx);
+        }
+
+        void cmd_run(const char* arg) noexcept {
+            if (arg == nullptr || arg[0] == '\0') {
+                emit("usage: run <file.js>", st_err);
+                return;
+            }
+            char path[hype::vfs::hypepath_max_length];
+            norm_path(arg, path, sizeof(path));
+            hype::vfs::FsStat st{};
+            if (hype::vfs::fs_stat(path, st) != hype::vfs::FsStatus::Ok ||
+                (st.flags & hype::vfs::FS_DIR) != 0) {
+                LBuf b;
+                b.s("run: not found: ");
+                b.s(path);
+                emit(b, st_err);
+                return;
+            }
+            hcpp::u32 got = 0;
+            if (hype::vfs::fs_read(path, file_buf, sizeof(file_buf) - 1,
+                                   &got) != hype::vfs::FsStatus::Ok) {
+                emit("run: read failed", st_err);
+                return;
+            }
+            file_buf[got] = '\0';
+            hype::hjs::hjs_context* ctx = hype::hjs::hjs_create();
+            if (ctx == nullptr) {
+                emit("run: arena alloc failed", st_err);
+                return;
+            }
+            hype::hjs::hjs_set_output(ctx, &js_out, nullptr);
+            const hype::hjs::HjsResult r =
+                hype::hjs::hjs_eval(ctx, file_buf, got);
+            serial::write("hjs run=");
+            serial::write_line(r.ok ? "ok" : "fail");
+            js_finish(ctx, r);
+            hype::hjs::hjs_destroy(ctx);
+            if (st.size > got) {
+                LBuf b;
+                b.s("run: source truncated at ");
+                b.dec(got);
+                b.s(" of ");
+                b.dec(st.size);
+                b.s(" B");
+                emit(b, st_dim);
+            }
+        }
+
         // ---- dispatch -----------------------------------------------------------
 
         void run_command(char* line) noexcept {
@@ -1293,6 +1402,10 @@ namespace hype::hxrt {
                 cmd_ping(args);
             } else if (str_equals(p, "resolve")) {
                 cmd_resolve(args);
+            } else if (str_equals(p, "js")) {
+                cmd_js(args);
+            } else if (str_equals(p, "run")) {
+                cmd_run(args);
             } else if (str_equals(p, "reboot")) {
                 emit("rebooting...", st_err);
                 hype::power::power_restart();
