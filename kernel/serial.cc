@@ -1,5 +1,6 @@
 #include "kernel/serial.hpp"
 
+#include "kernel/console/fbcon.h"
 #include "kernel/log/kring.h"
 
 namespace serial {
@@ -31,6 +32,11 @@ namespace serial {
         // crash ring (issue #119). klog::log() suspends this around its
         // own emission so its lines are stored once.
         kring::kring_putc(value);
+        // Parallel tap (issue #139): the framebuffer console keeps the
+        // same byte stream in its scrollback and renders it while the
+        // debug console is on screen. Cheap when hidden (ring append
+        // only), a no-op before fbcon_init().
+        hype::console::fbcon_putc(value);
     }
 
     void write(hcpp::StringView text) noexcept {

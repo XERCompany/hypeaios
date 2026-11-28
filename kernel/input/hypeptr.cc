@@ -1,5 +1,6 @@
 #include "kernel/input/hypeptr.h"
 
+#include "kernel/console/fbcon.h"
 #include "kernel/functionemitkeys.h"
 #include "kernel/input/cursprite.h"
 #include "kernel/input/msaux.h"
@@ -54,6 +55,11 @@ namespace hype::input {
                     serial::write_line("ptr click=unlock");
                     hype::session::session_unlock();
                 }
+                return;
+            }
+            // fbcon debug view owns the screen (issue #139): swallow
+            // pointer edges so clicks cannot reach the hidden WM/apps.
+            if (hype::console::fbcon_active()) {
                 return;
             }
             if ((rising & ptr_button_left) != 0) {
@@ -159,7 +165,8 @@ namespace hype::input {
         // Motion events keep the WM drag engine and caption-button hot
         // tracking alive; the press/release edges still route through
         // route_buttons above.
-        if (moved && hype::session::session_logged_in() &&
+        if (moved && !hype::console::fbcon_active() &&
+            hype::session::session_logged_in() &&
             hype::win::wm_handle_move(ptr_x(), ptr_y())) {
             ptr_mark_dirty();
         }

@@ -2,7 +2,10 @@
 
 namespace hype::input {
     namespace {
-        constexpr hcpp::size_t max_slots = 8;
+        // keyring, lockscr, session, flowlogin, winman, xau, gdxf and
+        // hxfiles can all be live at once; fbcon (issue #139) adds one
+        // more on top.
+        constexpr hcpp::size_t max_slots = 12;
         struct Slot {
             InputEventHandler handler;
             void *context;
