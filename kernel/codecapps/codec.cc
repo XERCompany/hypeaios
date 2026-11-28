@@ -9,7 +9,7 @@ namespace hype::codec {
             "tiff",    "psd", "webp", "jp2",    "avif", "heic", "exif", "yuv",
             "wav",     "adpcm", "flac", "mp3",  "vorbis", "opus", "alac", "aac",
             "ogg",     "mp4", "mp2", "ac3", "mjpeg", "mpeg2", "h264", "avi", "ts", "mkv",
-            "zip",     "gzip", "tar",
+            "zip",     "gzip", "tar", "midi", "mod", "xm", "apng", "aiff", "woff",
         };
     }  // namespace
 

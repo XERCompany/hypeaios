@@ -1,14 +1,18 @@
 #include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/archive/archive.h"
 #include "kernel/codecapps/audio/adpcm.h"
+#include "kernel/codecapps/audio/aiff.h"
 #include "kernel/codecapps/audio/alac_codec.h"
 #include "kernel/codecapps/audio/flac.h"
+#include "kernel/codecapps/audio/midi.h"
+#include "kernel/codecapps/audio/mod.h"
 #include "kernel/codecapps/audio/mp3.h"
 #include "kernel/codecapps/audio/ogg.h"
 #include "kernel/codecapps/audio/vorbis.h"
 #include "kernel/codecapps/audio/wav.h"
 #include "kernel/codecapps/avi.h"
 #include "kernel/codecapps/codec.h"
+#include "kernel/codecapps/image/apng.h"
 #include "kernel/codecapps/image/bmp.h"
 #include "kernel/codecapps/image/exif.h"
 #include "kernel/codecapps/image/gif.h"
@@ -20,6 +24,7 @@
 #include "kernel/codecapps/image/qoi.h"
 #include "kernel/codecapps/image/tga.h"
 #include "kernel/codecapps/registry.h"
+#include "kernel/codecapps/woff.h"
 #include "kernel/serial.hpp"
 #include "kernel/video/videodecoder.h"
 
@@ -244,6 +249,47 @@ namespace hype::codec {
             return archive::tar_probe(b, n);
         }
 
+        // Wave-2 probes: MIDI SMF, ProTracker MOD (magic at offset 1080),
+        // XM, APNG (PNG + acTL), AIFF (FORM/AIFF), WOFF.
+
+        bool probe_midi(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return str_eq_at(b, n, 0, "MThd");
+        }
+
+        bool probe_mod(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            if (n < 1084) return false;
+            const hcpp::u8 *m = b + 1080;
+            if (m[0] == 'M' && m[1] == '.' && m[2] == 'K' && m[3] == '.') return true;
+            if (m[0] == 'M' && m[1] == '!' && m[2] == 'K' && m[3] == '!') return true;
+            if (m[0] == 'F' && m[1] == 'L' && m[2] == 'T' &&
+                (m[3] == '4' || m[3] == '8'))
+                return true;
+            if (m[0] >= '1' && m[0] <= '9' && m[1] == 'C' && m[2] == 'H' &&
+                m[3] == 'N')
+                return true;
+            if (m[0] >= '0' && m[0] <= '9' && m[1] >= '0' && m[1] <= '9' &&
+                m[2] == 'C' && m[3] == 'H')
+                return true;
+            return false;
+        }
+
+        bool probe_xm(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return str_eq_at(b, n, 0, "Extended Module: ");
+        }
+
+        bool probe_apng(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return image::apng_probe(b, n);
+        }
+
+        bool probe_aiff(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            if (!str_eq_at(b, n, 0, "FORM")) return false;
+            return str_eq_at(b, n, 8, "AIFF") || str_eq_at(b, n, 8, "AIFC");
+        }
+
+        bool probe_woff(const hcpp::u8 *b, hcpp::size_t n) noexcept {
+            return str_eq_at(b, n, 0, "wOFF");
+        }
+
         const CodecDescriptor builtin_descriptors[] = {
             {"bmp", CodecKind::Image, CodecId::Bmp,
              codec_flag_decode | codec_flag_encode, probe_bmp, image::bmp_decode,
@@ -257,6 +303,8 @@ namespace hype::codec {
             {"qoi", CodecKind::Image, CodecId::Qoi,
              codec_flag_decode | codec_flag_encode, probe_qoi, image::qoi_decode,
              image::qoi_encode},
+            {"apng", CodecKind::Image, CodecId::Apng, codec_flag_decode,
+             probe_apng, image::apng_decode, codec_stub_encode},
             {"png", CodecKind::Image, CodecId::Png,
              codec_flag_decode | codec_flag_encode, probe_png, image::png_decode,
              image::png_encode},
@@ -287,6 +335,14 @@ namespace hype::codec {
              audio_adpcm_decode, codec_stub_encode},
             {"wav", CodecKind::Audio, CodecId::Wav, codec_flag_decode, probe_wav,
              audio_wav_decode, codec_stub_encode},
+            {"aiff", CodecKind::Audio, CodecId::Aiff, codec_flag_decode, probe_aiff,
+             audio_aiff_decode, codec_stub_encode},
+            {"midi", CodecKind::Audio, CodecId::Midi, codec_flag_decode, probe_midi,
+             audio_midi_decode, codec_stub_encode},
+            {"mod", CodecKind::Audio, CodecId::Mod, codec_flag_decode, probe_mod,
+             audio_mod_decode, codec_stub_encode},
+            {"xm", CodecKind::Audio, CodecId::Xm, codec_flag_decode, probe_xm,
+             audio_xm_decode, codec_stub_encode},
             {"vorbis", CodecKind::Audio, CodecId::Vorbis, codec_flag_decode, probe_vorbis,
              audio_vorbis_decode, codec_stub_encode},
             {"opus", CodecKind::Audio, CodecId::Opus, 0, probe_opus, codec_stub_decode,
@@ -324,11 +380,13 @@ namespace hype::codec {
              archive::gzip_encode},
             {"tar", CodecKind::Archive, CodecId::Tar, codec_flag_decode, probe_tar,
              archive::tar_decode, codec_stub_encode},
+            {"woff", CodecKind::Archive, CodecId::Woff, codec_flag_decode, probe_woff,
+             woff_decode, codec_stub_encode},
         };
 
         struct ProbeCase {
             CodecId id;
-            hcpp::u8 bytes[36];
+            hcpp::u8 bytes[48];
             hcpp::size_t size;
         };
 
@@ -393,6 +451,20 @@ namespace hype::codec {
             {CodecId::Mkv, {0x1A, 0x45, 0xDF, 0xA3}, 4},
             {CodecId::Zip, {'P', 'K', 0x03, 0x04}, 4},
             {CodecId::Gzip, {0x1F, 0x8B, 0x08, 0x00}, 4},
+            {CodecId::Midi, {'M', 'T', 'h', 'd'}, 4},
+            {CodecId::Xm,
+             {'E', 'x', 't', 'e', 'n', 'd', 'e', 'd', ' ', 'M', 'o', 'd', 'u', 'l', 'e',
+              ':', ' '},
+             17},
+            {CodecId::Apng,
+             {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x08,
+              'a', 'c', 'T', 'L', 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+              0x00, 0x00, 0x00, 0x00},
+             28},
+            {CodecId::Aiff,
+             {'F', 'O', 'R', 'M', 0x00, 0x00, 0x00, 0x00, 'A', 'I', 'F', 'F'},
+             12},
+            {CodecId::Woff, {'w', 'O', 'F', 'F'}, 4},
         };
 
         const hcpp::u8 unknown_blob[] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};

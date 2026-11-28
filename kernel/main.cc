@@ -391,6 +391,9 @@ namespace {
         // Archives + container decode (issue #180): prints zip/tar/gzip/avi
         // markers and the `codec archive=` roll-up.
         report("codec archive=", hype::codec::archive::archive_selftest());
+        // Wave-2 music/anim codecs (issue wave-2): prints midi/mod/xm/
+        // apng/aiff/woff markers and the `codec w2=` roll-up.
+        report("codec w2=", hype::codec::codec_wave2_selftest());
     }
 
     void stage_memory() noexcept {
