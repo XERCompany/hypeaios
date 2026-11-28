@@ -4,6 +4,7 @@
 #include "kernel/codecapps/arena.h"
 #include "kernel/memory/pmm.h"
 #include "kernel/time/timer.h"
+#include "kernel/vfs/fat32.h"
 #include "kernel/vfs/fdtable.h"
 #include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefs_internal.h"
@@ -289,6 +290,8 @@ namespace hype::vfs {
         if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
             return FsStatus::BadPath;
         }
+        // F: is the on-disk FAT32 mount (issue #106), not a memfs disk.
+        if (path.disk == 'F') return fat32_mkdir(path);
         if (disk_index(path.disk) >= disk_count_max) return FsStatus::BadDisk;
         if (path.depth == 0) return FsStatus::Exists;
         const hcpp::u16 dir = resolve_dir(path, path.depth - 1);
@@ -346,6 +349,7 @@ namespace hype::vfs {
         if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
             return FsStatus::BadPath;
         }
+        if (path.disk == 'F') return fat32_write(path, data, size);
         const hcpp::u32 di = disk_index(path.disk);
         if (di >= disk_count_max) return FsStatus::BadDisk;
         if (path.depth == 0) return FsStatus::IsDir;
@@ -421,6 +425,9 @@ namespace hype::vfs {
         if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
             return FsStatus::BadPath;
         }
+        if (path.disk == 'F') {
+            return fat32_read(path, out, capacity, out_size);
+        }
         const hcpp::u32 di = disk_index(path.disk);
         if (di >= disk_count_max) return FsStatus::BadDisk;
         const hcpp::u16 index = resolve_entry(path);
@@ -441,6 +448,7 @@ namespace hype::vfs {
         if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
             return FsStatus::BadPath;
         }
+        if (path.disk == 'F') return fat32_stat(path, out);
         if (disk_index(path.disk) >= disk_count_max) return FsStatus::BadDisk;
         const hcpp::u16 index = resolve_entry(path);
         if (index == no_entry) return FsStatus::NotFound;
@@ -458,6 +466,7 @@ namespace hype::vfs {
         if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
             return FsStatus::BadPath;
         }
+        if (path.disk == 'F') return fat32_delete(path);
         if (disk_index(path.disk) >= disk_count_max) return FsStatus::BadDisk;
         if (path.depth == 0) return FsStatus::AccessDenied;
         const hcpp::u16 index = resolve_entry(path);
@@ -482,6 +491,7 @@ namespace hype::vfs {
     hcpp::u32 fs_list(const char* dir_text, FsStat* out, hcpp::u32 out_max) noexcept {
         HypePath path;
         if (hypepath_parse(dir_text, path) != HypePathStatus::Ok) return 0;
+        if (path.disk == 'F') return fat32_list(path, out, out_max);
         if (disk_index(path.disk) >= disk_count_max) return 0;
         const hcpp::u16 dir = resolve_dir(path, path.depth);
         if (dir == no_entry) return 0;

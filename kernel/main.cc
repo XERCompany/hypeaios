@@ -57,6 +57,7 @@
 #include "kernel/time/rtc.h"
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/selftest.h"
+#include "kernel/vfs/fat32.h"
 #include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefile.h"
 #include "kernel/vfs/hypefs.h"
@@ -507,6 +508,27 @@ namespace {
         serial::write("blob bytes=");
         serial::write_dec32(static_cast<hcpp::u32>(blob.bytes));
         serial::write("\r\n");
+        // FAT32 probe (issue #106): mounts a real on-disk FAT32 partition
+        // as HYPEOS://F. The stage1 boot sector has no MBR partition
+        // table, so the stock image reports part=none and F: stays
+        // absent; on hardware with a FAT32 partition the write/read
+        // selftest below lands bytes on the actual volume.
+        const hype::vfs::Fat32Mount fat32 = hype::vfs::fat32_mount();
+        serial::write("fat32 part=");
+        if (fat32.part_ok) {
+            serial::write("ok label=");
+            serial::write(fat32.label[0] != '\0' ? fat32.label : "volume");
+            serial::write(" clusters=");
+            serial::write_dec32(fat32.clusters);
+            serial::write("\r\n");
+            serial::write_line("fat32 mount=F ok");
+            serial::write("fat32 rw=");
+            serial::write_line(hype::vfs::fat32_selftest() ? "ok" : "fail");
+        } else {
+            serial::write_line(fat32.block_ok ? "none" : "noblock");
+            serial::write_line("fat32 mount=none");
+            serial::write_line("fat32 rw=none");
+        }
         // Payload packs: wallpapers (U:/wallpapers), help docs
         // (S:/data/help), fonts (S:/data/fonts) and the .hxer app pack
         // (U:/apps).
