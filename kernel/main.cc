@@ -25,6 +25,7 @@
 #include "kernel/codecapps/image/png.h"
 #include "kernel/codecapps/arena.h"
 #include "kernel/codecapps/registry.h"
+#include "kernel/console/fbcon.h"
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
 #include "kernel/db/hypedb.hpp"
@@ -931,6 +932,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         hype::display::display_bind_target(framebuffer);
         boot_fb = framebuffer;
         hype::panic_bind_framebuffer(framebuffer);
+        // Framebuffer console (issue #139): bound now so the serial tap
+        // starts capturing the boot log into its scrollback; the screen
+        // itself stays with the boot splash until fbcon_show().
+        hype::console::fbcon_init(framebuffer);
         hype::boot::boot_splash_begin(framebuffer);
         hype::boot::boot_splash_hold();
     }
@@ -986,6 +991,11 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
 
     hype::boot::boot_splash_end();
 
+    // fbcon (issue #139): splash is done — flip the scanout to the
+    // console so the replayed + live boot log is visible until the
+    // session/login handoff below.
+    hype::console::fbcon_show(true);
+
     const hcpp::u32 panel_color = framebuffer.encode_rgb(4, 10, 28);
     const hcpp::u32 title_color = framebuffer.encode_rgb(240, 250, 255);
     const hcpp::u32 accent_color = framebuffer.encode_rgb(0, 220, 255);
@@ -1032,6 +1042,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
                "HDR colorspace activation is not possible through legacy "
                "VBE; native GPU/HDMI/DisplayPort driver required");
     serial::write_line("VBE framebuffer active; graphics primitives initialized");
+    // Desktop handoff (issue #139): login/session own the framebuffer
+    // from here; the console keeps capturing serial into its scrollback
+    // and can return via the Ctrl+Alt+F1 chord bound below.
+    hype::console::fbcon_show(false);
     hype::session::session_begin(framebuffer);
     hype::session::session_scripted_auth(framebuffer);
     hype::input::cursor_poll();
@@ -1073,9 +1087,17 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     if (hype::input::keyring_count() != 0) serial::write_char(hype::input::keyring_peek(0));
     serial::write("\r\n");
     serial::write_line("cursor poll=active");
+    // Debug console chord (issue #139): Ctrl+Alt+F1 toggles a
+    // full-screen kernel log view; PageUp/PageDown scroll the backlog
+    // while it is up.
+    hype::console::fbcon_bind_keys();
     hcpp::u64 dbg_refresh_tick = hype::interrupts::pit_ticks();
     for (;;) {
         const bool ptr_dirty = hype::input::cursor_poll();
+        // Apply pending fbcon toggle/scroll requests in main-loop
+        // context; the key hook only sets flags inside IRQ dispatch.
+        hype::console::fbcon_poll();
+        const bool fbcon_up = hype::console::fbcon_active();
         // RevDBGService auto-refresh: repaint its window every ~30 ticks so
         // service state/log changes surface without user input.
         const hcpp::u64 loop_ticks = hype::interrupts::pit_ticks();
@@ -1093,7 +1115,7 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
             } else if (ptr_dirty) {
                 hype::input::cursor_draw(framebuffer);
             }
-        } else {
+        } else if (!fbcon_up) {
             if (shell_active) {
                 hype::ui::deskbar_idle();
                 // Screenshots (issue #131): PrtSc arms a flag from the
@@ -1110,6 +1132,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
                 hype::input::cursor_draw(framebuffer);
             }
         }
+        // While fbcon_up the console owns the scanout: no shell paint,
+        // no deskbar idle and no pointer sprite until the chord toggles
+        // back (hide does a full WM invalidate so the shell returns
+        // cleanly).
         if (mp3_file_decoded && !mp3_file_queued &&
             hype::audio::hasio_ready()) {
             const hcpp::u32 src = hype::audio::pullmix_add_source(
