@@ -26,10 +26,15 @@ namespace hype::usb {
     // usbhub.cc; both ride the host_* API in xhci_host.h. Devices found
     // behind hubs get the same class dispatch as root-port devices.
     //
+    // UAC1 audio devices (AudioControl + AudioStreaming with an
+    // isoch-OUT endpoint) bind through usbuac.cc; the host side adds a
+    // single isoch-OUT transfer ring per device via host_iso_arm() and
+    // streams bursts of SIA-scheduled isoch TDs.
+    //
     // NOT covered (deliberate simplification): MSI interrupts (polled
-    // event ring), isochronous transfers, hot-removal, hub status-change
-    // endpoints (downstream ports are probed once at boot), devices >
-    // 8 slots total including hubs.
+    // event ring), isochronous IN / feedback endpoints, hot-removal,
+    // hub status-change endpoints (downstream ports are probed once
+    // at boot), devices > 8 slots total including hubs.
 
     bool usb_initialize() noexcept;
     bool xhci_present() noexcept;

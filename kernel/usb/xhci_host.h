@@ -47,6 +47,26 @@ namespace hype::usb {
     void host_enumerate_child(HostDevice *dev, hcpp::u8 port,
                               hcpp::u8 speed) noexcept;
 
+    // Isochronous-OUT support for the UAC class driver (usbuac.cc).
+    // host_iso_arm() allocates the endpoint's transfer ring and runs
+    // Configure Endpoint with an isoch-OUT endpoint context (xHCI
+    // interval = binterval - 1). Call it only after SET_INTERFACE has
+    // selected the alt setting that owns the endpoint.
+    bool host_iso_arm(HostDevice *dev, hcpp::u8 ep_num, hcpp::u16 mps,
+                      hcpp::u8 binterval) noexcept;
+
+    // Queue one isoch TD (<= mps bytes, one service interval of
+    // payload) on the armed isoch-OUT ring. Every TRB carries SIA so
+    // the xHC schedules it at the next ESIT boundary and IOC so the
+    // completion arrives as a Transfer Event (counted in
+    // usbuac::uac_iso_done).
+    bool host_iso_queue(HostDevice *dev, hcpp::u64 phys,
+                        hcpp::u32 len) noexcept;
+
+    // Doorbell the isoch endpoint after a batch of host_iso_queue()
+    // calls so the queued TDs stream out on consecutive frames.
+    void host_iso_kick(HostDevice *dev) noexcept;
+
     // Physical address of the driver's shared 4 KiB DMA scratch page.
     // Safe to use inside host_control() calls during enumeration.
     hcpp::u64 host_scratch() noexcept;
