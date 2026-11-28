@@ -29,8 +29,8 @@ CC_SOURCES := $(shell find hcpp kernel -name '*.cc' 2>/dev/null | sort)
 CC_OBJECTS := $(patsubst %.cc,$(BUILD)/%.o,$(CC_SOURCES))
 C_SOURCES := $(shell find third_party -name '*.c' 2>/dev/null | sort)
 C_OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(C_SOURCES))
-ASM_SOURCES := $(shell find kernel -name '*.asm' ! -path 'kernel/entry.asm' 2>/dev/null | sort)
-ASM_OBJECTS := $(patsubst %.asm,$(BUILD)/%.o,$(ASM_SOURCES))
+ASM_SOURCES := $(shell find kernel \( -name '*.asm' -o -name '*.S' \) ! -path 'kernel/entry.asm' 2>/dev/null | sort)
+ASM_OBJECTS := $(patsubst %.asm,$(BUILD)/%.o,$(patsubst %.S,$(BUILD)/%.o,$(ASM_SOURCES)))
 FONT_OBJECTS := $(BUILD)/fonts/hypeai-8x16_hpf.o
 KERNEL_OBJECTS := $(BUILD)/entry.o $(CC_OBJECTS) $(C_OBJECTS) $(ASM_OBJECTS) $(FONT_OBJECTS)
 KERNEL_HEADERS := $(shell find hcpp kernel third_party -name '*.hpp' -o -name '*.h' 2>/dev/null)
@@ -55,6 +55,10 @@ $(BUILD)/entry.o: kernel/entry.asm | $(BUILD)
 	$(NASM) -f elf64 $< -o $@
 
 $(BUILD)/%.o: %.asm | $(BUILD)
+	mkdir -p $(dir $@)
+	$(NASM) -f elf64 $< -o $@
+
+$(BUILD)/%.o: %.S | $(BUILD)
 	mkdir -p $(dir $@)
 	$(NASM) -f elf64 $< -o $@
 
