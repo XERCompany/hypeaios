@@ -35,7 +35,7 @@ namespace {
         {"ui.accent", CfgType::Str, "blue", 0, 0},
         {"ui.hard_shadow", CfgType::Bool, "0", 0, 1},
         {"ui.lock_timeout_min", CfgType::Int, "5", 0, 1440},
-        {"desktop.wallpaper", CfgType::Str, "", 0, 0},
+        {"desktop.wallpaper", CfgType::Str, "aurora", 0, 0},
         {"ui.vdesk_count", CfgType::Int, "4", 2, 9},
     };
     constexpr hcpp::u32 key_count = sizeof(keys) / sizeof(keys[0]);
@@ -138,12 +138,21 @@ namespace {
                str_eq(text, "off") || str_eq(text, "no");
     }
 
-    // Wallpaper leaf names: printable filename chars, no separators, no
-    // "." / ".." escape names, bounded by the vfs name field.
+    // Wallpaper specs: a procedural design name (aurora/mesh/dusk/mono/
+    // nebula), "gradient", "img:<leaf>" for a file at the HYPEOS://U root,
+    // or a leaf name resolved under U/wallpapers. Printable filename
+    // chars only, no separators, no "." / ".." escape names, bounded by
+    // the vfs name field.
     bool wallpaper_name_ok(const char* text) noexcept {
-        const hcpp::u32 n = str_len(text);
+        hcpp::u32 n = str_len(text);
         if (n == 0) return true;  // empty clears the stored wallpaper
         if (str_eq(text, "gradient")) return true;
+        if (n > 4 && text[0] == 'i' && text[1] == 'm' && text[2] == 'g' &&
+            text[3] == ':') {
+            text += 4;
+            n -= 4;
+            if (n == 0) return false;
+        }
         if (n >= hype::vfs::fs_name_size) return false;
         if (str_eq(text, ".") || str_eq(text, "..")) return false;
         for (hcpp::u32 i = 0; i < n; ++i) {
@@ -420,25 +429,12 @@ namespace hype::cfg {
             return true;
         }
         if (str_eq(key, "desktop.wallpaper")) {
+            // Design names, "gradient", "img:<leaf>" and bare leaf names
+            // all route through the dxbg wallpaper spec resolver
+            // (prints "wp apply=<name> <w>x<h>" / "wp img=<file> ok|fail").
             const char* name = settings_get("desktop.wallpaper");
             if (name == nullptr || name[0] == '\0') return true;
-            if (str_eq(name, "gradient")) {
-                hype::win::desk_bg_reset();
-                return true;
-            }
-            char path[hype::vfs::hypepath_max_length];
-            hcpp::u32 n = 0;
-            const char dir[] = "HYPEOS://U/wallpapers/";
-            for (hcpp::u32 i = 0; dir[i] != '\0' && n + 1 < sizeof(path);
-                 ++i) {
-                path[n++] = dir[i];
-            }
-            for (hcpp::u32 i = 0; name[i] != '\0' && n + 1 < sizeof(path);
-                 ++i) {
-                path[n++] = name[i];
-            }
-            path[n] = '\0';
-            return hype::hxrt::dxbg_apply(path);
+            return hype::hxrt::dxbg_apply_spec(name);
         }
         return false;
     }

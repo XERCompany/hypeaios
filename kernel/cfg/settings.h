@@ -13,7 +13,9 @@
 //   ui.accent         blue|violet|emerald|rose -> theme_set_accent()
 //   ui.hard_shadow    bool      -> theme_set_hard_shadow()
 //   ui.lock_timeout_min 0..1440 -> idlelock auto-lock minutes (0 = off)
-//   desktop.wallpaper leaf name in U:/wallpapers, "gradient" or "" clears
+//   desktop.wallpaper aurora|mesh|dusk|mono|nebula (procedural pack),
+//                     "gradient" (theme fallback), "img:<leaf>" for a
+//                     file at HYPEOS://U, or a U:/wallpapers leaf name
 //   ui.vdesk_count    2..9     virtual-desktop count -> win::vdesk_set_count
 //
 // Boot flow: stage_vfs calls settings_load() once the hypeblob mount has

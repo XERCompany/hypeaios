@@ -46,6 +46,23 @@ namespace hype::hxrt {
         hcpp::u32 wall_count = 0;
         hcpp::u32 active_wall = 0;
 
+        bool str_eq(const char* a, const char* b) noexcept {
+            hcpp::u32 i = 0;
+            while (a[i] != '\0' && b[i] != '\0' && a[i] == b[i]) ++i;
+            return a[i] == b[i];
+        }
+
+        // Leaf part of a vfs path (after the last '/' or ':').
+        const char* leaf_of(const char* path) noexcept {
+            const char* leaf = path;
+            for (const char* p = path; p != nullptr && *p != '\0'; ++p) {
+                if (*p == '/' || *p == ':') {
+                    leaf = p + 1;
+                }
+            }
+            return leaf;
+        }
+
         void text_copy(char* dst, const char* src, hcpp::u32 cap) noexcept {
             hcpp::u32 n = 0;
             while (src != nullptr && src[n] != '\0' && n + 1 < cap) {
@@ -247,13 +264,24 @@ namespace hype::hxrt {
         }
 
         void dxbg_refresh_list() noexcept {
+            // Procedural designs are listed first (indices
+            // [0, design_count)), then the U/wallpapers files.
+            wall_count = 0;
+            const hcpp::u32 designs = hype::win::desk_bg_design_count();
+            for (hcpp::u32 i = 0;
+                 i < designs && wall_count < dxbg_max_wallpapers; ++i) {
+                text_copy(wall_names[wall_count],
+                          hype::win::desk_bg_design_name(i),
+                          hype::vfs::fs_name_size);
+                ++wall_count;
+            }
             hype::vfs::FsStat listing[dxbg_max_wallpapers];
             const hcpp::u32 found =
                 hype::vfs::fs_list(wall_dir, listing, dxbg_max_wallpapers);
-            wall_count = 0;
             const hcpp::u32 limit =
                 found < dxbg_max_wallpapers ? found : dxbg_max_wallpapers;
-            for (hcpp::u32 i = 0; i < limit; ++i) {
+            for (hcpp::u32 i = 0;
+                 i < limit && wall_count < dxbg_max_wallpapers; ++i) {
                 if ((listing[i].flags & hype::vfs::FS_DIR) != 0) {
                     continue;
                 }
@@ -333,11 +361,16 @@ namespace hype::hxrt {
                     walls.add_option(hcpp::StringView(wall_names[i]));
                 }
                 walls.set_visible_count(4);
+                const hcpp::u32 first_file =
+                    hype::win::desk_bg_design_count();
                 if (wall_count != 0) {
                     walls.highlight(0);
-                    char path[64];
-                    path_join(path, sizeof(path), wall_dir, wall_names[0]);
-                    load_preview(path);
+                    if (wall_count > first_file) {
+                        char path[64];
+                        path_join(path, sizeof(path), wall_dir,
+                                  wall_names[first_file]);
+                        load_preview(path);
+                    }
                 }
                 apply_btn.set_label("Apply");
                 slide_btn.set_label("Slideshow: off");
@@ -356,10 +389,18 @@ namespace hype::hxrt {
                 panel.add_child(&column);
                 built = true;
             }
-            status.set_text(hype::win::desk_bg_mode() ==
-                                    hype::win::DeskBgMode::Image
-                                ? "mode: image"
-                                : "mode: gradient");
+            static char mode_text[40];
+            hcpp::u32 mn = 0;
+            const char* mt = "mode: ";
+            while (*mt != '\0' && mn + 1 < sizeof(mode_text)) {
+                mode_text[mn++] = *mt++;
+            }
+            const char* mv = hype::win::desk_bg_mode_name();
+            while (*mv != '\0' && mn + 1 < sizeof(mode_text)) {
+                mode_text[mn++] = *mv++;
+            }
+            mode_text[mn] = '\0';
+            status.set_text(mode_text);
             hype::ui::Canvas canvas(*ctx.fb);
             canvas.set_clip(ctx.paint_clip());
             panel.layout_tree(ctx.region);
@@ -428,29 +469,91 @@ namespace hype::hxrt {
         return index < wall_count ? wall_names[index] : nullptr;
     }
 
+    namespace {
+        // Decode `path` through the codec registry, cover-scale it into
+        // the wall surface and print the "wp img=/wp apply=" markers.
+        // `label` is the setting spec the apply came from (for "wp apply=").
+        bool apply_image_path(const char* path, const char* label) noexcept {
+            hype::codec::FrameBuf frame{};
+            const char* leaf = leaf_of(path);
+            if (!decode_file(path, frame) ||
+                !hype::win::desk_bg_set_image(frame)) {
+                serial::write("wp img=");
+                serial::write(leaf);
+                serial::write_line(" fail");
+                return false;
+            }
+            serial::write("wp img=");
+            serial::write(leaf);
+            serial::write_line(" ok");
+            hcpp::u32 sw = 0;
+            hcpp::u32 sh = 0;
+            hype::win::desk_bg_surface_size(sw, sh);
+            serial::write("wp apply=");
+            serial::write(label);
+            serial::write(" ");
+            serial::write_dec32(sw);
+            serial::write("x");
+            serial::write_dec32(sh);
+            serial::write("\r\n");
+            load_preview(path);
+            return true;
+        }
+    }
+
     bool dxbg_apply(const char* path) noexcept {
-        hype::codec::FrameBuf frame{};
-        if (!decode_file(path, frame)) {
-            return false;
-        }
-        if (!hype::win::desk_bg_set_image(frame)) {
-            return false;
-        }
-        load_preview(path);
-        return true;
+        return apply_image_path(path, leaf_of(path));
     }
 
     bool dxbg_apply_index(hcpp::u32 index) noexcept {
         if (index >= wall_count) {
             return false;
         }
-        char path[64];
-        path_join(path, sizeof(path), wall_dir, wall_names[index]);
-        if (!dxbg_apply(path)) {
+        if (!dxbg_apply_spec(wall_names[index])) {
             return false;
         }
         active_wall = index;
         return true;
+    }
+
+    bool dxbg_apply_spec(const char* name) noexcept {
+        if (name == nullptr || name[0] == '\0') {
+            return false;
+        }
+        bool ok = false;
+        if (str_eq(name, "gradient")) {
+            hype::win::desk_bg_reset();
+            ok = true;
+        } else if (hype::win::desk_bg_design_index(name) >= 0) {
+            ok = hype::win::desk_bg_apply_design(name);
+        } else {
+            char path[hype::vfs::hypepath_max_length];
+            if (name[0] == 'i' && name[1] == 'm' && name[2] == 'g' &&
+                name[3] == ':' && name[4] != '\0') {
+                // "img:<leaf>" -> file at the HYPEOS://U root.
+                path_join(path, sizeof(path), "HYPEOS://U", name + 4);
+                ok = apply_image_path(path, name);
+            } else {
+                // Bare leaf name: U/wallpapers first, then the U root.
+                path_join(path, sizeof(path), wall_dir, name);
+                hype::vfs::FsStat st{};
+                if (hype::vfs::fs_stat(path, st) ==
+                        hype::vfs::FsStatus::Ok &&
+                    (st.flags & hype::vfs::FS_DIR) == 0) {
+                    ok = apply_image_path(path, name);
+                } else {
+                    path_join(path, sizeof(path), "HYPEOS://U", name);
+                    ok = apply_image_path(path, name);
+                }
+            }
+        }
+        if (!ok) {
+            // Graceful fallback: an unknown spec still leaves a real
+            // wallpaper on screen.
+            serial::write_line("wp fallback=aurora");
+            ok = hype::win::desk_bg_apply_design("aurora");
+        }
+        return ok;
     }
 
     bool dxbg_selftest() noexcept {
@@ -459,9 +562,12 @@ namespace hype::hxrt {
         serial::write("dxbg walls=");
         serial::write_dec32(wall_count);
         serial::write("\r\n");
+        // Indices [0, design_count) are the procedural pack; pick the
+        // first real file so the image-codec path is still exercised.
+        const hcpp::u32 designs = hype::win::desk_bg_design_count();
         bool applied = false;
-        if (wall_count != 0) {
-            applied = dxbg_apply_index(0);
+        if (wall_count > designs) {
+            applied = dxbg_apply_index(designs);
         }
         serial::write("dxbg apply=");
         serial::write_line(applied ? "ok" : "fail");
@@ -490,9 +596,35 @@ namespace hype::hxrt {
         }
         serial::write("dxbg pixel=");
         serial::write_line(pixel_ok ? "ok" : "fail");
+        // Procedural pack smoke test: generate "mesh" at fb resolution
+        // and verify the paint path changes pixels on a test surface.
+        const bool proc_ok = hype::win::desk_bg_apply_design("mesh") &&
+                             hype::win::desk_bg_ready();
+        serial::write("wp proc=");
+        serial::write_line(proc_ok ? "ok" : "fail");
+        bool wp_pixel = false;
+        if (proc_ok) {
+            static hcpp::u8 test_mem[64 * 48 * 4];
+            hcpp::graphics::Framebuffer test_fb(test_mem, 64, 48, 64 * 4, 32, 8,
+                                                16, 8, 8, 8, 0);
+            hype::ui::Canvas canvas(test_fb);
+            const hype::ui::Theme& theme = hype::ui::theme_active();
+            const hype::ui::Rect area{0, 0, 64, 48};
+            canvas.set_clip(area);
+            hype::gfx::gfx_gradient_v(canvas, area, theme.bg,
+                                      hype::ui::rui_shade(theme.bg, 10));
+            const hcpp::u32 grad_a = test_fb.get_pixel(8, 8);
+            const hcpp::u32 grad_b = test_fb.get_pixel(40, 32);
+            const bool painted = hype::win::desk_bg_paint(test_fb);
+            wp_pixel = painted &&
+                       (test_fb.get_pixel(8, 8) != grad_a ||
+                        test_fb.get_pixel(40, 32) != grad_b);
+        }
+        serial::write("wp pixel=");
+        serial::write_line(wp_pixel ? "ok" : "fail");
         (void)active_wall;
-        return seed_ok && wall_count >= seed_count && applied && image_mode &&
-               pixel_ok;
+        return seed_ok && wall_count > designs && applied && image_mode &&
+               pixel_ok && proc_ok && wp_pixel;
     }
 
 }

@@ -13,6 +13,7 @@
 #include "kernel/ui/theme.h"
 #include "kernel/ui/uiscale.h"
 #include "kernel/vfs/hypefs.h"
+#include "kernel/win/deskbg.h"
 #include "kernel/win/deskman.h"
 #include "kernel/win/winman.h"
 
@@ -153,8 +154,10 @@ namespace hype::win {
             // association table yet.
         }
 
-        // "Change Wallpaper": cycle the U:/wallpapers pack through the
-        // dxbg decoder. Prints a marker either way.
+        // "Change Wallpaper": cycle the wallpaper engine's pack — the
+        // procedural designs first, then the U:/wallpapers image files,
+        // then any HYPEOS://U/wallpaper.{png,jpg,qoi,bmp} image probes.
+        // Prints a marker either way.
         void cycle_wallpaper() noexcept {
             hype::vfs::FsStat listing[16];
             const hcpp::u32 found =
@@ -166,46 +169,95 @@ namespace hype::win {
                     ++files;
                 }
             }
-            if (files == 0) {
+            static const char* const probe_ext[] = {"png", "jpg", "qoi",
+                                                    "bmp"};
+            hcpp::u32 probes = 0;
+            hcpp::u8 probe_mask = 0;
+            for (hcpp::u32 e = 0; e < 4; ++e) {
+                char path[hype::vfs::hypepath_max_length];
+                hcpp::u32 n = 0;
+                const char* base = "HYPEOS://U/wallpaper.";
+                while (*base != '\0' && n + 1 < sizeof(path)) {
+                    path[n++] = *base++;
+                }
+                const char* ex = probe_ext[e];
+                while (*ex != '\0' && n + 1 < sizeof(path)) {
+                    path[n++] = *ex++;
+                }
+                path[n] = '\0';
+                hype::vfs::FsStat st{};
+                if (hype::vfs::fs_stat(path, st) ==
+                        hype::vfs::FsStatus::Ok &&
+                    (st.flags & hype::vfs::FS_DIR) == 0 && st.size != 0) {
+                    probe_mask |= static_cast<hcpp::u8>(1u << e);
+                    ++probes;
+                }
+            }
+            const hcpp::u32 designs = hype::win::desk_bg_design_count();
+            const hcpp::u32 total = designs + files + probes;
+            if (total == 0) {
                 serial::write_line("wallpaper cycle=none");
                 return;
             }
-            const hcpp::u32 target = wall_cursor++ % files;
-            hcpp::u32 seen = 0;
-            for (hcpp::u32 i = 0; i < bound; ++i) {
-                if ((listing[i].flags & hype::vfs::FS_DIR) != 0) {
-                    continue;
+            hcpp::u32 target = wall_cursor++ % total;
+            char spec[hype::vfs::fs_name_size + 8];
+            hcpp::u32 sn = 0;
+            if (target < designs) {
+                const char* dn = hype::win::desk_bg_design_name(target);
+                while (dn != nullptr && *dn != '\0' && sn + 1 < sizeof(spec)) {
+                    spec[sn++] = *dn++;
                 }
-                if (seen++ != target) {
-                    continue;
+            } else if (target - designs < files) {
+                target -= designs;
+                hcpp::u32 seen = 0;
+                for (hcpp::u32 i = 0; i < bound; ++i) {
+                    if ((listing[i].flags & hype::vfs::FS_DIR) != 0) {
+                        continue;
+                    }
+                    if (seen++ != target) {
+                        continue;
+                    }
+                    const char* leaf = listing[i].name;
+                    while (*leaf != '\0' && sn + 1 < sizeof(spec)) {
+                        spec[sn++] = *leaf++;
+                    }
+                    break;
                 }
-                char path[hype::vfs::hypepath_max_length];
-                hcpp::u32 n = 0;
-                const char* dir = wall_dir;
-                while (*dir != '\0' && n + 1 < sizeof(path)) {
-                    path[n++] = *dir++;
+            } else {
+                target -= designs + files;
+                const char* pre = "img:wallpaper.";
+                while (*pre != '\0' && sn + 1 < sizeof(spec)) {
+                    spec[sn++] = *pre++;
                 }
-                if (n + 1 < sizeof(path)) {
-                    path[n++] = '/';
+                hcpp::u32 seen = 0;
+                for (hcpp::u32 e = 0; e < 4; ++e) {
+                    if ((probe_mask & (1u << e)) == 0) {
+                        continue;
+                    }
+                    if (seen++ != target) {
+                        continue;
+                    }
+                    const char* ex = probe_ext[e];
+                    while (*ex != '\0' && sn + 1 < sizeof(spec)) {
+                        spec[sn++] = *ex++;
+                    }
+                    break;
                 }
-                const char* leaf = listing[i].name;
-                while (*leaf != '\0' && n + 1 < sizeof(path)) {
-                    path[n++] = *leaf++;
-                }
-                path[n] = '\0';
-                if (hype::hxrt::dxbg_apply(path)) {
-                    serial::write("wallpaper=");
-                    serial::write_line(listing[i].name);
-                    // Persisted pref (issue #130): restored at next boot.
-                    hype::cfg::settings_set("desktop.wallpaper",
-                                            listing[i].name);
-                    hype::cfg::settings_request_save();
-                } else {
-                    serial::write_line("wallpaper cycle=fail");
-                }
+            }
+            spec[sn] = '\0';
+            if (sn == 0) {
+                serial::write_line("wallpaper cycle=none");
                 return;
             }
-            serial::write_line("wallpaper cycle=none");
+            if (hype::hxrt::dxbg_apply_spec(spec)) {
+                serial::write("wallpaper=");
+                serial::write_line(spec);
+                // Persisted pref (issue #130): restored at next boot.
+                hype::cfg::settings_set("desktop.wallpaper", spec);
+                hype::cfg::settings_request_save();
+            } else {
+                serial::write_line("wallpaper cycle=fail");
+            }
         }
 
         // WmCtxPick callback for the icon context menu. `user` is the
