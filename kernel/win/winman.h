@@ -8,7 +8,7 @@
 namespace hype::win {
 
     constexpr hcpp::u32 wm_max_windows = 16;
-    constexpr hcpp::i32 wm_chrome_height = 28;
+    constexpr hcpp::i32 wm_chrome_height = 32;
     constexpr hcpp::i32 wm_cascade_step = 40;
 
     enum class WinState : hcpp::u8 { Normal = 0, Focused = 1, Minimized = 2 };
