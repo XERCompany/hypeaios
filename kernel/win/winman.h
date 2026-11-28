@@ -38,6 +38,11 @@ namespace hype::win {
         SnapZone snap = SnapZone::None;
         hype::ui::Rect restore{};
         hcpp::u32 z = 0;
+        // Virtual-desktop tag (issue #135): 0-based index of the desktop
+        // this window lives on. Only windows tagged with vdesk_current()
+        // paint, hit-test, enumerate in the taskbar and enter the Alt-Tab
+        // MRU list.
+        hcpp::u8 vdesk = 0;
         hype::hxrt::AppCtx ctx{};
     };
 
@@ -113,5 +118,34 @@ namespace hype::win {
     // Setters the xau layer needs on top of the read-only wm_window().
     bool wm_set_frame(hcpp::u32 id, hype::ui::Rect frame) noexcept;
     void wm_set_caption(hcpp::u32 id, const char* caption) noexcept;
+
+    // --- Virtual desktops (issue #135) ------------------------------------
+    // Multiple workspaces with per-desktop window sets: each Win carries a
+    // `vdesk` tag and everything user-visible (paint, hit tests, taskbar
+    // buttons, Alt-Tab) filters to the current desktop. Each desktop
+    // remembers its focused window across switches. Serial markers:
+    // "vdesk switch=<i>/<n>", "vdesk new=N", "vdesk del=N", "vdesk move=<i>"
+    // (desktop numbers are 1-based in markers/toasts).
+    constexpr hcpp::u32 vdesk_min = 2;
+    constexpr hcpp::u32 vdesk_max = 9;
+    constexpr hcpp::u32 vdesk_default = 4;
+    hcpp::u32 vdesk_count() noexcept;
+    hcpp::u32 vdesk_current() noexcept;
+    // Switch to desktop `index` (0-based); restores that desktop's
+    // remembered focus and repaints. No-op when already there.
+    bool vdesk_switch(hcpp::u32 index) noexcept;
+    // Relative switch with wraparound (Win+Ctrl+Left/Right).
+    bool vdesk_step(hcpp::i32 dir) noexcept;
+    // Append a desktop (bounded by vdesk_max) and switch to it.
+    bool vdesk_new() noexcept;
+    // Delete the current desktop (bounded by vdesk_min); its windows move
+    // to the previous desktop — or the next one when deleting desktop 0.
+    bool vdesk_delete() noexcept;
+    // Move the focused window one desktop over (Win+Shift+Left/Right);
+    // focus stays on the current desktop's next topmost window.
+    bool vdesk_move_focused(hcpp::i32 dir) noexcept;
+    // Settings apply path (ui.vdesk_count): resize the desktop count,
+    // migrating windows on dropped desktops to the last surviving one.
+    void vdesk_set_count(hcpp::u32 count) noexcept;
 
 }

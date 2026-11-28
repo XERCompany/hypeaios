@@ -35,6 +35,7 @@ namespace {
         {"ui.hard_shadow", CfgType::Bool, "0", 0, 1},
         {"ui.lock_timeout_min", CfgType::Int, "5", 0, 1440},
         {"desktop.wallpaper", CfgType::Str, "", 0, 0},
+        {"ui.vdesk_count", CfgType::Int, "4", 2, 9},
     };
     constexpr hcpp::u32 key_count = sizeof(keys) / sizeof(keys[0]);
 
@@ -397,6 +398,14 @@ namespace hype::cfg {
             // value into the idlelock armed cache and re-stamps the
             // activity clock (prints "idlelock arm=<min>m").
             return hype::session::idle_lock_apply();
+        }
+        if (str_eq(key, "ui.vdesk_count")) {
+            // Virtual desktops (issue #135): resize the workspace count;
+            // windows on dropped desktops merge into the last one.
+            hype::win::vdesk_set_count(
+                static_cast<hcpp::u32>(
+                    settings_get_int("ui.vdesk_count")));
+            return true;
         }
         if (str_eq(key, "desktop.wallpaper")) {
             const char* name = settings_get("desktop.wallpaper");

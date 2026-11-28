@@ -46,6 +46,12 @@ namespace hype::ui {
         constexpr hcpp::i32 tray_bell_x = 38;
         constexpr hcpp::i32 tray_cell_w = 18;
         constexpr hcpp::i32 tray_bell_w = 24;
+        // Virtual-desktop strip (issue #135): one numbered square per
+        // desktop immediately left of the tray; the current desktop is
+        // accent-highlighted and the squares are clickable switches.
+        constexpr hcpp::i32 vd_cell_w = 16;
+        constexpr hcpp::i32 vd_gap = 3;
+        constexpr hcpp::i32 vd_pad = 6;
         // Quick-settings flyout (bottom-right anchored above the bar).
         constexpr hcpp::i32 qs_w = 300;
         constexpr hcpp::i32 qs_h = 220;
@@ -227,6 +233,23 @@ namespace hype::ui {
         Rect bell_zone() noexcept {
             const Rect tray = tray_rect();
             return {tray.x + tray_bell_x, tray.y, tray_bell_w, tray.h};
+        }
+
+        // Desktop-strip band: vd_pad gap left of the tray, one cell per
+        // desktop. Task buttons must stop at the strip's left edge.
+        Rect vdesk_strip() noexcept {
+            const hcpp::i32 n =
+                static_cast<hcpp::i32>(hype::win::vdesk_count());
+            const hcpp::i32 w = n * vd_cell_w + (n - 1) * vd_gap;
+            const Rect tray = tray_rect();
+            return {tray.x - vd_pad - w, tray.y, w, tray.h};
+        }
+
+        Rect vdesk_cell(hcpp::u32 index) noexcept {
+            const Rect strip = vdesk_strip();
+            return {strip.x +
+                        static_cast<hcpp::i32>(index) * (vd_cell_w + vd_gap),
+                    strip.y + 1, vd_cell_w, strip.h - 2};
         }
 
         // Column above the taskbar where toast cards stack; invalidated as
@@ -1219,6 +1242,25 @@ namespace hype::ui {
             }
         }
 
+        // Numbered desktop squares (issue #135): the current desktop
+        // gets the accent frame + bright digit, the rest stay muted.
+        void paint_vdesk_strip(Canvas& canvas, const Theme& theme) noexcept {
+            const hcpp::u32 n = hype::win::vdesk_count();
+            const hcpp::u32 cur = hype::win::vdesk_current();
+            for (hcpp::u32 i = 0; i < n; ++i) {
+                const Rect cell = vdesk_cell(i);
+                const bool on = i == cur;
+                rui_control_bg(
+                    canvas, cell,
+                    on ? rui_lift(theme.secondary, 2) : theme.secondary,
+                    on ? theme.accent : theme.border);
+                char digit[2] = {static_cast<char>('1' + i), '\0'};
+                paint_label(canvas, cell.x + (cell.w - 6) / 2,
+                            label_top(cell), hcpp::StringView{digit, 1},
+                            on ? theme.card_fg : theme.muted_fg, 11);
+            }
+        }
+
         void paint_speaker_glyph(Canvas& canvas, hcpp::i32 gx,
                                  hcpp::i32 cy, hcpp::u32 glyph) noexcept {
             canvas.fill_rect(Rect{gx, cy - 3, 4, 6}, glyph);
@@ -2039,7 +2081,10 @@ namespace hype::ui {
             canvas.fill_rect(Rect{bar.x, bar.y, bar.w, 1},
                              canvas.color(theme.border));
             paint_start_button(canvas, theme);
-            const hcpp::i32 limit = tray_rect().x - task_gap;
+            // Task buttons stop at the desktop strip, which stops at the
+            // tray (issue #135). wm_window_at only enumerates the current
+            // desktop's windows, so the buttons are per-desktop already.
+            const hcpp::i32 limit = vdesk_strip().x - task_gap;
             for (hcpp::u32 i = 0; i < hype::win::wm_max_windows; ++i) {
                 const Win* w = hype::win::wm_window_at(i);
                 if (w == nullptr) {
@@ -2051,6 +2096,7 @@ namespace hype::ui {
                 }
                 paint_task_button(canvas, theme, btn, *w);
             }
+            paint_vdesk_strip(canvas, theme);
             paint_tray(canvas, theme);
         }
         if (!menu_area.empty()) {
@@ -2206,6 +2252,17 @@ namespace hype::ui {
             open_start();
             return true;
         }
+        // Desktop strip (issue #135): a click on a numbered square
+        // switches straight to that desktop.
+        {
+            const hcpp::u32 vdn = hype::win::vdesk_count();
+            for (hcpp::u32 i = 0; i < vdn; ++i) {
+                if (vdesk_cell(i).contains(p)) {
+                    hype::win::vdesk_switch(i);
+                    return true;
+                }
+            }
+        }
         if (tray_rect().contains(p)) {
             if (speaker_zone().contains(p) || net_zone().contains(p)) {
                 if (!was_qs) {
@@ -2231,7 +2288,7 @@ namespace hype::ui {
             // Remaining tray padding: consume without action.
             return true;
         }
-        const hcpp::i32 limit = tray_rect().x - task_gap;
+        const hcpp::i32 limit = vdesk_strip().x - task_gap;
         for (hcpp::u32 i = 0; i < hype::win::wm_max_windows; ++i) {
             const Win* w = hype::win::wm_window_at(i);
             if (w == nullptr) {

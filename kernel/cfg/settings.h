@@ -13,6 +13,7 @@
 //   ui.hard_shadow    bool      -> theme_set_hard_shadow()
 //   ui.lock_timeout_min 0..1440 -> idlelock auto-lock minutes (0 = off)
 //   desktop.wallpaper leaf name in U:/wallpapers, "gradient" or "" clears
+//   ui.vdesk_count    2..9     virtual-desktop count -> win::vdesk_set_count
 //
 // Boot flow: stage_vfs calls settings_load() once the hypeblob mount has
 // repopulated U:, then settings_apply_all() pushes every restored value
