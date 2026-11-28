@@ -506,6 +506,9 @@ namespace {
                 hype::vfs::hypefile_install(hype::hxrt::dxbg_app()) ? 1 : 0;
             hxer_files +=
                 hype::vfs::hypefile_install(hype::hxrt::gdxfdemo_app()) ? 1 : 0;
+            hxer_files +=
+                hype::vfs::hypefile_install(hype::hxrt::hxshell_app()) ? 1
+                                                                     : 0;
         }
         serial::write("vfs hxer=");
         serial::write_dec32(hxer_files);

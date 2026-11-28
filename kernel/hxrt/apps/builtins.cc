@@ -20,7 +20,11 @@ namespace hype::hxrt {
         serial::write(hxrt_register(dxbg_app()) ? "DXBackgroundDesktop"
                                               : "fail");
         serial::write_char(',');
-        serial::write_line(hxrt_register(gdxfdemo_app()) ? "GDXFDemo" : "fail");
+        serial::write(hxrt_register(gdxfdemo_app()) ? "GDXFDemo" : "fail");
+        serial::write_char(',');
+        hxshell_register_xau();
+        serial::write_line(hxrt_register(hxshell_app()) ? "HxShell"
+                                                      : "fail");
     }
 
 }
