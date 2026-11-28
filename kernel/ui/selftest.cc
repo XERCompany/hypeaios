@@ -1771,6 +1771,9 @@ namespace hype::ui {
         serial::write("\r\n");
 
         serial::write_line(ok ? "widgets w2=ok" : "widgets w2=fail");
+        return ok;
+    }
+
     bool reskin_selftest() noexcept {
         // Reskin v2 verification (issue #177 follow-up): the desktop
         // chrome repaint routes every surface through the token tables
