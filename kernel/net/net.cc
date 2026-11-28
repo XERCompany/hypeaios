@@ -127,6 +127,8 @@ namespace hype::net {
         hcpp::u32 subnet_mask;  // host byte order
         hcpp::u16 ip_id;
         hcpp::u32 arp_rx_count;
+        hcpp::u32 stat_tx;  // frames handed to the NIC
+        hcpp::u32 stat_rx;  // frames pulled from the RX ring
         ArpEntry arp_cache[arp_cache_size];
         UdpBind udp_binds[udp_bind_max];
         hcpp::u8 rx_frame[frame_max];
@@ -214,7 +216,10 @@ namespace hype::net {
             hcpp::copy(eth->src, our_mac, 6);
             eth->type = net_htons(type);
             hcpp::copy(tx_frame + sizeof(EthHdr), payload, length);
-            return virtio_net_send(tx_frame, sizeof(EthHdr) + length);
+            const bool sent =
+                virtio_net_send(tx_frame, sizeof(EthHdr) + length);
+            if (sent) ++stat_tx;
+            return sent;
         }
 
         void arp_send_request(hcpp::u32 target_ip) noexcept {
@@ -305,7 +310,9 @@ namespace hype::net {
             hcpp::copy(eth->dst, src_mac, 6);
             hcpp::copy(eth->src, our_mac, 6);
             eth->type = net_htons(eth_type_ipv4);
-            virtio_net_send(tx_frame, sizeof(EthHdr) + sizeof(Ipv4Hdr) + length);
+            if (virtio_net_send(tx_frame,
+                                sizeof(EthHdr) + sizeof(Ipv4Hdr) + length))
+                ++stat_tx;
         }
 
         // DHCP option walk; returns the first option of `code` found.
@@ -332,7 +339,12 @@ namespace hype::net {
         }
 
         void handle_dhcp(const hcpp::u8* data, hcpp::size_t length) noexcept {
-            if (!dhcp_listening || length < sizeof(DhcpPacket)) return;
+            // A DHCP reply is the fixed BOOTP header + magic cookie plus a
+            // *variable-length* options area; servers are not required to
+            // pad it out to DhcpPacket::options capacity (QEMU's user-net
+            // DHCP replies arrive short). dhcp_option() already bounds its
+            // walk by `length`, so the fixed header is all we must require.
+            if (!dhcp_listening || length < dhcp_options_offset) return;
             const DhcpPacket* pkt = reinterpret_cast<const DhcpPacket*>(data);
             if (pkt->op != 2 || pkt->xid != dhcp_xid ||
                 net_ntohl(pkt->magic) != dhcp_magic)
@@ -497,8 +509,12 @@ namespace hype::net {
             hcpp::copy(tx_frame + sizeof(EthHdr) + sizeof(Ipv4Hdr) +
                            sizeof(UdpHdr),
                        payload, payload_len);
-            return virtio_net_send(tx_frame, sizeof(EthHdr) + sizeof(Ipv4Hdr) +
-                                                 sizeof(UdpHdr) + payload_len);
+            const bool sent = virtio_net_send(
+                tx_frame,
+                sizeof(EthHdr) + sizeof(Ipv4Hdr) + sizeof(UdpHdr) +
+                    payload_len);
+            if (sent) ++stat_tx;
+            return sent;
         }
 
         void dhcp_send(hcpp::u8 msg_type, hcpp::u32 requested_ip,
@@ -591,12 +607,19 @@ namespace hype::net {
         for (auto& b : udp_binds) b = {};
         ip_id = 0;
         arp_rx_count = 0;
+        stat_tx = 0;
+        stat_rx = 0;
         dhcp_acquire();
         // Warm the ARP cache with the gateway so the "arp rx" marker
         // fires even on an otherwise quiet network.
         hcpp::u8 mac_out[6];
         if (have_ip && gateway_ip != 0) (void)arp_resolve_impl(gateway_ip, mac_out);
         ready = true;
+        serial::write("net tx=");
+        serial::write_dec32(stat_tx);
+        serial::write(" rx=");
+        serial::write_dec32(stat_rx);
+        serial::write("\r\n");
         serial::write_line("net stack=ok");
         return true;
     }
@@ -608,6 +631,7 @@ namespace hype::net {
         for (hcpp::u32 i = 0; i < 16; ++i) {
             const hcpp::size_t n = virtio_net_recv(rx_frame, sizeof(rx_frame));
             if (n == 0) break;
+            ++stat_rx;
             handle_frame(rx_frame, n);
         }
     }
