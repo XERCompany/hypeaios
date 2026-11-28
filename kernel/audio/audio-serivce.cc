@@ -4,6 +4,7 @@
 #include "kernel/audio/audioes1370.h"
 #include "kernel/audio/audioisa.h"
 #include "kernel/audio/audiopci.h"
+#include "kernel/audio/audiow2.h"
 #include "kernel/audio/hda.h"
 #include "kernel/serial.hpp"
 
@@ -216,6 +217,7 @@ namespace hype::audio {
         // chips out of the scanned PCI table and registers live
         // devices in the audiopci registry (audiopci devs=N).
         audiopci_scan();
+        w2::audiow2_probe_all();
         probed = true;
         service_ready = true;
         serial::write("audio service=ready probed=");
