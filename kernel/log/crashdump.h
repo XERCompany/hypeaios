@@ -16,11 +16,12 @@ namespace hype {
     //      the memfs is up (fs_disk_count() != 0) and no blob
     //      serialization is in flight;
     //   2. raw sectors at the crash scratch LBA via block_write():
-    //      132 sectors starting at LBA 12321 (= hypeblob_data_lba 4129
+    //      132 sectors starting at LBA 16450 (= hypeblob_data_lba 8258
     //      + 4 MiB of blob region / 512). That is the first sector past
-    //      the declared HYPEDATA window; tools/mkimage.py pads the
-    //      image with sparse zeros far beyond it, so the scratch range
-    //      can never collide with live blob data.
+    //      the declared HYPEDATA window; tools/mkimage.py keeps the gap
+    //      up to the ESP inside the "HypeAI data" GPT partition, so the
+    //      scratch range can never collide with live blob data or a
+    //      filesystem.
     // Prints "crash dump=saved" when either path persisted (the raw
     // path adds a "crash dump raw lba=" detail line) or
     // "crash dump=vfs-offline" when nothing could be written.

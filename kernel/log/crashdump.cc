@@ -17,11 +17,12 @@ namespace hype {
         constexpr hcpp::u32 sector_size = 512;
 
         // Raw-LBA fallback scratch region: the HYPEDATA blob starts at
-        // hypeblob_data_lba (4129) and hypeblob.cc caps serialization at
+        // hypeblob_data_lba (8258) and hypeblob.cc caps serialization at
         // a 4 MiB window (8192 sectors), so the first sector past it is
-        // 4129 + 8192 = 12321. mkimage.py leaves the rest of the image
-        // sparse, making 132 sectors here a safe parking spot that the
-        // blob can never grow into.
+        // 8258 + 8192 = 16450. mkimage.py keeps the gap between the blob
+        // and the ESP inside the GPT "HypeAI data" partition, making 132
+        // sectors here a safe parking spot that the blob can never grow
+        // into and no filesystem can claim.
         constexpr hcpp::u64 crash_lba = hype::vfs::hypeblob_data_lba + 8192;
         constexpr hcpp::u32 crash_lba_sectors = 132;
 

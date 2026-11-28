@@ -2,7 +2,9 @@
 [ORG 0x7E00]
 
 KERNEL_LOAD_ADDR equ 0x00100000
-KERNEL_LBA       equ 33
+; Hybrid image (tools/mkimage.py): LBA 1..33 hold the GPT, stage2 sits at
+; LBA 34..65, so the kernel area starts at LBA 66.
+KERNEL_LBA       equ 66
 KERNEL_SECTORS   equ 8192
 BOUNCE_SEG       equ 0x2000
 PAGE_TABLES      equ 0x00070000

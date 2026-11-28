@@ -95,7 +95,10 @@ $(BUILD)/kernel.bin: $(KERNEL_OBJECTS) kernel/linker.ld
 PAYLOAD_FILES := $(wildcard docs/wiki/*.md docs/research/*.md) cursor.png tools/Montserrat.ttf \
 	$(wildcard payload/wallpapers/*.png payload/help/*.txt payload/fonts/* payload/music/*.mp3)
 
-$(BUILD)/hypeai-os.img: $(BUILD)/stage1.bin $(BUILD)/stage2.bin $(BUILD)/kernel.bin tools/mkimage.py $(PAYLOAD_FILES)
+# One hybrid image: stage1/stage2 BIOS boot + hybrid MBR/GPT + FAT32 ESP
+# (BOOTX64.EFI) for UEFI + HYPEDATA blob. Boots BIOS/CSM and UEFI alike.
+$(BUILD)/hypeai-os.img: $(BUILD)/stage1.bin $(BUILD)/stage2.bin $(BUILD)/kernel.bin \
+		$(BUILD)/uefi/BOOTX64.EFI tools/mkimage.py $(PAYLOAD_FILES)
 	python3 tools/mkimage.py
 
 run: all
@@ -118,20 +121,17 @@ $(BUILD)/uefi/bootx64.o: boot/uefi/bootx64.cc boot/uefi/efi.hpp kernel/boot_info
 $(BUILD)/uefi/BOOTX64.EFI: $(BUILD)/uefi/bootx64.o
 	$(LLD_LINK) -subsystem:efi_application -entry:efi_main -nodefaultlib -out:$@ $<
 
-$(BUILD)/hypeai-os-uefi.img: $(BUILD)/uefi/BOOTX64.EFI $(BUILD)/kernel.bin \
-		tools/mkesp.py tools/mkimage.py $(PAYLOAD_FILES)
-	$(PYTHON) tools/mkesp.py
-
-# GPT disk: FAT32 ESP (EFI/BOOT/BOOTX64.EFI + EFI/HYPEAI/KERNEL.BIN) plus
-# the HYPEDATA payload at the fixed LBA 4129 the kernel block layer reads.
-uefi: $(BUILD)/hypeai-os-uefi.img
+# Kept as an alias: the hybrid image already carries the GPT + FAT32 ESP
+# (EFI/BOOT/BOOTX64.EFI + EFI/HYPEAI/KERNEL.BIN) and boots UEFI as-is.
+uefi: $(BUILD)/hypeai-os.img
+	@echo "build/hypeai-os.img is hybrid: boots BIOS/CSM and UEFI (Secure Boot off)."
 
 # On Windows QEMU cannot open images under the Cyrillic repo path — copy
 # the image to an ASCII path first (see docs/wiki/build-and-run.md), and
 # -bios does not work there, so OVMF goes on a pflash drive.
-run-uefi: uefi
+run-uefi: $(BUILD)/hypeai-os.img
 	qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file="$(OVMF)" \
-		-drive format=raw,file=$(BUILD)/hypeai-os-uefi.img \
+		-drive format=raw,file=$(BUILD)/hypeai-os.img \
 		-serial stdio -display none -no-reboot
 
 $(BUILD)/hypeai-os.vdi: $(BUILD)/hypeai-os.img
@@ -152,9 +152,10 @@ usb: all
 	@echo "  Windows: Rufus -> select image -> 'DD Image' mode -> START"
 	@echo "          or balenaEtcher -> Flash from file -> hypeai-os.img"
 	@echo "  Linux:   dd if=build/hypeai-os.img of=/dev/sdX bs=4M status=progress conv=fsync"
-	@echo "Boot the stick with BIOS/CSM (Legacy) mode enabled."
-	@echo "For UEFI-only machines build 'make uefi' and flash build/hypeai-os-uefi.img"
-	@echo "instead (Secure Boot must be off - the loader is unsigned)."
+	@echo "ONE image for everything: it boots BIOS/CSM (Legacy) and UEFI alike."
+	@echo "UEFI machines need Secure Boot off - the loader is unsigned."
+	@echo "Windows will show a ~64MB FAT32 partition on the stick: that is the"
+	@echo "ESP half of the hybrid image (normal - do not format it)."
 
 test: all
 	./tools/test-qemu.sh

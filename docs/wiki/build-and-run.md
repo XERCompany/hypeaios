@@ -35,13 +35,28 @@ Run QEMU with `-qmp tcp:127.0.0.1:4444,server,nowait` and `-serial file:<log>` (
 
 Serial log shows `HYPEAI OS BOOT OK`, framebuffer 1024x768x24 EDID-parsed, but several runtime stages report failures (`interrupts=failed`, `vmm=failed`, `kernel threads=failed`, PMM sees no memory) — pre-existing kernel bugs, not build problems.
 
-## UEFI boot (2026-11-28, `devin/p22-uefi`)
+## Hybrid BIOS+UEFI image (2026-11-28, `devin/p22-hybrid`)
 
-`make uefi` builds `build/hypeai-os-uefi.img`: a GPT disk with a FAT32 ESP
-(`EFI/BOOT/BOOTX64.EFI` + `EFI/HYPEAI/KERNEL.BIN`) plus the HYPEDATA blob at
-the same fixed LBA 4129 the BIOS image uses, so the kernel block layer finds
-the payload identically. No external tools needed — `tools/mkesp.py` writes
-the GPT/FAT32 directly; `tools/mkimage.py` exports `blob_region()` for reuse.
+`make` (or `make img`/`make iso`/`make usb`) builds ONE image,
+`build/hypeai-os.img`, that boots both legacy BIOS/CSM and UEFI-only
+machines — the old separate `hypeai-os-uefi.img` is gone (`make uefi` is
+now an alias, and `tools/mkesp.py` only remains as a shim for the old
+filename). `tools/mkimage.py` writes the whole disk directly — no
+mtools/parted needed. Layout:
+
+- **LBA 0** — stage1 boot code + a hybrid-MBR partition table (bytes
+  446..509): `0xEE` protective entry for LBA 1..33, `0xEF` entry for the
+  ESP, and an active `0xDA` entry covering stage2+kernel+HYPEDATA.
+- **LBA 1..33** — primary GPT header + partition entries.
+- **LBA 34..65** — stage2 (moved off LBA 1; `boot/stage1.asm`
+  `STAGE2_LBA=34`).
+- **LBA 66..8257** — `kernel.bin` (`boot/stage2.asm` `KERNEL_LBA=66`).
+- **LBA 8258..16449** — HYPEDATA blob (`hypeblob_data_lba=8258` in
+  `kernel/vfs/hypeblob.h`), then the crash-dump scratch at 16450..16581,
+  all inside the "HypeAI data" GPT partition that runs to the ESP.
+- **LBA 18432..** — 64 MiB FAT32 ESP with `EFI/BOOT/BOOTX64.EFI` +
+  `EFI/HYPEAI/KERNEL.BIN`.
+- **End** — backup GPT entry array + header.
 
 - `boot/uefi/bootx64.cc` is freestanding C++ compiled for
   `x86_64-pc-windows-msvc` (the MS x64 ABI is the UEFI calling convention) and
@@ -61,9 +76,10 @@ the GPT/FAT32 directly; `tools/mkimage.py` exports `blob_region()` for reuse.
 
 ### Flash to USB / run on hardware
 
-Flash `build/hypeai-os-uefi.img` to the stick the same way as the BIOS image
-(Rufus "DD Image" / balenaEtcher / `dd`). Boot with Secure Boot disabled.
-UEFI-only laptops work; the BIOS/CSM path stays intact.
+Flash `build/hypeai-os.img` to the stick (Rufus "DD Image" / balenaEtcher /
+`dd`). The one image covers everything: BIOS/CSM (Legacy) boot works, and
+UEFI-only laptops boot with Secure Boot disabled. Windows will show a
+~64 MB FAT32 partition on the stick — that is the ESP, it is normal.
 
 ### QEMU/OVMF verification
 
@@ -71,17 +87,18 @@ OVMF firmware ships with QEMU at
 `C:\Program Files\qemu\share\edk2-x86_64-code.fd`. Load it as pflash:
 
 ```bash
-cp build/hypeai-os-uefi.img /c/Users/alino/hypeai-os-uefi.img   # ASCII path!
+cp build/hypeai-os.img /c/Users/alino/hypeai-os.img   # ASCII path!
 "/c/Program Files/qemu/qemu-system-x86_64.exe" \
   -drive if=pflash,format=raw,readonly=on,file='C:\Program Files\qemu\share\edk2-x86_64-code.fd' \
-  -drive format=raw,file=/c/Users/alino/hypeai-os-uefi.img \
+  -drive format=raw,file=/c/Users/alino/hypeai-os.img \
   -serial file:/c/Users/alino/qemu-uefi-serial.log -display none -no-reboot -m 256
 ```
 
 (`-bios` fails on Windows; use the pflash drive. `make run-uefi` exists but
 the Cyrillic repo path needs the copy step first.)
 
-Verified: serial reaches the desktop — `fb mode=1920x1080`,
-`memory free=104MB e820=32 usable=9`, `stages=14 completed=14 failed=0`,
-`blob ata=ok` + `blob files=48` (HYPEDATA read from LBA 4129 over ATA),
-`session auth=ok`, `cursor poll=active`, `gdxf fps=~11`.
+Verified: the same `hypeai-os.img` boots both ways — BIOS serial reaches
+`HYPEAI OS BOOT OK`, `stages=14 completed=14`; OVMF serial shows
+`HypeBoot-UEFI: kernel loaded` then `HYPEAI OS BOOT OK`,
+`fb mode=1920x1080`, `blob ata=ok` + `blob files=48` (HYPEDATA read from
+LBA 8258 over ATA), `session auth=ok`, `gdxf fps=~11`.

@@ -1,6 +1,6 @@
 # Payload packs (ticket #74, spec #71)
 
-As of 2026-11-27 the HYPEDATA blob (LBA 4129, built by `tools/mkimage.py`)
+As of 2026-11-28 the HYPEDATA blob (LBA 8258, built by `tools/mkimage.py`)
 carries four content packs so the >1GB image is justified by features, not
 padding. Boot markers: `blob files=`, `payload packs=4`, `fs ufiles=`,
 `dxbg walls=`, `hxer sync=`.

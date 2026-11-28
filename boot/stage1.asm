@@ -2,7 +2,10 @@
 [ORG 0x7C00]
 
 STAGE2_LOAD_ADDR equ 0x7E00
-STAGE2_LBA       equ 1
+; Hybrid image (tools/mkimage.py): LBA 1 is the GPT header and LBA 2..33
+; the GPT entry array, so stage2 moved to LBA 34. The bytes at 446..509
+; below are the hybrid-MBR partition table written by the image builder.
+STAGE2_LBA       equ 34
 STAGE2_SECTORS   equ 32
 
 start:

@@ -20,9 +20,10 @@ namespace {
     constexpr hcpp::u32 dir_list_cap = 64;
     constexpr hcpp::u32 walk_max_depth = hype::vfs::hypepath_max_components;
 
-    // Sync-time cap for the on-disk region. tools/mkimage.py writes the blob
-    // at LBA 4129 followed by sparse zeros out to ~1.1 GiB, so 4 MiB stays
-    // far inside the image while covering the full memfs (~2.5 MiB).
+    // Sync-time cap for the on-disk region. tools/mkimage.py reserves the
+    // full 8192-sector window at LBA 8258 for the blob (inside the GPT
+    // "HypeAI data" partition), so 4 MiB always fits while covering the
+    // full memfs (~2.5 MiB).
     constexpr hcpp::u64 region_max_bytes = 4ull << 20;
 
     // Static buffers: the payload is read once at boot, so BSS scratch space

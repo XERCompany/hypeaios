@@ -4,9 +4,10 @@
 
 namespace hype::vfs {
 
-    // HYPEDATA blob lives at a fixed LBA in the raw disk image, right after
-    // the kernel area. Must match tools/mkimage.py (1 + 32 + 4096).
-    constexpr hcpp::u32 hypeblob_data_lba = 4129;
+    // HYPEDATA blob lives at a fixed LBA in the hybrid disk image, right
+    // after the kernel area (LBA 66 + 8192 kernel sectors). Must match
+    // tools/mkimage.py DATA_LBA.
+    constexpr hcpp::u32 hypeblob_data_lba = 8258;
 
     struct BlobMount {
         bool ata_ok;
