@@ -28,6 +28,7 @@
 #include "kernel/input/scancode.h"
 #include "kernel/memory/pmm.h"
 #include "kernel/serial.hpp"
+#include "kernel/unicode/unicode.h"
 #include "kernel/session/session.h"
 #include "kernel/time/timer.h"
 #include "kernel/ui/canvas.h"
@@ -186,20 +187,10 @@ namespace hype::hxrt {
             return a[i] == b[i];
         }
 
-        char str_upper(char c) noexcept {
-            return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A')
-                                        : c;
-        }
-
+        // Unicode collation-lite: case- and accent-folding compare so
+        // Cyrillic file names sort correctly.
         bool str_less(const char* a, const char* b) noexcept {
-            hcpp::u32 i = 0;
-            while (a[i] != '\0' && b[i] != '\0') {
-                const char ca = str_upper(a[i]);
-                const char cb = str_upper(b[i]);
-                if (ca != cb) return ca < cb;
-                ++i;
-            }
-            return a[i] == '\0' && b[i] != '\0';
+            return hype::unicode::strcoll(a, b) < 0;
         }
 
         hcpp::u32 str_copy(char* dst, const char* src,

@@ -78,6 +78,7 @@
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/screenshot.h"
 #include "kernel/ui/selftest.h"
+#include "kernel/unicode/selftest.h"
 #include "kernel/vfs/fat32.h"
 #include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefile.h"
@@ -438,6 +439,7 @@ namespace {
         serial::write("\r\n");
         report("font selftest=", ttf_loaded && hype::font::font_selftest());
         report("text selftest=", hype::font::text_selftest());
+        hype::unicode::unicode_selftest();
         serial::write("sha256=");
         serial::write_line(hcpp::sha256_selftest() ? "ok" : "failed");
         serial::write("pbkdf2=");

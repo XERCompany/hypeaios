@@ -21,6 +21,7 @@
 #include "kernel/ui/overlays/toast.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
+#include "kernel/unicode/unicode.h"
 #include "kernel/vfs/hypefs.h"
 #include "kernel/win/deskman.h"
 #include "kernel/win/winman.h"
@@ -734,38 +735,24 @@ namespace hype::ui {
                        : c;
         }
 
+        // Unicode collation-lite: case- and accent-folding compare, so
+        // Cyrillic app names sort inside the same menu.
         bool name_less(const char* a, const char* b) noexcept {
-            hcpp::size_t i = 0;
-            while (a[i] != '\0' && b[i] != '\0') {
-                const char ca = upper(a[i]);
-                const char cb = upper(b[i]);
-                if (ca != cb) {
-                    return ca < cb;
-                }
-                ++i;
-            }
-            return a[i] == '\0' && b[i] != '\0';
+            return hype::unicode::strcoll(a, b) < 0;
         }
 
         bool searching() noexcept { return search_len != 0; }
 
-        // Case-insensitive substring match of the query against `name`
-        // (an empty query passes everything through).
+        // Case- and accent-insensitive substring match of the query
+        // against `name` (an empty query passes everything through).
+        // Unicode-aware: Cyrillic searches match regardless of case.
         bool query_match(const char* name) noexcept {
             if (search_len == 0) {
                 return true;
             }
-            for (hcpp::u32 i = 0; name[i] != '\0'; ++i) {
-                hcpp::u32 j = 0;
-                while (j < search_len && name[i + j] != '\0' &&
-                       upper(name[i + j]) == upper(search_query[j])) {
-                    ++j;
-                }
-                if (j == search_len) {
-                    return true;
-                }
-            }
-            return false;
+            return hype::unicode::contains_fold(
+                hcpp::StringView(name),
+                hcpp::StringView(search_query, search_len));
         }
 
         void build_menu_order() noexcept {
