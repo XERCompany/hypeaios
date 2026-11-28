@@ -87,6 +87,7 @@
 #include "kernel/win/deskman.h"
 #include "kernel/win/winman.h"
 #include "kernel/xdp/xdp.h"
+#include "kernel/ztext/ztext.h"
 
 using InitArrayFunction = void (*)();
 extern "C" InitArrayFunction __init_array_start[];
@@ -380,6 +381,9 @@ namespace {
         report("video demux=", hype::video::video_demux_selftest());
         hype::codec::audio_codec_selftest();
         video_decode_selftest_ok = hype::video::video_decode_selftest();
+        // ZText DEFLATE/zlib/gzip codec (issue #176) — prints the
+        // ztext crc32/inflate/deflate/zlib/gzip/errors/big markers.
+        report("ztext selftest=", hype::ztext::ztext_selftest());
     }
 
     void stage_memory() noexcept {
