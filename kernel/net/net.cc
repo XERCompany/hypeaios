@@ -144,6 +144,14 @@ namespace hype::net {
         hcpp::u32 dhcp_server_id;
         hcpp::u32 dhcp_router;
         hcpp::u32 dhcp_subnet;
+        // DHCP option 6/42/15 captures: DNS + NTP server addresses and
+        // the domain name, taken from the last offer/ack seen.
+        hcpp::u32 dhcp_dns;
+        hcpp::u32 dhcp_ntp;
+        char dhcp_domain[64];
+
+        // ping consumer for ICMP echo replies (kernel/net/ping.cc).
+        NetIcmpHandler icmp_handler;
 
         constexpr hcpp::size_t dhcp_options_offset =
             sizeof(DhcpPacket) - 312;  // fixed BOOTP header + magic cookie
@@ -359,6 +367,9 @@ namespace hype::net {
             dhcp_server_id = net_ntohl(pkt->siaddr);
             dhcp_router = 0;
             dhcp_subnet = 0xFFFFFF00u;
+            dhcp_dns = 0;
+            dhcp_ntp = 0;
+            dhcp_domain[0] = '\0';
             if (const hcpp::u8* opt = dhcp_option(*pkt, length, 54);
                 opt != nullptr && opt[1] >= 4)
                 dhcp_server_id = read_be32(opt + 2);
@@ -368,6 +379,23 @@ namespace hype::net {
             if (const hcpp::u8* opt = dhcp_option(*pkt, length, 1);
                 opt != nullptr && opt[1] >= 4)
                 dhcp_subnet = read_be32(opt + 2);
+            // Option 6 may carry several DNS servers; the first is
+            // enough for the resolver. Option 42 is the NTP server
+            // list (same layout), option 15 the domain name string.
+            if (const hcpp::u8* opt = dhcp_option(*pkt, length, 6);
+                opt != nullptr && opt[1] >= 4)
+                dhcp_dns = read_be32(opt + 2);
+            if (const hcpp::u8* opt = dhcp_option(*pkt, length, 42);
+                opt != nullptr && opt[1] >= 4)
+                dhcp_ntp = read_be32(opt + 2);
+            if (const hcpp::u8* opt = dhcp_option(*pkt, length, 15);
+                opt != nullptr && opt[1] > 0) {
+                const hcpp::u8 n = opt[1] < sizeof(dhcp_domain) - 1
+                                       ? opt[1]
+                                       : sizeof(dhcp_domain) - 1;
+                hcpp::copy(dhcp_domain, opt + 2, n);
+                dhcp_domain[n] = '\0';
+            }
         }
 
         void handle_udp(const hcpp::u8* data, hcpp::size_t length,
@@ -417,9 +445,16 @@ namespace hype::net {
             if (ip->proto == ip_proto_icmp && have_ip) {
                 const IcmpHdr* icmp =
                     reinterpret_cast<const IcmpHdr*>(payload);
-                if (payload_len >= sizeof(IcmpHdr) &&
-                    icmp->type == icmp_echo_request)
+                if (payload_len < sizeof(IcmpHdr)) return;
+                if (icmp->type == icmp_echo_request) {
                     icmp_reply(src_mac, ip, payload, payload_len);
+                } else if (icmp->type == icmp_echo_reply &&
+                           icmp_handler != nullptr) {
+                    icmp_handler(src_ip, net_ntohs(icmp->id),
+                                 net_ntohs(icmp->seq),
+                                 payload + sizeof(IcmpHdr),
+                                 payload_len - sizeof(IcmpHdr));
+                }
             } else if (ip->proto == ip_proto_udp) {
                 handle_udp(payload, payload_len, src_ip);
             }
@@ -462,11 +497,14 @@ namespace hype::net {
                        const hcpp::u8 src_mac_hint[6], const void* payload,
                        hcpp::size_t payload_len, hcpp::u16 src_port,
                        hcpp::u16 dst_port) noexcept {
-            // Builds UDP-over-IPv4 into tx_frame; src/dst ports are only
-            // meaningful for UDP (proto == ip_proto_udp).
-            if (proto != ip_proto_udp) return false;
-            if (sizeof(EthHdr) + sizeof(Ipv4Hdr) + sizeof(UdpHdr) +
-                    payload_len >
+            // Builds UDP- or ICMP-over-IPv4 into tx_frame; src/dst
+            // ports are only meaningful for UDP. For ICMP the payload
+            // is a complete ICMP message (checksum already computed).
+            if (proto != ip_proto_udp && proto != ip_proto_icmp)
+                return false;
+            const hcpp::size_t l4_hdr =
+                proto == ip_proto_udp ? sizeof(UdpHdr) : 0;
+            if (sizeof(EthHdr) + sizeof(Ipv4Hdr) + l4_hdr + payload_len >
                 sizeof(tx_frame))
                 return false;
             hcpp::u8 dst_mac[6];
@@ -492,28 +530,27 @@ namespace hype::net {
             hcpp::set(ip, 0, sizeof(Ipv4Hdr));
             ip->ihl_ver = 0x45;
             ip->total_len = net_htons(static_cast<hcpp::u16>(
-                sizeof(Ipv4Hdr) + sizeof(UdpHdr) + payload_len));
+                sizeof(Ipv4Hdr) + l4_hdr + payload_len));
             ip->id = net_htons(++ip_id);
             ip->ttl = 64;
-            ip->proto = ip_proto_udp;
+            ip->proto = proto;
             ip->src = net_htonl(our_ip);
             ip->dst = net_htonl(dst_ip);
             ip->csum = net_htons(inet_checksum(ip, sizeof(Ipv4Hdr)));
 
-            UdpHdr* udp = reinterpret_cast<UdpHdr*>(
-                tx_frame + sizeof(EthHdr) + sizeof(Ipv4Hdr));
-            udp->src_port = net_htons(src_port);
-            udp->dst_port = net_htons(dst_port);
-            udp->len = net_htons(
-                static_cast<hcpp::u16>(sizeof(UdpHdr) + payload_len));
-            udp->csum = 0;  // UDP checksum optional over IPv4
-            hcpp::copy(tx_frame + sizeof(EthHdr) + sizeof(Ipv4Hdr) +
-                           sizeof(UdpHdr),
-                       payload, payload_len);
+            hcpp::u8* l4 = tx_frame + sizeof(EthHdr) + sizeof(Ipv4Hdr);
+            if (proto == ip_proto_udp) {
+                UdpHdr* udp = reinterpret_cast<UdpHdr*>(l4);
+                udp->src_port = net_htons(src_port);
+                udp->dst_port = net_htons(dst_port);
+                udp->len = net_htons(
+                    static_cast<hcpp::u16>(sizeof(UdpHdr) + payload_len));
+                udp->csum = 0;  // UDP checksum optional over IPv4
+            }
+            hcpp::copy(l4 + l4_hdr, payload, payload_len);
             const bool sent = virtio_net_send(
-                tx_frame,
-                sizeof(EthHdr) + sizeof(Ipv4Hdr) + sizeof(UdpHdr) +
-                    payload_len);
+                tx_frame, sizeof(EthHdr) + sizeof(Ipv4Hdr) + l4_hdr +
+                              payload_len);
             if (sent) ++stat_tx;
             return sent;
         }
@@ -547,11 +584,13 @@ namespace hype::net {
                 i += 4;
             }
             pkt.options[i++] = 55;  // parameter request list
-            pkt.options[i++] = 4;
+            pkt.options[i++] = 6;
             pkt.options[i++] = 1;   // subnet mask
             pkt.options[i++] = 3;   // router
             pkt.options[i++] = 6;   // dns
             pkt.options[i++] = 51;  // lease time
+            pkt.options[i++] = 42;  // ntp servers
+            pkt.options[i++] = 15;  // domain name
             pkt.options[i++] = 255;
             ipv4_send(ip_broadcast, ip_proto_udp, nullptr, &pkt,
                       sizeof(DhcpPacket), dhcp_port_client, dhcp_port_server);
@@ -590,6 +629,11 @@ namespace hype::net {
                 serial::write(" gw=");
                 write_ip(gateway_ip);
                 serial::write("\r\n");
+                serial::write("net dns=");
+                write_ip(dhcp_dns);
+                serial::write(" ntp=");
+                write_ip(dhcp_ntp);
+                serial::write("\r\n");
                 return true;
             }
             dhcp_listening = false;
@@ -610,6 +654,10 @@ namespace hype::net {
         arp_rx_count = 0;
         stat_tx = 0;
         stat_rx = 0;
+        dhcp_dns = 0;
+        dhcp_ntp = 0;
+        dhcp_domain[0] = '\0';
+        icmp_handler = nullptr;
         dhcp_acquire();
         // Warm the ARP cache with the gateway so the "arp rx" marker
         // fires even on an otherwise quiet network.
@@ -640,6 +688,9 @@ namespace hype::net {
     const hcpp::u8* net_mac() noexcept { return our_mac; }
     hcpp::u32 net_ip() noexcept { return our_ip; }
     hcpp::u32 net_gateway() noexcept { return gateway_ip; }
+    hcpp::u32 net_dns_ip() noexcept { return dhcp_dns; }
+    hcpp::u32 net_ntp_ip() noexcept { return dhcp_ntp; }
+    const char* net_dns_domain() noexcept { return dhcp_domain; }
 
     bool net_udp_bind(hcpp::u16 port, NetUdpHandler handler) noexcept {
         if (handler == nullptr) return false;
@@ -679,6 +730,31 @@ namespace hype::net {
     bool net_arp_resolve(hcpp::u32 ip, hcpp::u8 mac_out[6]) noexcept {
         if (!ready || mac_out == nullptr) return false;
         return arp_resolve_impl(ip, mac_out);
+    }
+
+    bool net_icmp_echo_send(hcpp::u32 dst_ip, hcpp::u16 id, hcpp::u16 seq,
+                            const hcpp::u8* payload,
+                            hcpp::size_t length) noexcept {
+        if (!ready || !have_ip || length > 56) return false;
+        // The ICMP message (header + payload) is built in a small stack
+        // buffer because ipv4_send() assembles the frame in-place.
+        hcpp::u8 msg[sizeof(IcmpHdr) + 56];
+        IcmpHdr* icmp = reinterpret_cast<IcmpHdr*>(msg);
+        icmp->type = icmp_echo_request;
+        icmp->code = 0;
+        icmp->csum = 0;
+        icmp->id = net_htons(id);
+        icmp->seq = net_htons(seq);
+        if (payload != nullptr && length != 0)
+            hcpp::copy(msg + sizeof(IcmpHdr), payload, length);
+        icmp->csum =
+            net_htons(inet_checksum(msg, sizeof(IcmpHdr) + length));
+        return ipv4_send(dst_ip, ip_proto_icmp, nullptr, msg,
+                         sizeof(IcmpHdr) + length, 0, 0);
+    }
+
+    void net_icmp_set_handler(NetIcmpHandler handler) noexcept {
+        icmp_handler = handler;
     }
 
 }  // namespace hype::net
