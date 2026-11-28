@@ -9,6 +9,7 @@
 #include "kernel/input/curstat.h"
 #include "kernel/input/ptrmv.h"
 #include "kernel/net/net.h"
+#include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
 #include "kernel/session/session.h"
 #include "kernel/time/rtc.h"
@@ -1496,6 +1497,10 @@ namespace hype::ui {
 
     void deskbar_idle() noexcept {
         ++idle_ticks;
+        // Watchdog heartbeat (issue #140): this is the shell's per-pass
+        // UI pump — while the desktop loop is live it runs every idle
+        // iteration, so a UI freeze starves the "ui" source and trips.
+        wdt::wdt_pet_name("ui");
         // Slider drags: the WM only delivers press edges to the bar, so the
         // grab is tracked here from raw pointer state while the button
         // stays held.

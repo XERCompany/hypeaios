@@ -5,6 +5,7 @@
 #include "kernel/input/cursprite.h"
 #include "kernel/input/msaux.h"
 #include "kernel/input/ptrmv.h"
+#include "kernel/sched/watchdog.h"
 #include "kernel/serial.hpp"
 #include "kernel/usb/xhci.h"
 #include "kernel/session/session.h"
@@ -129,6 +130,11 @@ namespace hype::input {
     bool cursor_ready() noexcept { return initialized && msaux_ready(); }
 
     bool cursor_poll() noexcept {
+        // Watchdog heartbeat (issue #140): the shell idle loop calls
+        // this unconditionally at the top of every pass (logged-in,
+        // locked and pre-login alike), so its freshness tracks the
+        // whole BSP main loop, not just the pointer path.
+        wdt::wdt_pet_name("input");
         MsauxPacket packets[16];
         const hcpp::u8 before = ptr_buttons();
         const hcpp::u32 n = msaux_poll(packets, 16);
