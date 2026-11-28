@@ -22,9 +22,14 @@ namespace hype::usb {
     // PS/2 packets take. usb_poll() is invoked from cursor_poll() so the
     // main idle loop needs no changes.
     //
-    // NOT covered (deliberate simplification): USB hubs, non-root-port
-    // devices, mass storage / other classes, MSI interrupts (polled event
-    // ring), isochronous/bulk transfers, hot-removal, devices > 8 slots.
+    // Mass-storage (BOT) devices bind through usbmsc.cc and hubs through
+    // usbhub.cc; both ride the host_* API in xhci_host.h. Devices found
+    // behind hubs get the same class dispatch as root-port devices.
+    //
+    // NOT covered (deliberate simplification): MSI interrupts (polled
+    // event ring), isochronous transfers, hot-removal, hub status-change
+    // endpoints (downstream ports are probed once at boot), devices >
+    // 8 slots total including hubs.
 
     bool usb_initialize() noexcept;
     bool xhci_present() noexcept;

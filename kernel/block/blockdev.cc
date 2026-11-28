@@ -3,6 +3,7 @@
 #include "kernel/ata.h"
 #include "kernel/block/ahci.h"
 #include "kernel/block/nvme.h"
+#include "kernel/usb/usbmsc.h"
 
 namespace hype::block {
 
@@ -30,7 +31,7 @@ namespace hype::block {
 
     bool block_present() noexcept {
         return nvme::nvme_ready() || ahci::ahci_ready() ||
-               ata::ata_present();
+               ata::ata_present() || usb::usbmsc::usbmsc_ready();
     }
 
     bool block_identify(ata::AtaInfo& out) noexcept {
@@ -59,18 +60,25 @@ namespace hype::block {
             }
             return true;
         }
-        while (sectors != 0) {
-            const hcpp::u8 count = static_cast<hcpp::u8>(
-                sectors < ata_chunk ? sectors : ata_chunk);
-            if (!ata::ata_pio_read(static_cast<hcpp::u32>(lba), buffer,
-                                   count)) {
-                return false;
+        if (ata::ata_present()) {
+            while (sectors != 0) {
+                const hcpp::u8 count = static_cast<hcpp::u8>(
+                    sectors < ata_chunk ? sectors : ata_chunk);
+                if (!ata::ata_pio_read(static_cast<hcpp::u32>(lba), buffer,
+                                       count)) {
+                    return false;
+                }
+                lba += count;
+                buffer = static_cast<hcpp::u8*>(buffer) +
+                         count * sector_size;
+                sectors -= count;
             }
-            lba += count;
-            buffer = static_cast<hcpp::u8*>(buffer) + count * sector_size;
-            sectors -= count;
+            return true;
         }
-        return true;
+        if (usb::usbmsc::usbmsc_ready()) {
+            return usb::usbmsc::usbmsc_read(lba, buffer, sectors);
+        }
+        return false;
     }
 
     bool block_write(hcpp::u64 lba, const void* buffer,
@@ -93,24 +101,33 @@ namespace hype::block {
             }
             return true;
         }
-        while (sectors != 0) {
-            const hcpp::u8 count = static_cast<hcpp::u8>(
-                sectors < ata_chunk ? sectors : ata_chunk);
-            if (!ata::ata_write_sectors(static_cast<hcpp::u32>(lba),
-                                        buffer, count)) {
-                return false;
+        if (ata::ata_present()) {
+            while (sectors != 0) {
+                const hcpp::u8 count = static_cast<hcpp::u8>(
+                    sectors < ata_chunk ? sectors : ata_chunk);
+                if (!ata::ata_write_sectors(static_cast<hcpp::u32>(lba),
+                                            buffer, count)) {
+                    return false;
+                }
+                lba += count;
+                buffer = static_cast<const hcpp::u8*>(buffer) +
+                         count * sector_size;
+                sectors -= count;
             }
-            lba += count;
-            buffer = static_cast<const hcpp::u8*>(buffer) +
-                     count * sector_size;
-            sectors -= count;
+            return true;
         }
-        return true;
+        if (usb::usbmsc::usbmsc_ready()) {
+            return usb::usbmsc::usbmsc_write(lba, buffer, sectors);
+        }
+        return false;
     }
 
     bool block_flush() noexcept {
         if (nvme::nvme_ready()) return nvme::nvme_flush();
         if (ahci::ahci_ready()) return ahci::ahci_flush();
+        if (usb::usbmsc::usbmsc_ready() && !ata::ata_present()) {
+            return true;  // BOT has no cache-flush command here
+        }
         return ata::ata_flush_cache();
     }
 

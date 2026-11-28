@@ -6,11 +6,13 @@
 namespace hype::block {
 
     // Block dispatch layer. Routes sector I/O with the priority
-    // NVMe > AHCI > ATA PIO: an NVMe namespace wins when
+    // NVMe > AHCI > ATA PIO > USB-MSC: an NVMe namespace wins when
     // nvme_probe() brought one up, then AHCI/SATA when ahci_probe()
-    // found a live disk, otherwise the legacy ATA PIO path on
+    // found a live disk, then the legacy ATA PIO path on
     // 0x1F0 — so the same HYPEDATA blob works on modern PCs (no
-    // IDE controller) and on QEMU's default drive.
+    // IDE controller) and on QEMU's default drive — and finally the
+    // USB mass-storage unit usbmsc.cc bound during xHCI enumeration,
+    // so a plugged-in USB stick stays reachable on diskless setups.
     //
     // Call block_initialize() once after PCI scan and PMM are up
     // (stage_vfs does this before hypeblob_mount()).

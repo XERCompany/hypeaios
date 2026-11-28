@@ -1,18 +1,33 @@
-// xHCI (USB 3.x host controller) + USB HID boot-protocol input driver.
+// xHCI (USB 3.x host controller) + USB HID boot-protocol input driver +
+// class-dispatch hooks for USB hubs (usbhub.cc) and mass-storage BOT
+// devices (usbmsc.cc).
 //
 // Scope (see xhci.h): PCI class 0x0C/0x03/0x30 probe, controller halt +
 // reset, DCBAA/command ring/event ring/interrupter-0 programming, Enable
 // Slot / Address Device / Evaluate Context / Configure Endpoint commands,
 // EP0 control transfers for enumeration (GET_DESCRIPTOR device/config,
 // SET_CONFIGURATION, SET_PROTOCOL boot, SET_IDLE), one interrupt-IN
-// endpoint per HID keyboard (protocol 1) or mouse (protocol 2) on root
-// ports only. Single polled event ring, no MSI, <= 8 slots, no hubs, no
-// mass storage, no hot-removal. Devices are enumerated during init;
-// afterwards the interrupt-IN rings stay armed and usb_poll() (called
-// from input::cursor_poll) turns completion events into the same key/ptr
-// counters PS/2 feeds.
+// endpoint per HID keyboard (protocol 1) or mouse (protocol 2), bulk
+// OUT/IN endpoint pairs for mass-storage class (0x08/0x06/0x50), and hub
+// devices (device/interface class 0x09) whose downstream ports are
+// enumerated through usbhub.cc with route strings + TT fields in the
+// slot context. Single polled event ring, no MSI, <= 8 slots (shared by
+// all devices incl. hubs), no hot-removal. Devices are enumerated during
+// init; afterwards the interrupt-IN rings stay armed and usb_poll()
+// (called from input::cursor_poll) turns completion events into the same
+// key/ptr counters PS/2 feeds.
+//
+// The host_* entry points at the bottom of this file (declared in
+// xhci_host.h) are the narrow API usbhub.cc/usbmsc.cc use to drive
+// control/bulk transfers, endpoint-halt recovery, hub slot-context
+// updates and recursive child enumeration without re-implementing TRB
+// mechanics.
 
 #include "kernel/usb/xhci.h"
+
+#include "kernel/usb/usbhub.h"
+#include "kernel/usb/usbmsc.h"
+#include "kernel/usb/xhci_host.h"
 
 #include "kernel/arch/x86/cpu.h"
 #include "kernel/functionemitkeys.h"
@@ -81,6 +96,8 @@ namespace hype::usb {
         constexpr hcpp::u8 trb_type_address_device = 11;
         constexpr hcpp::u8 trb_type_configure_ep = 12;
         constexpr hcpp::u8 trb_type_evaluate_ctx = 13;
+        constexpr hcpp::u8 trb_type_reset_endpoint = 14;
+        constexpr hcpp::u8 trb_type_set_tr_dequeue = 16;
         constexpr hcpp::u8 trb_type_transfer_event = 32;
         constexpr hcpp::u8 trb_type_cmd_complete = 33;
 
@@ -97,8 +114,13 @@ namespace hype::usb {
 
         constexpr hcpp::u8 code_success = 1;
         constexpr hcpp::u8 code_short_packet = 13;
+        // Returned by host_bulk() when no transfer event arrives before
+        // the bounded wait expires (not a real xHCI completion code).
+        constexpr hcpp::u8 code_wait_timeout = 0xFE;
 
+        constexpr hcpp::u8 ep_type_bulk_out = 2;
         constexpr hcpp::u8 ep_type_control = 4;
+        constexpr hcpp::u8 ep_type_bulk_in = 6;
         constexpr hcpp::u8 ep_type_interrupt_in = 7;
 
         constexpr hcpp::size_t ring_trbs = 256;        // one 4 KiB page
@@ -153,27 +175,61 @@ namespace hype::usb {
             bool pcs;
         };
 
-        enum class DevKind : hcpp::u8 { None = 0, Keyboard = 1, Mouse = 2, Other = 3 };
-
-        struct Device {
-            bool used;
-            hcpp::u8 slot_id;
-            hcpp::u8 port;
-            hcpp::u8 speed;
-            hcpp::u8 iface;
-            hcpp::u8 ep_dci;
-            hcpp::u16 ep_mps;
-            hcpp::u8 ep_interval;
-            DevKind kind;
-            hcpp::u64 dev_ctx_phys;
-            hcpp::u64 input_ctx_phys;
-            hcpp::u64 report_phys;
-            hcpp::u32 report_len;
-            Ring ep0;
-            Ring intr;
-            hcpp::u8 prev_keys[6];
-            hcpp::u8 prev_mods;
+        enum class DevKind : hcpp::u8 {
+            None = 0,
+            Keyboard = 1,
+            Mouse = 2,
+            Other = 3,
+            Hub = 4,
+            Mass = 5,
         };
+
+    }  // namespace
+
+    // Defined at hype::usb scope so it matches the forward declaration in
+    // xhci_host.h: usbhub.cc/usbmsc.cc only ever see it as the opaque
+    // HostDevice handle the host_* API passes around.
+    struct Device {
+        bool used;
+        hcpp::u8 slot_id;
+        hcpp::u8 port;        // local port number (root port or parent-hub downstream port)
+        hcpp::u8 root_port;   // root-hub port the whole topology hangs off
+        hcpp::u32 route;      // xHCI route string (0 for root-port devices)
+        hcpp::u8 speed;
+        hcpp::u8 depth;       // hub tiers above this device
+        hcpp::u8 iface;
+        hcpp::u8 dev_class;   // bDeviceClass from the device descriptor
+        // TT routing for LS/FS devices behind a high-speed hub.
+        hcpp::u8 tt_hub_slot;
+        hcpp::u8 tt_hub_port;
+        // Hub-device slot-context fields (usbhub fills via host_set_hub_context).
+        bool is_hub;
+        hcpp::u8 hub_ports;
+        hcpp::u8 ttt;
+        hcpp::u8 ep_dci;
+        hcpp::u16 ep_mps;
+        hcpp::u8 ep_interval;
+        DevKind kind;
+        hcpp::u64 dev_ctx_phys;
+        hcpp::u64 input_ctx_phys;
+        hcpp::u64 report_phys;
+        hcpp::u32 report_len;
+        Ring ep0;
+        Ring intr;
+        // Mass-storage bulk endpoints (usbmsc).
+        hcpp::u8 bulk_out_dci;
+        hcpp::u8 bulk_in_dci;
+        hcpp::u8 bulk_out_ep;
+        hcpp::u8 bulk_in_ep;
+        hcpp::u16 bulk_out_mps;
+        hcpp::u16 bulk_in_mps;
+        Ring bulk_out;
+        Ring bulk_in;
+        hcpp::u8 prev_keys[6];
+        hcpp::u8 prev_mods;
+    };
+
+    namespace {
 
         hcpp::uintptr_t mmio;
         hcpp::uintptr_t op_base;
@@ -376,18 +432,24 @@ namespace hype::usb {
             const hcpp::u64 start = interrupts::pit_ticks();
             for (;;) {
                 Trb t{};
-                while (evt_pop(t)) dispatch_event(t);
-                if (command && have_cmd_event &&
-                    trb_param(last_cmd_event) == param_phys) {
-                    out = last_cmd_event;
-                    have_cmd_event = false;
-                    return true;
-                }
-                if (!command && have_xfer_event &&
-                    trb_param(last_xfer_event) == param_phys) {
-                    out = last_xfer_event;
-                    have_xfer_event = false;
-                    return true;
+                while (evt_pop(t)) {
+                    dispatch_event(t);
+                    // Check the match right after each dispatch: a later
+                    // event in the same drain (e.g. a HID interrupt-IN
+                    // completion) overwrites last_xfer_event, so the match
+                    // must be tested before the next evt_pop().
+                    if (command && have_cmd_event &&
+                        trb_param(last_cmd_event) == param_phys) {
+                        out = last_cmd_event;
+                        have_cmd_event = false;
+                        return true;
+                    }
+                    if (!command && have_xfer_event &&
+                        trb_param(last_xfer_event) == param_phys) {
+                        out = last_xfer_event;
+                        have_xfer_event = false;
+                        return true;
+                    }
                 }
                 if (interrupts::pit_ticks() - start > timeout_ticks) return false;
                 hype_cpu_halt();
@@ -491,8 +553,18 @@ namespace hype::usb {
         void fill_slot_ctx(hcpp::u64 ctx_base, const Device &dev,
                            hcpp::u32 context_entries) noexcept {
             volatile hcpp::u32 *s = ctx_dwords(ctx_base, 1);
-            s[0] = (hcpp::u32(dev.speed) << 20) | (context_entries << 27);
-            s[1] = hcpp::u32(dev.port) << 16;
+            // dw0: route string (19:0), speed (23:20), Hub flag (26),
+            // context entries (31:27). dw1: root hub port (23:16) +
+            // downstream port count for hubs (31:24). dw2: TT hub
+            // slot/port (LS/FS behind a HS hub) + TT think time for hub
+            // devices; interrupter target stays 0.
+            s[0] = (dev.route & 0xFFFFFu) | (hcpp::u32(dev.speed) << 20) |
+                   (dev.is_hub ? (1u << 26) : 0u) | (context_entries << 27);
+            s[1] = (hcpp::u32(dev.root_port) << 16) |
+                   (hcpp::u32(dev.hub_ports) << 24);
+            s[2] = hcpp::u32(dev.tt_hub_slot) |
+                   (hcpp::u32(dev.tt_hub_port) << 8) |
+                   (hcpp::u32(dev.ttt) << 16);
         }
 
         void fill_ep_ctx(hcpp::u64 ctx_base, hcpp::u32 ctx_index,
@@ -663,24 +735,39 @@ namespace hype::usb {
         // Enumeration
         // -----------------------------------------------------------------
 
-        struct HidScan {
-            bool found;
+        struct ClassScan {
             hcpp::u8 config_value;
+            // Boot-protocol HID interface (protocol 1 = kbd, 2 = mouse).
+            bool hid_found;
             hcpp::u8 iface;
             hcpp::u8 protocol;
             hcpp::u8 ep_num;
             hcpp::u16 ep_mps;
             hcpp::u8 ep_interval;
+            // Mass-storage bulk-only interface (class 08/sub 06/proto 50).
+            bool msc_found;
+            hcpp::u8 msc_iface;
+            hcpp::u8 msc_out_ep;
+            hcpp::u8 msc_in_ep;
+            hcpp::u16 msc_out_mps;
+            hcpp::u16 msc_in_mps;
+            // Hub (interface class 09).
+            bool hub_found;
+            hcpp::u8 hub_iface;
         };
 
-        // Walk a fetched config descriptor looking for a boot-protocol HID
-        // interface with an interrupt-IN endpoint.
-        HidScan scan_config(const volatile hcpp::u8 *d, hcpp::u32 len) noexcept {
-            HidScan out{};
+        // Walk a fetched config descriptor, recording the first
+        // boot-protocol HID interface with an interrupt-IN endpoint, the
+        // first BOT mass-storage interface's bulk OUT/IN pair, and any hub
+        // interface. Each endpoint descriptor is attributed to the most
+        // recently parsed interface.
+        ClassScan scan_config(const volatile hcpp::u8 *d, hcpp::u32 len) noexcept {
+            ClassScan out{};
             if (len < 9 || d[1] != 2) return out;
             out.config_value = d[5];
-            bool hid_iface = false;
-            hcpp::u8 iface_proto = 0;
+            hcpp::u8 cls = 0;
+            hcpp::u8 sub = 0;
+            hcpp::u8 proto = 0;
             hcpp::u8 iface_num = 0;
             hcpp::u32 i = d[0] == 0 ? 9 : d[0];
             while (i + 1 < len) {
@@ -688,25 +775,43 @@ namespace hype::usb {
                 const hcpp::u8 btype = d[i + 1];
                 if (blen < 2) break;
                 if (btype == 4 && i + 8 < len) {  // interface descriptor
-                    hid_iface = d[i + 5] == 3 && (d[i + 7] == 1 || d[i + 7] == 2);
-                    iface_proto = d[i + 7];
+                    cls = d[i + 5];
+                    sub = d[i + 6];
+                    proto = d[i + 7];
                     iface_num = d[i + 2];
-                } else if (btype == 5 && i + 6 < len && hid_iface) {  // endpoint
+                    if (cls == 9 && !out.hub_found) {
+                        out.hub_found = true;
+                        out.hub_iface = iface_num;
+                    }
+                } else if (btype == 5 && i + 6 < len) {  // endpoint
                     const hcpp::u8 addr = d[i + 2];
                     const hcpp::u8 attr = d[i + 3] & 0x03;
-                    if ((addr & 0x80) != 0 && attr == 3) {  // interrupt IN
-                        out.found = true;
+                    const hcpp::u16 mps = static_cast<hcpp::u16>(
+                        d[i + 4] | (hcpp::u16(d[i + 5]) << 8));
+                    if ((addr & 0x80) != 0 && attr == 3 && cls == 3 &&
+                        (proto == 1 || proto == 2) && !out.hid_found) {
+                        out.hid_found = true;
                         out.iface = iface_num;
-                        out.protocol = iface_proto;
+                        out.protocol = proto;
                         out.ep_num = static_cast<hcpp::u8>(addr & 0x0F);
-                        out.ep_mps = static_cast<hcpp::u16>(d[i + 4] |
-                                                            (hcpp::u16(d[i + 5]) << 8));
+                        out.ep_mps = mps;
                         out.ep_interval = d[i + 6];
-                        return out;
+                    } else if (attr == 2 && cls == 8 && sub == 6 &&
+                               proto == 0x50) {
+                        // Bulk endpoint on a BOT interface.
+                        out.msc_iface = iface_num;
+                        if ((addr & 0x80) != 0) {
+                            out.msc_in_ep = static_cast<hcpp::u8>(addr & 0x0F);
+                            out.msc_in_mps = mps;
+                        } else {
+                            out.msc_out_ep = static_cast<hcpp::u8>(addr & 0x0F);
+                            out.msc_out_mps = mps;
+                        }
                     }
                 }
                 i = static_cast<hcpp::u32>(i + blen);
             }
+            out.msc_found = out.msc_in_ep != 0 && out.msc_out_ep != 0;
             return out;
         }
 
@@ -750,13 +855,25 @@ namespace hype::usb {
             return nullptr;
         }
 
-        bool enumerate_port(hcpp::u32 port, hcpp::u8 speed) noexcept {
+        // Enable a slot, address the device and bind a class driver.
+        // local_port is informational (root port or downstream port on the
+        // parent hub); root_port/route/tt_* describe the topology used in
+        // the slot context.
+        bool enumerate_device(hcpp::u8 local_port, hcpp::u8 speed,
+                              hcpp::u8 root_port, hcpp::u32 route,
+                              hcpp::u8 tt_hub_slot, hcpp::u8 tt_hub_port,
+                              hcpp::u8 depth) noexcept {
             Device *dev = free_device();
             if (dev == nullptr) return true;  // table full: ignore extra ports
 
             *dev = Device{};
             dev->used = true;  // claim the entry; kind stays None on failure
-            dev->port = static_cast<hcpp::u8>(port);
+            dev->port = local_port;
+            dev->root_port = root_port;
+            dev->route = route;
+            dev->tt_hub_slot = tt_hub_slot;
+            dev->tt_hub_port = tt_hub_port;
+            dev->depth = depth;
             dev->speed = speed;
             dev->kind = DevKind::None;
 
@@ -824,6 +941,7 @@ namespace hype::usb {
                 fail_step = 15;
                 return false;
             }
+            dev->dev_class = ctrl_buf[4];
             if (!get_descriptor(*dev, 2, 0, 9, &code)) {
                 fail_step = 16;
                 return false;
@@ -835,18 +953,81 @@ namespace hype::usb {
                 fail_step = 17;
                 return false;
             }
-            const HidScan hid = scan_config(ctrl_buf, total);
-            if (!hid.found || hid.ep_num == 0 || hid.ep_mps == 0) {
-                dev->kind = DevKind::Other;
-                return true;  // non-HID device: slot claimed, nothing armed
-            }
-            dev->iface = hid.iface;
-            dev->ep_dci = static_cast<hcpp::u8>(hid.ep_num * 2 + 1);  // IN ep
-            dev->ep_mps = hid.ep_mps;
-            dev->ep_interval = hid.ep_interval;
-            dev->report_len = hid.ep_mps > 64 ? 64 : hid.ep_mps;
+            const ClassScan scan = scan_config(ctrl_buf, total);
 
-            if (!set_configuration(*dev, hid.config_value)) {
+            // Hub class (device class 09 or a class-09 interface): the
+            // device must be configured before its downstream ports power
+            // up; usbhub.cc drives descriptor fetch, slot-context update
+            // and per-port enumeration from here.
+            if (dev->dev_class == 9 || scan.hub_found) {
+                dev->kind = DevKind::Hub;
+                if (scan.config_value == 0 ||
+                    !set_configuration(*dev, scan.config_value)) {
+                    fail_step = 18;
+                    return false;
+                }
+                usbhub::hub_bind(dev, dev->speed, scan.hub_iface);
+                return true;
+            }
+
+            // Mass-storage BOT interface (08/06/50): configure the bulk
+            // OUT/IN pair, then hand the slot to usbmsc.cc which runs the
+            // SCSI/BOT probe and registers into the block layer.
+            if (scan.msc_found) {
+                dev->kind = DevKind::Mass;
+                dev->iface = scan.msc_iface;
+                dev->bulk_out_dci =
+                    static_cast<hcpp::u8>(scan.msc_out_ep * 2);
+                dev->bulk_in_dci =
+                    static_cast<hcpp::u8>(scan.msc_in_ep * 2 + 1);
+                dev->bulk_out_ep = scan.msc_out_ep;
+                dev->bulk_in_ep =
+                    static_cast<hcpp::u8>(0x80 | scan.msc_in_ep);
+                dev->bulk_out_mps = scan.msc_out_mps;
+                dev->bulk_in_mps = scan.msc_in_mps;
+                if (!ring_init(dev->bulk_out) || !ring_init(dev->bulk_in)) {
+                    fail_step = 11;
+                    return false;
+                }
+                if (!set_configuration(*dev, scan.config_value)) {
+                    fail_step = 18;
+                    return false;
+                }
+                const hcpp::u8 max_dci = dev->bulk_in_dci > dev->bulk_out_dci
+                                             ? dev->bulk_in_dci
+                                             : dev->bulk_out_dci;
+                zero_page(input_ctx_phys);
+                volatile hcpp::u32 *mctl = ctx_dwords(input_ctx_phys, 0);
+                mctl[1] = (1u << 0) | (1u << dev->bulk_out_dci) |
+                          (1u << dev->bulk_in_dci);
+                fill_slot_ctx(input_ctx_phys, *dev, max_dci);
+                fill_ep_ctx(input_ctx_phys, dev->bulk_out_dci + 1,
+                            ep_type_bulk_out, dev->bulk_out_mps, 0,
+                            dev->bulk_out.phys, 512, 0);
+                fill_ep_ctx(input_ctx_phys, dev->bulk_in_dci + 1,
+                            ep_type_bulk_in, dev->bulk_in_mps, 0,
+                            dev->bulk_in.phys, 512, 0);
+                if (!run_command(trb_type_configure_ep, input_ctx_phys, 0,
+                                 slot, &code) ||
+                    code != code_success) {
+                    fail_step = 19;
+                    return false;
+                }
+                usbmsc::msc_bind(dev, dev->iface);
+                return true;
+            }
+
+            if (!scan.hid_found || scan.ep_num == 0 || scan.ep_mps == 0) {
+                dev->kind = DevKind::Other;
+                return true;  // unsupported class: slot claimed, nothing armed
+            }
+            dev->iface = scan.iface;
+            dev->ep_dci = static_cast<hcpp::u8>(scan.ep_num * 2 + 1);  // IN ep
+            dev->ep_mps = scan.ep_mps;
+            dev->ep_interval = scan.ep_interval;
+            dev->report_len = scan.ep_mps > 64 ? 64 : scan.ep_mps;
+
+            if (!set_configuration(*dev, scan.config_value)) {
                 fail_step = 18;
                 return false;
             }
@@ -871,7 +1052,7 @@ namespace hype::usb {
                 return false;
             }
 
-            dev->kind = hid.protocol == 1 ? DevKind::Keyboard : DevKind::Mouse;
+            dev->kind = scan.protocol == 1 ? DevKind::Keyboard : DevKind::Mouse;
             post_intr_trb(*dev);  // arm the periodic report poll
             if (dev->kind == DevKind::Keyboard) {
                 serial::write_line("usb kbd=ok");
@@ -997,6 +1178,97 @@ namespace hype::usb {
 
     }  // namespace
 
+    // -----------------------------------------------------------------
+    // xhci_host.h API: narrow transfer/enumeration hooks for usbhub.cc
+    // and usbmsc.cc. All calls run during the serialized enumeration
+    // window (usb_initialize) or afterwards from single-threaded block
+    // I/O; nothing here is re-entrant.
+    // -----------------------------------------------------------------
+
+    bool host_control(HostDevice *dev, hcpp::u8 bm_request_type,
+                      hcpp::u8 b_request, hcpp::u16 w_value,
+                      hcpp::u16 w_index, hcpp::u16 w_length,
+                      hcpp::u64 data_phys, bool dir_in) noexcept {
+        if (dev == nullptr) return false;
+        return control_transfer(*dev, bm_request_type, b_request, w_value,
+                                w_index, w_length, data_phys, dir_in);
+    }
+
+    hcpp::u8 host_bulk(HostDevice *dev, bool dir_in, hcpp::u64 phys,
+                       hcpp::u32 length, hcpp::u32 *residual) noexcept {
+        if (dev == nullptr) return code_wait_timeout;
+        Ring &ring = dir_in ? dev->bulk_in : dev->bulk_out;
+        const hcpp::u8 dci = dir_in ? dev->bulk_in_dci : dev->bulk_out_dci;
+        const hcpp::u64 trb_phys =
+            ring_push(ring, phys, length,
+                      (hcpp::u32(trb_type_normal) << 10) | trb_ioc);
+        ring_doorbell(dev->slot_id, dci);
+        Trb ev{};
+        if (!wait_event(trb_phys, false, wait_transfer_ticks, ev)) {
+            return code_wait_timeout;
+        }
+        if (residual != nullptr) *residual = ev.status & 0xFFFFFFu;
+        return trb_code(ev);
+    }
+
+    bool host_clear_halt(HostDevice *dev, bool dir_in) noexcept {
+        if (dev == nullptr) return false;
+        Ring &ring = dir_in ? dev->bulk_in : dev->bulk_out;
+        const hcpp::u8 dci = dir_in ? dev->bulk_in_dci : dev->bulk_out_dci;
+        const hcpp::u8 ep_addr =
+            dir_in ? dev->bulk_in_ep : dev->bulk_out_ep;
+        hcpp::u8 code = 0;
+        // Host side first: unhalt the endpoint context, then move its
+        // dequeue pointer to the ring's current producer position (the
+        // stalled TRB is skipped entirely).
+        if (!run_command(trb_type_reset_endpoint, 0,
+                         hcpp::u32(dci) << 16, dev->slot_id, &code) ||
+            code != code_success) {
+            return false;
+        }
+        const hcpp::u64 dequeue =
+            (ring.phys + ring.enqueue * sizeof(Trb)) | (ring.pcs ? 1u : 0u);
+        if (!run_command(trb_type_set_tr_dequeue, dequeue,
+                         hcpp::u32(dci) << 16, dev->slot_id, &code) ||
+            code != code_success) {
+            return false;
+        }
+        // Device side: CLEAR_FEATURE(ENDPOINT_HALT) on the endpoint.
+        return control_transfer(*dev, 0x02, 1, 0, ep_addr, 0, 0, false);
+    }
+
+    bool host_set_hub_context(HostDevice *dev, hcpp::u8 num_ports,
+                              hcpp::u8 ttt) noexcept {
+        if (dev == nullptr) return false;
+        dev->is_hub = true;
+        dev->hub_ports = num_ports;
+        dev->ttt = ttt;
+        zero_page(input_ctx_phys);
+        volatile hcpp::u32 *ctl = ctx_dwords(input_ctx_phys, 0);
+        ctl[1] = 1u << 0;  // evaluate slot context only
+        fill_slot_ctx(input_ctx_phys, *dev, 1);
+        hcpp::u8 code = 0;
+        return run_command(trb_type_evaluate_ctx, input_ctx_phys, 0,
+                           dev->slot_id, &code) &&
+               code == code_success;
+    }
+
+    void host_enumerate_child(HostDevice *dev, hcpp::u8 port,
+                              hcpp::u8 speed) noexcept {
+        if (dev == nullptr || port == 0 || speed == 0) return;
+        if (dev->depth >= 5) return;  // route string holds 5 nibbles
+        const hcpp::u32 route =
+            ((dev->route << 4) | (hcpp::u32(port) & 0xF)) & 0xFFFFFu;
+        // TT fields matter only for LS/FS devices behind a high-speed hub.
+        const bool need_tt = dev->speed == 3 && speed < 3;
+        enumerate_device(port, speed, dev->root_port, route,
+                         need_tt ? dev->slot_id : 0,
+                         need_tt ? port : 0,
+                         static_cast<hcpp::u8>(dev->depth + 1));
+    }
+
+    hcpp::u64 host_scratch() noexcept { return ctrl_buf_phys; }
+
     bool usb_initialize() noexcept {
         present = false;
         running = false;
@@ -1022,14 +1294,16 @@ namespace hype::usb {
         serial::write_dec32(slots_enabled);
         serial::write("\r\n");
 
-        // Root ports only; no hub traversal. port_reset() powers up each
-        // port, waits for connect status, resets it when needed and bails
-        // out quickly for empty ports.
+        // Root ports first; any hub found during enumerate_device()
+        // recursively walks its downstream ports via host_enumerate_child().
+        // port_reset() powers up each port, waits for connect status,
+        // resets it when needed and bails out quickly for empty ports.
         for (hcpp::u32 port = 1; port <= hc_max_ports; ++port) {
             if (!port_reset(port)) continue;
             const hcpp::u8 speed =
                 static_cast<hcpp::u8>((portsc(port) >> 10) & 0x0F);
-            enumerate_port(port, speed);
+            enumerate_device(static_cast<hcpp::u8>(port), speed,
+                             static_cast<hcpp::u8>(port), 0, 0, 0, 0);
         }
         return true;
     }
