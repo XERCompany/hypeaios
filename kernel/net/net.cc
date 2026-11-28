@@ -3,6 +3,7 @@
 #include "hcpp/memory.hpp"
 #include "kernel/guard/nfuip.h"
 #include "kernel/interrupts/idt.h"
+#include "kernel/net/tcp.h"
 #include "kernel/net/virtio_net.h"
 #include "kernel/serial.hpp"
 
@@ -13,6 +14,7 @@ namespace hype::net {
         constexpr hcpp::u16 eth_type_arp = 0x0806;
 
         constexpr hcpp::u8 ip_proto_icmp = 1;
+        constexpr hcpp::u8 ip_proto_tcp = 6;
         constexpr hcpp::u8 ip_proto_udp = 17;
 
         constexpr hcpp::u8 icmp_echo_reply = 0;
@@ -455,6 +457,9 @@ namespace hype::net {
                                  payload + sizeof(IcmpHdr),
                                  payload_len - sizeof(IcmpHdr));
                 }
+            } else if (ip->proto == ip_proto_tcp && have_ip) {
+                // Issue #123: TCP dispatch (kernel/net/tcp.cc).
+                tcp_input(src_ip, dst, payload, payload_len);
             } else if (ip->proto == ip_proto_udp) {
                 handle_udp(payload, payload_len, src_ip);
             }
@@ -500,8 +505,11 @@ namespace hype::net {
             // Builds UDP- or ICMP-over-IPv4 into tx_frame; src/dst
             // ports are only meaningful for UDP. For ICMP the payload
             // is a complete ICMP message (checksum already computed).
-            if (proto != ip_proto_udp && proto != ip_proto_icmp)
+            if (proto != ip_proto_udp && proto != ip_proto_icmp &&
+                proto != ip_proto_tcp)
                 return false;
+            // UDP gets its header built here; ICMP and TCP payloads are
+            // complete L4 messages (checksums already computed).
             const hcpp::size_t l4_hdr =
                 proto == ip_proto_udp ? sizeof(UdpHdr) : 0;
             if (sizeof(EthHdr) + sizeof(Ipv4Hdr) + l4_hdr + payload_len >
@@ -683,6 +691,7 @@ namespace hype::net {
             ++stat_rx;
             handle_frame(rx_frame, n);
         }
+        tcp_timer_poll();  // TCP retransmit + TIME_WAIT housekeeping
     }
 
     const hcpp::u8* net_mac() noexcept { return our_mac; }
@@ -755,6 +764,17 @@ namespace hype::net {
 
     void net_icmp_set_handler(NetIcmpHandler handler) noexcept {
         icmp_handler = handler;
+    }
+
+    bool net_tcp_send_segment(hcpp::u32 dst_ip, const void* segment,
+                              hcpp::size_t length) noexcept {
+        if (!ready || !have_ip || segment == nullptr || length == 0)
+            return false;
+        // The TCP layer hands us a complete segment (header + payload,
+        // pseudo-header checksum already computed); the UDP/ICMP arm
+        // of ipv4_send() treats it as an opaque L4 message.
+        return ipv4_send(dst_ip, ip_proto_tcp, nullptr, segment, length, 0,
+                         0);
     }
 
 }  // namespace hype::net

@@ -49,4 +49,10 @@ namespace hype::net {
     // Registers the echo-reply consumer (ping); pass nullptr to clear.
     void net_icmp_set_handler(NetIcmpHandler handler) noexcept;
 
+    // Sends a complete TCP segment (header + payload, pseudo-header
+    // checksum already computed) inside an IPv4 packet, resolving the
+    // next-hop MAC inline. Used by kernel/net/tcp.cc (issue #123).
+    bool net_tcp_send_segment(hcpp::u32 dst_ip, const void* segment,
+                              hcpp::size_t length) noexcept;
+
 }  // namespace hype::net

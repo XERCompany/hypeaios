@@ -61,6 +61,7 @@
 #include "kernel/net/net.h"
 #include "kernel/net/ntp.h"
 #include "kernel/net/ping.h"
+#include "kernel/net/tcp.h"
 #include "kernel/panic.h"
 #include "kernel/rng/entropy.h"
 #include "kernel/runner/runnervx.h"
@@ -849,6 +850,9 @@ namespace {
             hype::net::net_ping_selftest();
             hype::net::dns_selftest();
             hype::net::ntp_selftest();
+            // Issue #123: real HTTP GET over TCP via slirp outbound
+            // ("tcp connect=ok", "tcp rx=N", "tcp selftest=ok").
+            hype::net::tcp_selftest();
         }
     }
 
