@@ -33,6 +33,8 @@
 #include "kernel/display/hgc.h"
 #include "kernel/display/idscreen.h"
 #include "kernel/display/selftest.h"
+#include "kernel/firewire/firewireALSA.h"
+#include "kernel/firewire/firewirebus.h"
 #include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
 #include "kernel/gdxf/gdxf.h"
@@ -1025,6 +1027,11 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         }
         hype::audio::hasio_pump_active();
         hype::net::net_poll();
+        // FireWire idle path: drain the iso receive ring into the AMDTP
+        // codec + capture ring, and lazily register it with pullmix once
+        // the mixer is up (same contract as the mp3 source above).
+        hype::fw::fw_poll();
+        hype::fwalsa::fwalsa_pump();
         // Write-through backstop: mutations that outran the debounced
         // auto-sync still reach the HYPEDATA blob from idle.
         hype::vfs::fs_sync();
