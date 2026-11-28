@@ -1,6 +1,7 @@
 #include "kernel/ui/deskbar.h"
 
 #include "kernel/audio/pullmix.h"
+#include "kernel/cfg/settings.h"
 #include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
 #include "kernel/gfx/hypegfx.h"
@@ -527,6 +528,9 @@ namespace hype::ui {
             // pullmix master gain is Q8: 256 == unity (100%).
             hype::audio::pullmix_set_master_gain(
                 static_cast<hcpp::u16>(pct * 256 / 100));
+            // Persisted pref (issue #130): survives reboot via hype.cfg.
+            hype::cfg::settings_set_int("audio.volume", pct);
+            hype::cfg::settings_request_save();
             serial::write("qs vol=");
             serial::write_dec32(static_cast<hcpp::u32>(pct));
             serial::write("\r\n");
@@ -539,6 +543,9 @@ namespace hype::ui {
                 return;
             }
             qs_bright = pct;
+            // Persisted pref (issue #130): survives reboot via hype.cfg.
+            hype::cfg::settings_set_int("ui.brightness", pct);
+            hype::cfg::settings_request_save();
             serial::write("qs bright=");
             serial::write_dec32(static_cast<hcpp::u32>(pct));
             serial::write("\r\n");
@@ -1275,6 +1282,28 @@ namespace hype::ui {
     }
 
     bool deskbar_qs_open() noexcept { return qs_open; }
+
+    void deskbar_set_volume(hcpp::i32 pct) noexcept {
+        pct = clamp_pct(pct);
+        if (pct == qs_vol) {
+            return;
+        }
+        qs_vol = pct;
+        if (qs_open) {
+            invalidate(qs_vol_row(qs_rect_now()));
+        }
+    }
+
+    void deskbar_set_brightness(hcpp::i32 pct) noexcept {
+        pct = clamp_pct(pct);
+        if (pct == qs_bright) {
+            return;
+        }
+        qs_bright = pct;
+        if (qs_open) {
+            invalidate(qs_bright_row(qs_rect_now()));
+        }
+    }
 
     void deskbar_close_qs() noexcept {
         if (!qs_open) {

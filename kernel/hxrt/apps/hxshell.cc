@@ -14,6 +14,7 @@
 #include "hcpp/memory.hpp"
 #include "hcpp/string_view.hpp"
 #include "kernel/arch/x86/smp.h"
+#include "kernel/cfg/settings.h"
 #include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
 #include "kernel/input/scancode.h"
@@ -749,6 +750,7 @@ namespace hype::hxrt {
             emit("  stat <path>           file metadata", st_dim);
             emit("  mounts                vfs mounts", st_dim);
             emit("  svc list|start|stop <name>", st_dim);
+            emit("  set [key] [value]     persistent settings", st_dim);
             emit("  dmesg                 tail of kernel log", st_dim);
             emit("  ping <a.b.c.d>        4 icmp echoes", st_dim);
             emit("  resolve <name>        dns A record", st_dim);
@@ -1133,6 +1135,77 @@ namespace hype::hxrt {
             emit(b, replies != 0 ? st_ok : st_err);
         }
 
+        // Persistent settings (issue #130). `set` lists every registered
+        // key, `set <key>` prints one, `set <key> <value>` validates,
+        // applies it live and schedules the debounced hype.cfg flush.
+        void cmd_set(char* arg) noexcept {
+            if (arg == nullptr || arg[0] == '\0') {
+                const hcpp::u32 total = hype::cfg::settings_count();
+                for (hcpp::u32 i = 0; i < total; ++i) {
+                    const char* name = hype::cfg::settings_key_name(i);
+                    if (name == nullptr) {
+                        continue;
+                    }
+                    LBuf b;
+                    b.s("  ");
+                    b.s(name);
+                    b.s(" = ");
+                    const char* val = hype::cfg::settings_get(name);
+                    b.s(val != nullptr && val[0] != '\0' ? val : "(empty)");
+                    emit(b, st_dim);
+                }
+                return;
+            }
+            char* value = arg;
+            while (*value != '\0' && *value != ' ') {
+                ++value;
+            }
+            if (*value == ' ') {
+                *value++ = '\0';
+                while (*value == ' ') {
+                    ++value;
+                }
+            }
+            if (*value == '\0') {
+                const char* val = hype::cfg::settings_get(arg);
+                if (val == nullptr) {
+                    LBuf b;
+                    b.s("unknown setting: ");
+                    b.s(arg);
+                    emit(b, st_err);
+                    return;
+                }
+                LBuf b;
+                b.s(arg);
+                b.s(" = ");
+                b.s(val[0] != '\0' ? val : "(empty)");
+                emit(b, st_normal);
+                return;
+            }
+            if (!hype::cfg::settings_set(arg, value)) {
+                LBuf b;
+                b.s("rejected: ");
+                b.s(arg);
+                b.s(" = ");
+                b.s(value);
+                emit(b, st_err);
+                return;
+            }
+            // Apply pushes the value into its consumer (mixer, deskbar,
+            // theme, wallpaper decode); the wallpaper apply can fail
+            // honestly when the file is missing from U:/wallpapers.
+            const bool applied = hype::cfg::settings_apply(arg);
+            hype::cfg::settings_request_save();
+            LBuf b;
+            b.s(arg);
+            b.s(" = ");
+            b.s(hype::cfg::settings_get(arg));
+            if (!applied) {
+                b.s(" (apply failed)");
+            }
+            emit(b, applied ? st_ok : st_err);
+        }
+
         void cmd_resolve(const char* arg) noexcept {
             if (arg == nullptr || arg[0] == '\0') {
                 emit("usage: resolve <name>", st_err);
@@ -1211,6 +1284,8 @@ namespace hype::hxrt {
                 cmd_mounts();
             } else if (str_equals(p, "svc")) {
                 cmd_svc(args);
+            } else if (str_equals(p, "set")) {
+                cmd_set(args);
             } else if (str_equals(p, "dmesg")) {
                 cmd_dmesg();
             } else if (str_equals(p, "ping")) {

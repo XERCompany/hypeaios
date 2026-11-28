@@ -37,6 +37,13 @@ namespace hype::ui {
     bool deskbar_qs_open() noexcept;
     void deskbar_close_qs() noexcept;
 
+    // Quiet slider-state sync for the settings layer (issue #130): sets
+    // the stored 0..100 value and repaints the row when QS is open,
+    // without the serial marker, mixer write or settings re-save the
+    // user-gesture path (apply_volume/apply_bright) performs.
+    void deskbar_set_volume(hcpp::i32 pct) noexcept;
+    void deskbar_set_brightness(hcpp::i32 pct) noexcept;
+
     // Notification-center flyout state (tray bell toggles it). Opening
     // marks the archive read (unread -> 0).
     bool deskbar_nc_open() noexcept;

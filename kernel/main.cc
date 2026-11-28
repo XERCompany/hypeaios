@@ -27,6 +27,7 @@
 #include "kernel/codecapps/registry.h"
 #include "version_generated.h"
 #include "kernel/chips/chipset.h"
+#include "kernel/cfg/settings.h"
 #include "kernel/db/hypedb.hpp"
 #include "kernel/db/hypevfs.h"
 #include "kernel/display/clientdisplay.h"
@@ -529,6 +530,14 @@ namespace {
         serial::write("blob bytes=");
         serial::write_dec32(static_cast<hcpp::u32>(blob.bytes));
         serial::write("\r\n");
+        // Persistent settings (issue #130): the hypeblob mount just
+        // repopulated U:, so HYPEOS://U/hype.cfg (when present on disk)
+        // is readable now. settings_load() prints "cfg <key>=<val>" per
+        // restored line plus "cfg loaded=N"; apply_all pushes the values
+        // into volume/brightness/theme consumers. The wallpaper apply is
+        // deferred to stage_hxrt (dxbg decoder + seeded pack needed).
+        hype::cfg::settings_load();
+        hype::cfg::settings_apply_all();
         // FAT32 probe (issue #106): mounts a real on-disk FAT32 partition
         // as HYPEOS://F. The stage1 boot sector has no MBR partition
         // table, so the stock image reports part=none and F: stays
@@ -756,6 +765,10 @@ namespace {
     void stage_hxrt() noexcept {
         hype::hxrt::hxrt_boot();
         report("dxbg selftest=", hype::hxrt::dxbg_selftest());
+        // Wallpaper restore (issue #130): deferred from settings_load()
+        // in stage_vfs because the dxbg decode path needs the seeded
+        // U:/wallpapers pack, which the selftest above just guaranteed.
+        hype::cfg::settings_apply_wallpaper();
         serial::write("hxer sync=");
         serial::write_dec32(hype::vfs::hypefile_sync());
         serial::write("\r\n");
@@ -1127,6 +1140,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         // Write-through backstop: mutations that outran the debounced
         // auto-sync still reach the HYPEDATA blob from idle.
         hype::vfs::fs_sync();
+        // Settings save debounce (issue #130): a settings change that
+        // landed inside the 500 ms window flushes hype.cfg from here.
+        hype::cfg::settings_pump();
         hype::interrupts::pit_wait_ticks(1);
     }
 }
