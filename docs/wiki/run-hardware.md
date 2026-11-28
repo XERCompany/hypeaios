@@ -11,7 +11,7 @@ QEMU ему не нужен: та же картинка грузится с USB-
 | Диск | ATA PIO (порты 0x1F0) — PIIX/ICH IDE у VirtualBox и реальных чипсетов |
 | HYPEDATA | блоб на LBA 4129, монтируется с любого ATA-устройства |
 | Аудио | Intel HDA / AC97 / ES1370 / SB16+OPL2 — покрывает весь выбор VirtualBox |
-| Ввод | PS/2 клава+мышь (IRQ1/IRQ12, Intellimouse wheel) — эмулируется всеми VM |
+| Ввод | PS/2 клава+мышь (IRQ1/IRQ12, Intellimouse wheel) — эмулируется всеми VM; USB HID (boot protocol, клава+мышь) через xHCI — `kernel/usb/usbhid.cc`, маркеры `usb kbd=ok`/`usb mouse=ok` |
 | Часы | CMOS RTC + PIT 100Hz |
 | Реестр | PCI scan с bridge-рекурсией — устройства просто не найдутся, если их нет |
 

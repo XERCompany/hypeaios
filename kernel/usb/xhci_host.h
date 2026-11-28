@@ -47,6 +47,16 @@ namespace hype::usb {
     void host_enumerate_child(HostDevice *dev, hcpp::u8 port,
                               hcpp::u8 speed) noexcept;
 
+    // Interrupt-IN support for the HID class driver (usbhid.cc).
+    // host_intr_arm() allocates the endpoint's transfer ring, runs
+    // Configure Endpoint with an interrupt-IN endpoint context (xHCI
+    // interval = log2 encoding of the bInterval period) and posts the
+    // first report poll into the device's report-buffer page. Every
+    // completion arrives as a Transfer Event that xhci.cc turns into a
+    // usbhid::hid_report() call, reposting the poll each time.
+    bool host_intr_arm(HostDevice *dev, hcpp::u8 ep_num, hcpp::u16 mps,
+                       hcpp::u8 binterval) noexcept;
+
     // Isochronous-OUT support for the UAC class driver (usbuac.cc).
     // host_iso_arm() allocates the endpoint's transfer ring and runs
     // Configure Endpoint with an isoch-OUT endpoint context (xHCI

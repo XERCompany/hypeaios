@@ -5,7 +5,12 @@
 
 namespace hype::usb {
 
-    // xHCI host controller + USB HID boot-protocol keyboard/mouse driver.
+    // xHCI host controller + class-driver dispatch. USB HID
+    // boot-protocol keyboards/mice bind through usbhid.cc (HID class
+    // requests + report decode), hubs through usbhub.cc, mass-storage
+    // (BOT) through usbmsc.cc and UAC1 audio through usbuac.cc; all
+    // ride the host_* API in xhci_host.h. Devices found behind hubs
+    // get the same class dispatch as root-port devices.
     //
     // usb_initialize() is wired into the runtime stage table (stage
     // "usb.xhci") and runs with interrupts enabled so that all TRB
@@ -14,17 +19,13 @@ namespace hype::usb {
     // leaves PS/2 input untouched.
     //
     // usb_poll() drains the xHCI event ring, reposts interrupt-IN TRBs and
-    // feeds the *existing* input paths: HID key reports are converted to
-    // set-1 scancodes and pushed through input::scancode_decode() +
-    // input::emit_key_event() exactly like the PS/2 IRQ1 handler, while
-    // mouse reports are queued as MsauxPacket records for
-    // input::cursor_poll() to merge into the same ptr_apply/route path the
-    // PS/2 packets take. usb_poll() is invoked from cursor_poll() so the
-    // main idle loop needs no changes.
-    //
-    // Mass-storage (BOT) devices bind through usbmsc.cc and hubs through
-    // usbhub.cc; both ride the host_* API in xhci_host.h. Devices found
-    // behind hubs get the same class dispatch as root-port devices.
+    // feeds the *existing* input paths via usbhid.cc: HID key reports are
+    // converted to set-1 scancodes and pushed through
+    // input::scancode_decode() + input::emit_key_event() exactly like the
+    // PS/2 IRQ1 handler, while mouse reports are queued as MsauxPacket
+    // records for input::cursor_poll() to merge into the same
+    // ptr_apply/route path the PS/2 packets take. usb_poll() is invoked
+    // from cursor_poll() so the main idle loop needs no changes.
     //
     // UAC1 audio devices (AudioControl + AudioStreaming with an
     // isoch-OUT endpoint) bind through usbuac.cc; the host side adds a

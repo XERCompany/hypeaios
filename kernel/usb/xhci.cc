@@ -1,41 +1,41 @@
-// xHCI (USB 3.x host controller) + USB HID boot-protocol input driver +
-// class-dispatch hooks for USB hubs (usbhub.cc) and mass-storage BOT
-// devices (usbmsc.cc).
+// xHCI (USB 3.x host controller) + class-dispatch hooks for the USB
+// class drivers: HID boot-protocol input (usbhid.cc), hubs (usbhub.cc),
+// mass-storage BOT (usbmsc.cc) and UAC1 audio (usbuac.cc).
 //
 // Scope (see xhci.h): PCI class 0x0C/0x03/0x30 probe, controller halt +
 // reset, DCBAA/command ring/event ring/interrupter-0 programming, Enable
 // Slot / Address Device / Evaluate Context / Configure Endpoint commands,
 // EP0 control transfers for enumeration (GET_DESCRIPTOR device/config,
-// SET_CONFIGURATION, SET_PROTOCOL boot, SET_IDLE), one interrupt-IN
-// endpoint per HID keyboard (protocol 1) or mouse (protocol 2), bulk
-// OUT/IN endpoint pairs for mass-storage class (0x08/0x06/0x50), and hub
-// devices (device/interface class 0x09) whose downstream ports are
-// enumerated through usbhub.cc with route strings + TT fields in the
-// slot context. UAC1 audio devices (class 01) bind through usbuac.cc
-// and use the isoch-OUT path added below (Isoch TRBs with SIA + IOC,
-// one TD per 1 ms frame). Single polled event ring, no MSI, <= 8
-// slots (shared by all devices incl. hubs), no hot-removal. Devices are enumerated during
-// init; afterwards the interrupt-IN rings stay armed and usb_poll()
-// (called from input::cursor_poll) turns completion events into the same
-// key/ptr counters PS/2 feeds.
+// SET_CONFIGURATION), one interrupt-IN endpoint per HID keyboard
+// (protocol 1) or mouse (protocol 2) armed via host_intr_arm() for
+// usbhid.cc, bulk OUT/IN endpoint pairs for mass-storage class
+// (0x08/0x06/0x50), and hub devices (device/interface class 0x09)
+// whose downstream ports are enumerated through usbhub.cc with route
+// strings + TT fields in the slot context. UAC1 audio devices (class 01)
+// bind through usbuac.cc and use the isoch-OUT path added below
+// (Isoch TRBs with SIA + IOC, one TD per 1 ms frame). Single polled
+// event ring, no MSI, <= 8 slots (shared by all devices incl. hubs),
+// no hot-removal. Devices are enumerated during init; afterwards the
+// interrupt-IN rings stay armed and usb_poll() (called from
+// input::cursor_poll) turns completion events into usbhid::hid_report()
+// calls that feed the same key/ptr counters PS/2 feeds.
 //
 // The host_* entry points at the bottom of this file (declared in
-// xhci_host.h) are the narrow API usbhub.cc/usbmsc.cc use to drive
-// control/bulk transfers, endpoint-halt recovery, hub slot-context
-// updates and recursive child enumeration without re-implementing TRB
-// mechanics.
+// xhci_host.h) are the narrow API usbhid.cc/usbhub.cc/usbmsc.cc/
+// usbuac.cc use to drive control/bulk/interrupt/isoch transfers,
+// endpoint-halt recovery, hub slot-context updates and recursive child
+// enumeration without re-implementing TRB mechanics.
 
 #include "kernel/usb/xhci.h"
 
+#include "kernel/usb/usbhid.h"
 #include "kernel/usb/usbhub.h"
 #include "kernel/usb/usbmsc.h"
 #include "kernel/usb/usbuac.h"
 #include "kernel/usb/xhci_host.h"
 
 #include "kernel/arch/x86/cpu.h"
-#include "kernel/functionemitkeys.h"
 #include "kernel/interrupts/idt.h"
-#include "kernel/input/scancode.h"
 #include "kernel/memory/pmm.h"
 #include "kernel/memory/vmm.h"
 #include "kernel/pci/pci.h"
@@ -238,8 +238,6 @@ namespace hype::usb {
         hcpp::u8 iso_dci;
         hcpp::u16 iso_mps;
         Ring iso;
-        hcpp::u8 prev_keys[6];
-        hcpp::u8 prev_mods;
     };
 
     namespace {
@@ -270,13 +268,6 @@ namespace hype::usb {
         bool present;
         bool running;
         hcpp::u8 fail_step;
-
-        // Queue of decoded mouse packets drained by usb_mouse_poll().
-        input::MsauxPacket mouse_queue[16];
-        hcpp::u32 mouse_head;
-        hcpp::u32 mouse_tail;
-        constexpr hcpp::u32 mouse_queue_size =
-            sizeof(mouse_queue) / sizeof(mouse_queue[0]);
 
         // Last events seen by wait_event() matching.
         Trb last_cmd_event;
@@ -416,8 +407,6 @@ namespace hype::usb {
         }
 
         void handle_transfer_event(const Trb &t) noexcept;
-        void kbd_report(Device &dev) noexcept;
-        void mouse_report(Device &dev) noexcept;
 
         void dispatch_event(const Trb &t) noexcept {
             const hcpp::u8 type = trb_type(t);
@@ -546,14 +535,6 @@ namespace hype::usb {
         bool set_configuration(Device &dev, hcpp::u16 config_value) noexcept {
             return control_transfer(dev, 0x00, 9, config_value, 0, 0, 0, false);
         }
-        bool set_protocol_boot(Device &dev) noexcept {
-            // Class/interface, host->device: SET_PROTOCOL(0x0B) value 0=boot.
-            return control_transfer(dev, 0x21, 0x0B, 0, dev.iface, 0, 0, false);
-        }
-        bool set_idle(Device &dev) noexcept {
-            return control_transfer(dev, 0x21, 0x0A, 0, dev.iface, 0, 0, false);
-        }
-
         // -----------------------------------------------------------------
         // Input contexts
         // -----------------------------------------------------------------
@@ -621,136 +602,13 @@ namespace hype::usb {
             }
             const hcpp::u8 code = trb_code(t);
             if (code == code_success || code == code_short_packet) {
-                if (dev->kind == DevKind::Keyboard) {
-                    kbd_report(*dev);
-                } else {
-                    mouse_report(*dev);
-                }
+                usbhid::hid_report(
+                    dev,
+                    reinterpret_cast<const volatile hcpp::u8 *>(
+                        dev->report_phys),
+                    dev->report_len);
             }
             post_intr_trb(*dev);  // repost the report poll
-        }
-
-        // -----------------------------------------------------------------
-        // HID boot reports -> existing PS/2 input paths
-        // -----------------------------------------------------------------
-
-        // HID usage ID -> set-1 scancode; bit 15 = needs 0xE0 prefix.
-        constexpr hcpp::u16 ext_flag = 0x8000;
-        constexpr hcpp::u16 hid_map[0x66] = {
-            /* 0x00-0x03 */ 0, 0, 0, 0,
-            /* 0x04-0x1D a-z */
-            0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24,
-            0x25, 0x26, 0x32, 0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14,
-            0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C,
-            /* 0x1E-0x27 digits 1-0 */
-            0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
-            /* 0x28 Enter .. 0x39 CapsLock */
-            0x1C, 0x01, 0x0E, 0x0F, 0x39, 0x0C, 0x0D, 0x1A, 0x1B, 0x2B,
-            0x56, 0x27, 0x28, 0x29, 0x33, 0x34, 0x35, 0x3A,
-            /* 0x3A-0x45 F1-F12 */
-            0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44,
-            0x57, 0x58,
-            /* 0x46 PrtSc, 0x47 ScrLk, 0x48 Pause(unmapped) */
-            ext_flag | 0x37, 0x46, 0,
-            /* 0x49-0x4E Ins Home PgUp Del End PgDn */
-            ext_flag | 0x52, ext_flag | 0x47, ext_flag | 0x49,
-            ext_flag | 0x53, ext_flag | 0x4F, ext_flag | 0x51,
-            /* 0x4F-0x52 Right Left Down Up */
-            ext_flag | 0x4D, ext_flag | 0x4B, ext_flag | 0x50,
-            ext_flag | 0x48,
-            /* 0x53 NumLock, 0x54-0x58 KP/ * - + Enter */
-            0x45, ext_flag | 0x35, 0x37, 0x4A, 0x4E, ext_flag | 0x1C,
-            /* 0x59-0x62 KP1-KP0, 0x63 KP. */
-            0x4F, 0x50, 0x51, 0x4B, 0x4C, 0x4D, 0x47, 0x48, 0x49, 0x52,
-            0x53,
-            /* 0x64 non-US 102nd key, 0x65 menu */
-            0x56, ext_flag | 0x5D,
-        };
-
-        // Push one make/break through the exact PS/2 decode path so the
-        // functionemitkeys bus sees identical events.
-        void feed_scancode(hcpp::u16 mapped, bool pressed) noexcept {
-            if ((mapped & ext_flag) != 0) {
-                input::scancode_decode(0xE0);
-            }
-            const hcpp::u8 code = static_cast<hcpp::u8>(mapped & 0x7F);
-            const input::DecodedKey key = input::scancode_decode(
-                pressed ? code : static_cast<hcpp::u8>(code | 0x80));
-            if (key.valid) {
-                input::emit_key_event(
-                    key.key_code,
-                    pressed ? input::KeyState::Pressed : input::KeyState::Released,
-                    interrupts::pit_ticks());
-            }
-        }
-
-        constexpr hcpp::u16 mod_map[8] = {
-            0x1D,             // Left Ctrl
-            0x2A,             // Left Shift
-            0x38,             // Left Alt
-            ext_flag | 0x5B,  // Left GUI
-            ext_flag | 0x1D,  // Right Ctrl
-            0x36,             // Right Shift
-            ext_flag | 0x38,  // Right Alt
-            ext_flag | 0x5C,  // Right GUI
-        };
-
-        bool key_in_report(const volatile hcpp::u8 *r, hcpp::u8 usage) noexcept {
-            for (hcpp::u8 i = 0; i < 6; ++i)
-                if (r[2 + i] == usage) return true;
-            return false;
-        }
-
-        void kbd_report(Device &dev) noexcept {
-            // Boot-protocol report: [modifier bitmap, reserved, usage x6].
-            volatile hcpp::u8 *r =
-                reinterpret_cast<volatile hcpp::u8 *>(dev.report_phys);
-            const hcpp::u8 mods = r[0];
-            const hcpp::u8 changed = static_cast<hcpp::u8>(mods ^ dev.prev_mods);
-            for (hcpp::u8 bit = 0; bit < 8; ++bit) {
-                if ((changed & static_cast<hcpp::u8>(1u << bit)) == 0) continue;
-                feed_scancode(mod_map[bit],
-                              (mods & static_cast<hcpp::u8>(1u << bit)) != 0);
-            }
-            dev.prev_mods = mods;
-            for (hcpp::u8 i = 0; i < 6; ++i) {
-                const hcpp::u8 u = dev.prev_keys[i];
-                if (u != 0 && !key_in_report(r, u) && u < 0x66 &&
-                    hid_map[u] != 0) {
-                    feed_scancode(hid_map[u], false);
-                }
-            }
-            for (hcpp::u8 i = 0; i < 6; ++i) {
-                const hcpp::u8 u = r[2 + i];
-                if (u == 0 || u >= 0x66 || hid_map[u] == 0) continue;
-                bool held = false;
-                for (hcpp::u8 j = 0; j < 6; ++j)
-                    if (dev.prev_keys[j] == u) held = true;
-                if (!held) feed_scancode(hid_map[u], true);
-            }
-            for (hcpp::u8 i = 0; i < 6; ++i) {
-                dev.prev_keys[i] = r[2 + i];
-            }
-        }
-
-        void mouse_report(Device &dev) noexcept {
-            // Boot-protocol report: [buttons, dx, dy, (wheel)].
-            volatile hcpp::u8 *r =
-                reinterpret_cast<volatile hcpp::u8 *>(dev.report_phys);
-            input::MsauxPacket packet{};
-            packet.buttons = static_cast<hcpp::u8>(r[0] & 0x07);
-            packet.dx = static_cast<hcpp::i8>(r[1]);
-            // USB HID dy is already screen-positive (down = +y), so it can
-            // feed the ptr path directly without the PS/2 sign fixup.
-            packet.dy = static_cast<hcpp::i8>(r[2]);
-            if (dev.report_len >= 4) {
-                packet.wheel = static_cast<hcpp::i8>(r[3]);
-            }
-            const hcpp::u32 next = (mouse_head + 1) % mouse_queue_size;
-            if (next != mouse_tail) {
-                mouse_queue[mouse_head] = packet;
-                mouse_head = next;
-            }
         }
 
         // -----------------------------------------------------------------
@@ -936,7 +794,7 @@ namespace hype::usb {
             dev->dev_ctx_phys = alloc_page();
             dev->report_phys = alloc_page();
             if (dev->dev_ctx_phys == 0 || dev->report_phys == 0 ||
-                !ring_init(dev->ep0) || !ring_init(dev->intr)) {
+                !ring_init(dev->ep0)) {
                 fail_step = 11;
                 return false;
             }
@@ -1080,48 +938,29 @@ namespace hype::usb {
                 return true;
             }
 
+            // Boot-protocol HID interface (class 03, protocol 1 kbd /
+            // 2 mouse): usbhid.cc issues the SET_PROTOCOL/SET_IDLE class
+            // requests and arms the interrupt-IN endpoint through
+            // host_intr_arm(); report completions land in
+            // handle_transfer_event above and are decoded by
+            // usbhid::hid_report().
             if (!scan.hid_found || scan.ep_num == 0 || scan.ep_mps == 0) {
                 dev->kind = DevKind::Other;
                 return true;  // unsupported class: slot claimed, nothing armed
             }
             dev->iface = scan.iface;
-            dev->ep_dci = static_cast<hcpp::u8>(scan.ep_num * 2 + 1);  // IN ep
-            dev->ep_mps = scan.ep_mps;
-            dev->ep_interval = scan.ep_interval;
-            dev->report_len = scan.ep_mps > 64 ? 64 : scan.ep_mps;
-
             if (!set_configuration(*dev, scan.config_value)) {
                 fail_step = 18;
                 return false;
             }
-            // Best-effort HID class requests; a STALL here is tolerated
-            // (e.g. devices already in boot protocol).
-            set_protocol_boot(*dev);
-            set_idle(*dev);
-
-            // Configure Endpoint: input ctx adds A0 (slot, with updated
-            // context-entries count) + A<dci> for the interrupt-IN ep.
-            zero_page(input_ctx_phys);
-            ctl = ctx_dwords(input_ctx_phys, 0);
-            ctl[1] = (1u << 0) | (1u << dev->ep_dci);
-            fill_slot_ctx(input_ctx_phys, *dev, dev->ep_dci);
-            fill_ep_ctx(input_ctx_phys, dev->ep_dci + 1, ep_type_interrupt_in,
-                        dev->ep_mps, ep_interval_encoding(dev->ep_interval),
-                        dev->intr.phys, dev->report_len, dev->ep_mps);
-            if (!run_command(trb_type_configure_ep, input_ctx_phys, 0, slot,
-                             &code) ||
-                code != code_success) {
+            if (!usbhid::hid_bind(dev, scan.iface, scan.protocol,
+                                  scan.ep_num, scan.ep_mps,
+                                  scan.ep_interval)) {
                 fail_step = 19;
                 return false;
             }
-
-            dev->kind = scan.protocol == 1 ? DevKind::Keyboard : DevKind::Mouse;
-            post_intr_trb(*dev);  // arm the periodic report poll
-            if (dev->kind == DevKind::Keyboard) {
-                serial::write_line("usb kbd=ok");
-            } else {
-                serial::write_line("usb mouse=ok");
-            }
+            dev->kind =
+                scan.protocol == 1 ? DevKind::Keyboard : DevKind::Mouse;
             return true;
         }
 
@@ -1330,6 +1169,36 @@ namespace hype::usb {
                          static_cast<hcpp::u8>(dev->depth + 1));
     }
 
+    bool host_intr_arm(HostDevice *dev, hcpp::u8 ep_num, hcpp::u16 mps,
+                       hcpp::u8 binterval) noexcept {
+        if (dev == nullptr || ep_num == 0 || ep_num > 15 || mps == 0) {
+            return false;
+        }
+        if (!ring_init(dev->intr)) return false;
+        dev->ep_dci = static_cast<hcpp::u8>(ep_num * 2 + 1);  // IN ep
+        dev->ep_mps = mps;
+        dev->ep_interval = binterval;
+        dev->report_len = mps > 64 ? 64 : mps;
+        // Configure Endpoint: input ctx adds A0 (slot, with updated
+        // context-entries count) + A<dci> for the interrupt-IN ep.
+        zero_page(input_ctx_phys);
+        volatile hcpp::u32 *ctl = ctx_dwords(input_ctx_phys, 0);
+        ctl[1] = (1u << 0) | (1u << dev->ep_dci);
+        fill_slot_ctx(input_ctx_phys, *dev, dev->ep_dci);
+        fill_ep_ctx(input_ctx_phys, dev->ep_dci + 1, ep_type_interrupt_in,
+                    dev->ep_mps, ep_interval_encoding(dev->ep_interval),
+                    dev->intr.phys, dev->report_len, dev->ep_mps);
+        hcpp::u8 code = 0;
+        if (!run_command(trb_type_configure_ep, input_ctx_phys, 0,
+                         dev->slot_id, &code) ||
+            code != code_success) {
+            dev->ep_dci = 0;
+            return false;
+        }
+        post_intr_trb(*dev);  // arm the periodic report poll
+        return true;
+    }
+
     bool host_iso_arm(HostDevice *dev, hcpp::u8 ep_num, hcpp::u16 mps,
                       hcpp::u8 binterval) noexcept {
         if (dev == nullptr || ep_num == 0 || ep_num > 15 || mps == 0 ||
@@ -1381,7 +1250,7 @@ namespace hype::usb {
         present = false;
         running = false;
         fail_step = 0;
-        mouse_head = mouse_tail = 0;
+        usbhid::hid_reset();
         have_cmd_event = have_xfer_event = false;
         for (auto &d : devices) d = Device{};
 
@@ -1431,15 +1300,11 @@ namespace hype::usb {
     }
 
     bool usb_keyboard_present() noexcept {
-        for (const auto &d : devices)
-            if (d.kind == DevKind::Keyboard) return true;
-        return false;
+        return usbhid::hid_keyboard_present();
     }
 
     bool usb_mouse_present() noexcept {
-        for (const auto &d : devices)
-            if (d.kind == DevKind::Mouse) return true;
-        return false;
+        return usbhid::hid_mouse_present();
     }
 
     void usb_poll() noexcept {
@@ -1449,12 +1314,7 @@ namespace hype::usb {
     }
 
     hcpp::u32 usb_mouse_poll(input::MsauxPacket *out, hcpp::u32 max) noexcept {
-        hcpp::u32 n = 0;
-        while (mouse_tail != mouse_head && n < max && out != nullptr) {
-            out[n++] = mouse_queue[mouse_tail];
-            mouse_tail = (mouse_tail + 1) % mouse_queue_size;
-        }
-        return n;
+        return usbhid::hid_mouse_poll(out, max);
     }
 
 }  // namespace hype::usb
