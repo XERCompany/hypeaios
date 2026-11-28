@@ -3,6 +3,7 @@
 #include "kernel/ata.h"
 #include "kernel/block/ahci.h"
 #include "kernel/block/nvme.h"
+#include "kernel/block/sdhci.h"
 #include "kernel/usb/usbmsc.h"
 
 namespace hype::block {
@@ -21,17 +22,21 @@ namespace hype::block {
     }
 
     bool block_initialize() noexcept {
-        // Priority order: NVMe > AHCI > ATA PIO. Both probes log their
-        // own dev=ok/absent markers; routing prefers NVMe whenever a
-        // namespace came up.
+        // Priority order: NVMe > AHCI > ATA PIO > USB-MSC > SDHCI.
+        // Each probe logs its own dev=ok/absent markers; routing
+        // prefers NVMe whenever a namespace came up, and the SD card
+        // reader sits last since it is removable media — it can never
+        // shadow a fixed boot disk.
         nvme::nvme_probe();
         ahci::ahci_probe();
+        sdhci::sdhci_probe();
         return block_present();
     }
 
     bool block_present() noexcept {
         return nvme::nvme_ready() || ahci::ahci_ready() ||
-               ata::ata_present() || usb::usbmsc::usbmsc_ready();
+               ata::ata_present() || usb::usbmsc::usbmsc_ready() ||
+               sdhci::sdhci_ready();
     }
 
     bool block_identify(ata::AtaInfo& out) noexcept {
@@ -78,6 +83,9 @@ namespace hype::block {
         if (usb::usbmsc::usbmsc_ready()) {
             return usb::usbmsc::usbmsc_read(lba, buffer, sectors);
         }
+        if (sdhci::sdhci_ready()) {
+            return sdhci::sdhci_read(lba, buffer, sectors);
+        }
         return false;
     }
 
@@ -119,6 +127,9 @@ namespace hype::block {
         if (usb::usbmsc::usbmsc_ready()) {
             return usb::usbmsc::usbmsc_write(lba, buffer, sectors);
         }
+        if (sdhci::sdhci_ready()) {
+            return sdhci::sdhci_write(lba, buffer, sectors);
+        }
         return false;
     }
 
@@ -127,6 +138,9 @@ namespace hype::block {
         if (ahci::ahci_ready()) return ahci::ahci_flush();
         if (usb::usbmsc::usbmsc_ready() && !ata::ata_present()) {
             return true;  // BOT has no cache-flush command here
+        }
+        if (sdhci::sdhci_ready() && !ata::ata_present()) {
+            return true;  // SD media has no cache-flush command
         }
         return ata::ata_flush_cache();
     }
