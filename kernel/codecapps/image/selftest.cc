@@ -1,6 +1,8 @@
 #include "kernel/codecapps/image/image.h"
 #include "kernel/codecapps/image/exif.h"
+#include "kernel/codecapps/image/gif.h"
 #include "kernel/codecapps/arena.h"
+#include "kernel/codecapps/archive/selftest_blobs.h"
 #include "kernel/codecapps/registry.h"
 #include "kernel/serial.hpp"
 
@@ -185,6 +187,22 @@ namespace hype::codec::image {
             0x00, 0x00, 0x00, 0xFF,
         };
 
+        // gif_anim_blob (archive/selftest_blobs.h): 2x2 logical screen,
+        // palette black/red/green/blue, NETSCAPE2.0 loop=2, four frames:
+        //   F1 delay50 disp1 full red  F2 delay20 disp2 green@(0,0)
+        //   F3 delay30 disp1 blue@(1,1)  F4 delay40 transp=idx1 (0,0..1,0)=[1,3]
+        const hcpp::u8 expected_anim[4][16] = {
+            {0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF,
+             0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF},
+            {0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF,
+             0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF},
+            {0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF,
+             0xFF, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF},
+            {0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF,
+             0xFF, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF},
+        };
+        const hcpp::u16 anim_delays[4] = {50, 20, 30, 40};
+
         const hcpp::u8 expected_ico[] = {
             0xFF, 0x00, 0x00, 0xFF,
         };
@@ -320,6 +338,33 @@ namespace hype::codec::image {
         serial::write("gif decode=");
         serial::write_line(good ? "ok" : "fail");
         ok = ok && good;
+
+        {
+            using namespace archive::selftest_blobs;
+            GifAnim anim;
+            const hcpp::u32 nframes =
+                gif_frame_count(gif_anim_blob, sizeof(gif_anim_blob));
+            serial::write("gif frames=");
+            serial::write_dec32(nframes);
+            serial::write("\r\n");
+            good = gif_anim_open(anim, gif_anim_blob, sizeof(gif_anim_blob)) &&
+                   nframes == 4;
+            FrameBuf canvas{};
+            canvas.data = frame_storage;
+            canvas.capacity = sizeof(frame_storage);
+            hcpp::u16 delay = 0;
+            for (hcpp::u32 i = 0; good && i < 4; ++i) {
+                good = gif_anim_next(anim, canvas, delay, arena) &&
+                       delay == anim_delays[i] &&
+                       pixels_equal(canvas, expected_anim[i], 4);
+            }
+            // loop_count is only parsed once the NETSCAPE2.0 ext is consumed.
+            good = good && anim.frames == 4 && anim.loop_count == 2 &&
+                   !gif_anim_next(anim, canvas, delay, arena);
+            serial::write("gif anim=");
+            serial::write_line(good ? "ok" : "fail");
+            ok = ok && good;
+        }
 
         good = codec_probe(ico_blob, sizeof(ico_blob)) == CodecId::Ico &&
                decode_matches(CodecId::Ico, ico_blob, sizeof(ico_blob), expected_ico, 1, 1,

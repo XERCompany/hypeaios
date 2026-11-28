@@ -67,7 +67,7 @@ Probe-order rule (already encoded in `magic.cc`): specific signatures before gen
 | XM | 0 | `45 78 74 65 6E 64 65 64 20 4D 6F 64 75 6C 65 3A 20` (`Extended Module: `) + `1A` @37 | no `CodecId` yet |
 | S3M | 44 | `53 43 52 4D` (`SCRM`) | no `CodecId` yet |
 | IT | 0 | `49 4D 50 4D` (`IMPM`) | no `CodecId` yet |
-| AVI | 0+8 | `RIFF????AVI ` | probe only |
+| AVI | 0+8 | `RIFF????AVI ` | demux done (`video/videoemuxer.cc` + `codecapps/avi.cc` MJPEG frame decode); `idx1`/OpenDML not parsed |
 | MKV / WebM | 0 | `1A 45 DF A3`; DocType `matroska`/`webm` in EBML header | probe only |
 | MP4 / MOV | 4 | `66 74 79 70` + brand `isom/iso2/mp4?/qt  /M4A /avc1` | probe only |
 | MPEG-TS | 0,188,376 | `47` sync at packet stride 188 | probe only |
@@ -75,9 +75,9 @@ Probe-order rule (already encoded in `magic.cc`): specific signatures before gen
 | H.264 Annex-B | 0 | `00 00 00 01` + NAL type 7 (SPS `6x`) | probe only |
 | YUV4MPEG (y4m) | 0 | `59 55 56 34 4D 50 45 47 32` (`YUV4MPEG2`) | no `CodecId` yet |
 | FLV | 0 | `46 4C 56 01` (`FLV\x01`) | optional, low value |
-| ZIP | 0 | `50 4B 03 04` (`PK\x03\x04`; also `PK\x05\x06` empty) | no `CodecId` yet — add `Archive` kind |
-| GZIP | 0 | `1F 8B` | no `CodecId` yet |
-| TAR | 257 | `75 73 74 61 72` (`ustar`/`ustar\0`/`ustar  `) | mid-file probe like MOD/TGA |
+| ZIP | 0 | `50 4B 03 04` (`PK\x03\x04`; also `PK\x05\x06` empty) | done (`archive/zip.cc`, `CodecKind::Archive`) |
+| GZIP | 0 | `1F 8B` (+ method `08`) | done (`archive/gzip.cc`, decode+encode via ZText) |
+| TAR | 257 | `75 73 74 61 72` (`ustar`/`ustar\0`/`ustar  `) | done (`archive/tar.cc`, mid-file probe) |
 | 7z | 0 | `37 7A BC AF 27 1C` | no `CodecId` yet |
 | XZ | 0 | `FD 37 7A 58 5A 00` | no `CodecId` yet |
 | bzip2 | 0 | `42 5A 68` (`BZh`) | skip — niche |
@@ -121,7 +121,7 @@ Header → Logical Screen Descriptor (packed fields: GCT flag/size) → global c
 (`NETSCAPE2.0` loop count); `0x3B` trailer.
 LZW: min-code-size 2–8, clear=`1<<mcs`, codes grow to 12 bits, prefix/suffix stacks.
 Interlace pass row-order (0,8)(4,8)(2,4)(1,2).
-*Effort:* M done; animation iterator + disposal compositing S. *Refs:* spec-gif89a.txt;
+*Effort:* M done; animation iterator + disposal compositing done (`gif_anim_*`). *Refs:* spec-gif89a.txt;
 from-scratch already chosen — GIF LZW differs from TIFF/ZIP LZW variants only in
 parameter packing.
 
@@ -254,7 +254,7 @@ predictor behind MP4 cookie).
 
 ## 4. Video / containers
 
-### AVI (RIFF) — probe only, propose `kernel/video/avi_demux.cc`
+### AVI (RIFF) — demux done, `kernel/video/videoemuxer.cc` + `kernel/codecapps/avi.cc`
 `RIFF/AVI ` → `LIST hdrl` {`avih`, per-stream `LIST strl`{`strh` fourcc-type
 `vids`/`auds` + handler, `strf` BITMAPINFOHEADER/WAVEFORMATEX}} → `LIST movi` chunks
 `NNdc`/`NNdb`/`NNwb` → `idx1` index; OpenDML `AVIX`/`dmlh` for >4 GiB.
@@ -268,10 +268,10 @@ Per-frame = full JPEG baseline decode; inside AVI `##dc` chunks or raw concatena
 `FF D8…FF D9` streams (webcam/motion-jpeg). Cost = JPEG per frame — fine at ≤30 fps
 for modest resolutions. Add `video_mjpeg_next(state, FrameBuf&)` pull API.
 
-### Animated GIF as video-lite — still-frame done
-GCE delay (cs) + disposal mode + `NETSCAPE2.0` loop → `gif_next_frame(canvas,&delay)`
-iterator; composite disposal 1=leave / 2=bg-fill / 3=restore-prev. Same plumbing later
-serves APNG (`fcTL` dispose/blend ops). *Effort:* S — best "video" value per LOC.
+### Animated GIF as video-lite — done, `kernel/codecapps/image/gif.cc`
+GCE delay (cs) + disposal mode + `NETSCAPE2.0` loop → `gif_anim_next(canvas,&delay)`
+iterator; composite disposal 1=leave / 2=bg-fill / 3=restore-prev + transparency index.
+Same plumbing later serves APNG (`fcTL` dispose/blend ops).
 
 ### MKV / WebM (EBML) — probe only, propose `kernel/video/mkv_demux.cc`
 EBML (RFC 8794): big-endian varint IDs/sizes; `Segment`{`Info`,`Tracks`{`TrackEntry`
@@ -316,7 +316,7 @@ New hook namespace: `kernel/codecapps/archive/*.cc` + `CodecKind::Archive` (or e
 Frame/PcmBuf — a new `codec_archive_list/extract` entry point, mirroring the proposed
 `codec_demux` split in `codecs-formats.md` §4.
 
-### ZIP — not registered, propose `kernel/codecapps/archive/zip.cc`
+### ZIP — done, `kernel/codecapps/archive/zip.cc`
 End-of-central-directory record (scan tail for `PK\x05\x06`) → central dir entries
 `PK\x01\x02` {name, method, csize, usize, local-hdr offset} → local headers `PK\x03\x04`
 → payload method 0 (stored, memcpy) or 8 (deflate → ZText inflate). Methods 12/14
@@ -325,7 +325,7 @@ End-of-central-directory record (scan tail for `PK\x05\x06`) → central dir ent
 **miniz** single-file zlib+ZIP (public domain/MIT, tinfl inflater is a ~550-LOC
 coroutine) — we already have own inflate so only the dir-walking logic is needed.
 
-### GZIP + TAR — not registered, propose `kernel/codecapps/archive/{gzip,tar}.cc`
+### GZIP + TAR — done, `kernel/codecapps/archive/{gzip,tar}.cc`
 GZIP: `1F 8B` + method 8 + flags (FNAME/FCOMMENT/FHCRC) → raw deflate → CRC32+ISIZE
 trailer — S and shares inflate. TAR: 512-B ustar header blocks {name, octal size,
 typeflag} + data padded to 512 — XS, pure header walking. Together they cover
