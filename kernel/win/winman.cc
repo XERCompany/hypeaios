@@ -97,6 +97,10 @@ namespace hype::win {
         hcpp::u32 switcher_count = 0;
         hcpp::u32 switcher_sel = 0;
         bool keys_hooked = false;
+        // XAU layer hooks (kernel/win/xau.cc): paint reroutes window
+        // content rendering to WndProc dispatch; event routes wm events.
+        WmXauPaintHook xau_paint_hook = nullptr;
+        WmXauEventHook xau_event_hook = nullptr;
 
         void damage_add(const Rect& region) noexcept {
             if (region.empty()) {
@@ -559,7 +563,8 @@ namespace hype::win {
             if (top < strip.y) {
                 top = strip.y;
             }
-            paint_label(canvas, title_x, top, w.app_name,
+            paint_label(canvas, title_x, top,
+                        w.caption[0] != '\0' ? w.caption : w.app_name,
                         focused ? theme.card_fg : theme.muted_fg, 13);
         }
 
@@ -591,10 +596,19 @@ namespace hype::win {
         }
 
         void set_frame(Win& w, const Rect& next) noexcept {
+            const Rect prev = w.frame;
             damage_add(w.frame);
             w.frame = next;
             w.content_rect = content_for(next);
             damage_add(next);
+            if (xau_event_hook != nullptr && w.id != 0) {
+                if (next.x != prev.x || next.y != prev.y) {
+                    xau_event_hook(w.id, wm_xau_ev_move, next.x, next.y);
+                }
+                if (next.w != prev.w || next.h != prev.h) {
+                    xau_event_hook(w.id, wm_xau_ev_size, next.w, next.h);
+                }
+            }
         }
 
         void drag_finish() noexcept {
@@ -933,6 +947,12 @@ namespace hype::win {
         if (app != nullptr && app->on_close != nullptr) {
             app->on_close(w->ctx);
         }
+        // XAU windows get CLOSE + DESTROY through the event hook; the
+        // hook is re-entrancy safe (xau_destroy inside CLOSE lands back
+        // here on the already-unbound slot).
+        if (xau_event_hook != nullptr) {
+            xau_event_hook(id, wm_xau_ev_close, 0, 0);
+        }
         const bool was_focused = w->state == WinState::Focused;
         if (menu_win == id) {
             wm_menu_close();
@@ -970,6 +990,9 @@ namespace hype::win {
             if (slots[i].id != 0 && slots[i].state == WinState::Focused) {
                 damage_add(chrome_band(slots[i].frame));
                 slots[i].state = WinState::Normal;
+                if (xau_event_hook != nullptr) {
+                    xau_event_hook(slots[i].id, wm_xau_ev_focus, 0, 0);
+                }
             }
         }
         if (w->state != WinState::Focused) {
@@ -978,6 +1001,9 @@ namespace hype::win {
             }
             w->state = WinState::Focused;
             damage_add(chrome_band(w->frame));
+        }
+        if (xau_event_hook != nullptr) {
+            xau_event_hook(id, wm_xau_ev_focus, 1, 0);
         }
         w->z = ++z_counter;
         return true;
@@ -995,6 +1021,9 @@ namespace hype::win {
             const bool was_focused = w->state == WinState::Focused;
             w->state = WinState::Minimized;
             damage_add(w->frame);
+            if (xau_event_hook != nullptr) {
+                xau_event_hook(id, wm_xau_ev_minimize, 1, 0);
+            }
             if (was_focused) {
                 hcpp::u32 top_order[wm_max_windows];
                 const hcpp::u32 n = collect_order(top_order, false);
@@ -1007,6 +1036,9 @@ namespace hype::win {
         if (w->state == WinState::Minimized) {
             w->state = WinState::Normal;
             damage_add(w->frame);
+            if (xau_event_hook != nullptr) {
+                xau_event_hook(id, wm_xau_ev_minimize, 0, 0);
+            }
         }
         alttab_sync();
         return true;
@@ -1033,6 +1065,9 @@ namespace hype::win {
             w->maximized = true;
             w->snap = SnapZone::None;
             serial::write_line("win maximized=1");
+            if (xau_event_hook != nullptr) {
+                xau_event_hook(id, wm_xau_ev_maximize, 1, 0);
+            }
             return true;
         }
         if (!w->maximized && w->snap == SnapZone::None) {
@@ -1050,6 +1085,9 @@ namespace hype::win {
             serial::write_line("win maximized=0");
         } else {
             serial::write_line("snap zone=none");
+        }
+        if (xau_event_hook != nullptr) {
+            xau_event_hook(id, wm_xau_ev_maximize, 0, 0);
         }
         return true;
     }
@@ -1115,7 +1153,13 @@ namespace hype::win {
             w.ctx.fb = &fb;
             w.ctx.region = region;
             w.ctx.clip = content_clip;
-            if (!content_clip.empty() &&
+            // XAU windows render through their WndProc (PAINT message);
+            // unowned windows fall back to the .hxer entry point.
+            bool xau_painted = false;
+            if (xau_paint_hook != nullptr && !content_clip.empty()) {
+                xau_painted = xau_paint_hook(w.id, w.ctx);
+            }
+            if (!content_clip.empty() && !xau_painted &&
                 !hxrt::hxrt_exec(w.app_name, w.ctx)) {
                 canvas.fill_rect(region, canvas.color(theme.card));
                 paint_label(canvas, region.x + 16, region.y + 16,
@@ -1255,6 +1299,21 @@ namespace hype::win {
                 drag_finish();
                 return true;
             }
+            // Deliver the button release to the topmost XAU window whose
+            // content region contains the pointer.
+            if (xau_event_hook != nullptr) {
+                const Point p{x, y};
+                hcpp::u32 order[wm_max_windows];
+                const hcpp::u32 n = collect_order(order, false);
+                for (hcpp::u32 k = 0; k < n; ++k) {
+                    Win& w = slots[order[k]];
+                    if (w.content_rect.contains(p) &&
+                        xau_event_hook(w.id, wm_xau_ev_lbuttonup, p.x,
+                                       p.y)) {
+                        return true;
+                    }
+                }
+            }
             return false;
         }
         const Point p{x, y};
@@ -1335,6 +1394,12 @@ namespace hype::win {
                     app->on_click(w.ctx, p.x, p.y);
                     damage_add(w.frame);
                 }
+                // Parallel XAU delivery: LBUTTONDOWN to the WndProc.
+                if (xau_event_hook != nullptr &&
+                    xau_event_hook(w.id, wm_xau_ev_lbuttondown, p.x,
+                                   p.y)) {
+                    damage_add(w.frame);
+                }
             }
             return true;
         }
@@ -1363,6 +1428,12 @@ namespace hype::win {
                 continue;
             }
             wm_focus(w.id);
+            // XAU windows get RBUTTONDOWN in the content region instead
+            // of the system menu (Windows-style client behavior).
+            if (xau_event_hook != nullptr && w.content_rect.contains(p) &&
+                xau_event_hook(w.id, wm_xau_ev_rbuttondown, p.x, p.y)) {
+                return true;
+            }
             wm_menu_open(w.id);
             return true;
         }
@@ -1438,6 +1509,20 @@ namespace hype::win {
                     }
                     serial::write("snap zone=");
                     serial::write_line(zone_name(zone));
+                }
+            }
+        }
+        // XAU mouse move: topmost window whose content region is under
+        // the cursor (the hook cheap-rejects non-XAU windows).
+        if (xau_event_hook != nullptr && drag_win == 0) {
+            const Point p{x, y};
+            hcpp::u32 order[wm_max_windows];
+            const hcpp::u32 n = collect_order(order, false);
+            for (hcpp::u32 k = 0; k < n; ++k) {
+                Win& w = slots[order[k]];
+                if (w.content_rect.contains(p)) {
+                    xau_event_hook(w.id, wm_xau_ev_mousemove, p.x, p.y);
+                    break;
                 }
             }
         }
@@ -1578,6 +1663,32 @@ namespace hype::win {
         }
         return open_ok && close_ok && z_ok && menu_ok && snap_ok &&
                dirty_ok && wm_count() == 0;
+    }
+
+    // --- XAU layer glue -------------------------------------------------
+
+    void wm_set_xau_hooks(WmXauPaintHook paint,
+                          WmXauEventHook event) noexcept {
+        xau_paint_hook = paint;
+        xau_event_hook = event;
+    }
+
+    bool wm_set_frame(hcpp::u32 id, hype::ui::Rect frame) noexcept {
+        Win* w = slot_for(id);
+        if (w == nullptr || frame.empty()) {
+            return false;
+        }
+        set_frame(*w, frame);
+        return true;
+    }
+
+    void wm_set_caption(hcpp::u32 id, const char* caption) noexcept {
+        Win* w = slot_for(id);
+        if (w == nullptr || caption == nullptr) {
+            return;
+        }
+        copy_name(w->caption, caption);
+        damage_add(chrome_band(w->frame));
     }
 
 }

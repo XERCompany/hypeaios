@@ -9,6 +9,7 @@
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
 #include "kernel/win/winman.h"
+#include "kernel/win/xau.h"
 
 namespace hype::win {
 
@@ -57,6 +58,9 @@ namespace hype::win {
             // only inside the damage clip so untouched cells stay cheap.
             desk_icons_paint(fb, clip);
         }
+        // XAU message pump: drains the posted-message queue and fires
+        // XAU_MSG_TIMER deadlines once per desktop frame.
+        xau_pump();
         wm_paint(fb);
         hype::ui::deskbar_paint(fb, clip);
         if (first) {
