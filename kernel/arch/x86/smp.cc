@@ -5,6 +5,7 @@
 #include "kernel/arch/x86/cpu.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/memory/pmm.h"
+#include "kernel/sched/thread.h"
 #include "kernel/serial.hpp"
 #include "kernel/time/timer.h"
 
@@ -226,10 +227,13 @@ namespace hype::x86 {
     // Per-AP C entry, reached from the 64-bit half of the trampoline
     // with the SmpCpu* the BSP patched in. Loads the shared IDT (IDTR
     // is per-CPU), enables this CPU's LAPIC + LAPIC timer, publishes
-    // online, runs the counting loop, then parks.
+    // online, runs the counting loop, then becomes this CPU's idle
+    // thread: sched::adopt_cpu() registers the park context so the
+    // LAPIC timer tick can dispatch real threads onto the AP.
     namespace {
         void ap_park_loop(SmpCpu* cpu) noexcept {
             __atomic_store_n(&cpu->parked, 1u, __ATOMIC_RELEASE);
+            sched::adopt_cpu();
             for (;;) {
                 asm volatile("hlt");
                 __atomic_fetch_add(&cpu->counter, 1ull, __ATOMIC_RELAXED);
