@@ -28,6 +28,9 @@
 
 namespace hype::ui {
 
+    // Base 36 px; ui_scale_init rewrites it with the DPI scale.
+    hcpp::i32 deskbar_height = 36;
+
     namespace {
 
         using hype::win::Win;

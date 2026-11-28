@@ -10,9 +10,10 @@ namespace hype::win {
     // centered label row) starting at the top-left of the work area with a
     // 12 px margin. Icons live between the wallpaper and the window band and
     // are painted only inside the current damage clip.
-    constexpr hcpp::i32 desk_icon_cell_w = 96;
-    constexpr hcpp::i32 desk_icon_cell_h = 88;
-    constexpr hcpp::i32 desk_icon_margin = 12;
+    // DPI-aware (issue #174): scaled by ui_scale_init, 96/88/12 px at 1.00x.
+    extern hcpp::i32 desk_icon_cell_w;
+    extern hcpp::i32 desk_icon_cell_h;
+    extern hcpp::i32 desk_icon_margin;
 
     // Seeds the grid from hxrt_list() (user .hxer apps, alphabetical like
     // the Start menu) plus files at the HYPEOS://U root via fs_list.

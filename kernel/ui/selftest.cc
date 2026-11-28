@@ -7,6 +7,7 @@
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
 #include "kernel/ui/focus.h"
+#include "kernel/ui/huitokens.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/overlay.h"
 #include "kernel/ui/theme.h"
@@ -308,7 +309,6 @@ namespace hype::ui {
         const Theme& theme = theme_active();
         const Rect screen{0, 0, 320, 240};
         const hcpp::u32 bg = canvas.color(theme.fg);
-        const hcpp::u32 card = canvas.color(theme.card);
         canvas.fill_rect(screen, bg);
 
         static OverlayHost host;
@@ -324,9 +324,13 @@ namespace hype::ui {
         const Rect box = dialog.bounds();
         const hcpp::i32 probe_x = box.x + box.w / 2;
         const hcpp::i32 probe_y = box.y + box.h - 8;
+        // HypeUI restyle (issue #144): rui_panel fills elevated surfaces
+        // with surface_elev, not theme.card — probe for the panel fill.
+        const hcpp::u32 panel_fill =
+            canvas.color(hui::colors().surface_elev);
         open_ok = open_ok && !box.empty() && screen.contains(box) &&
                   target.get_pixel(4, 4) != bg &&
-                  target.get_pixel(probe_x, probe_y) == card;
+                  target.get_pixel(probe_x, probe_y) == panel_fill;
         serial::write("ui2 overlay open=");
         serial::write_dec32(open_ok ? 1 : 0);
         serial::write("\r\n");

@@ -78,6 +78,7 @@
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/screenshot.h"
 #include "kernel/ui/selftest.h"
+#include "kernel/ui/uiscale.h"
 #include "kernel/vfs/fat32.h"
 #include "kernel/vfs/hypeblob.h"
 #include "kernel/vfs/hypefile.h"
@@ -826,6 +827,12 @@ namespace {
         serial::write("/66 pixels=");
         serial::write_dec32(cyrillic_pixels);
         serial::write("\r\n");
+        // Issue #174: the widget selftest battery asserts fixed-pixel
+        // geometry/colors authored at 1.00x — pin the DPI scale to base
+        // for the duration of the stage, then restore the mode-derived
+        // factor so the live shell stays scaled.
+        const hcpp::u32 saved_scale = hype::ui::ui_scale_x100();
+        hype::ui::ui_scale_set(100);
         const bool kit_ok = hype::ui::selftest() &&
                             hype::ui::canvas2_selftest() &&
                             hype::ui::theme2_selftest() &&
@@ -837,6 +844,7 @@ namespace {
                             hype::ui::entry_selftest();
         report("ui kit selftests=", kit_ok);
         report("wm selftest=", hype::win::wm_selftest());
+        hype::ui::ui_scale_set(saved_scale);
     }
 
     void stage_gdxf() noexcept {
@@ -965,6 +973,10 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
             boot_info->green_position, boot_info->blue_mask_size, boot_info->blue_position);
         hype::display::display_bind_target(framebuffer);
         boot_fb = framebuffer;
+        // Issue #174: derive the DPI scale from the mode stage2 picked,
+        // then rewrite the shell metric globals + font multiplier before
+        // the splash/fbcon/shell text paths start measuring.
+        hype::ui::ui_scale_init(boot_info->width, boot_info->height);
         hype::panic_bind_framebuffer(framebuffer);
         // Framebuffer console (issue #139): bound now so the serial tap
         // starts capturing the boot log into its scrollback; the screen
