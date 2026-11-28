@@ -12,6 +12,23 @@ namespace hype::ui {
 
     hcpp::u8 Progress::progress() const noexcept { return value_; }
 
+    void Progress::set_indeterminate(bool indeterminate) noexcept {
+        indeterminate_ = indeterminate;
+        phase_ = 0;
+    }
+
+    bool Progress::indeterminate() const noexcept { return indeterminate_; }
+
+    hcpp::u8 Progress::phase() const noexcept { return phase_; }
+
+    bool Progress::tick(hcpp::u32) noexcept {
+        if (!indeterminate_) {
+            return false;
+        }
+        phase_ = static_cast<hcpp::u8>((phase_ + 1) % sweep_period);
+        return true;
+    }
+
     void Progress::set_label(hcpp::StringView label) noexcept { label_ = label; }
 
     hcpp::StringView Progress::label() const noexcept { return label_; }
@@ -77,10 +94,27 @@ namespace hype::ui {
         }
         const hcpp::i32 radius = track_h / 2;
         canvas.fill_rounded_rect(track, radius, canvas.color(theme.muted));
-        const hcpp::i32 fill_w = track.w * value_ / 100;
-        if (fill_w > 0) {
-            canvas.fill_rounded_rect({track.x, track.y, fill_w, track.h}, radius,
-                                     canvas.color(theme.primary));
+        if (indeterminate_) {
+            // Sweep: a 32px accent segment crossing the track on a
+            // sweep_period-frame loop, clipped to the track rect.
+            const hcpp::i32 seg = track.w < 32 ? track.w : 32;
+            const hcpp::i32 travel = track.w + seg;
+            const hcpp::i32 x = track.x - seg +
+                travel * static_cast<hcpp::i32>(phase_) /
+                    static_cast<hcpp::i32>(sweep_period);
+            const Rect clipped =
+                Rect{x, track.y, seg, track.h}.intersection(track);
+            if (!clipped.empty()) {
+                canvas.fill_rounded_rect(clipped, radius,
+                                         canvas.color(theme.primary));
+            }
+        } else {
+            const hcpp::i32 fill_w = track.w * value_ / 100;
+            if (fill_w > 0) {
+                canvas.fill_rounded_rect(
+                    {track.x, track.y, fill_w, track.h}, radius,
+                    canvas.color(theme.primary));
+            }
         }
 
         const hcpp::fonts::FontFace* face = resolved_font();
