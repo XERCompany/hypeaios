@@ -2,6 +2,7 @@
 
 #include "hcpp/graphics/text.hpp"
 #include "kernel/arch/x86/cpu.h"
+#include "kernel/log/crashdump.h"
 #include "kernel/serial.hpp"
 
 namespace hype {
@@ -157,6 +158,9 @@ namespace hype {
         serial::write("\r\n*** KERNEL PANIC ***\r\nreason=");
         serial::write(reason);
         serial::write("\r\nsystem halted\r\n");
+        // Persist the klog ring (U:/crash.log or the scratch LBA) before
+        // the halt loop — issue #119. Bounded; cannot hang the path.
+        crashdump_write("KERNEL PANIC", nullptr);
         panic_screen("KERNEL PANIC", reason);
         halt_loop();
     }
@@ -176,6 +180,10 @@ namespace hype {
         serial::write("\r\n");
         dump_registers(regs);
         serial::write("system halted\r\n");
+        // Persist the klog ring + panic frame (issue #119): the serial
+        // lines above already sit in the ring via the serial tap; this
+        // writes the file/LBA copy before halting.
+        crashdump_write("KERNEL PANIC", &regs);
         panic_screen("KERNEL PANIC", exception_name(regs.vector));
         halt_loop();
     }

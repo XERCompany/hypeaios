@@ -1,5 +1,7 @@
 #include "kernel/serial.hpp"
 
+#include "kernel/log/kring.h"
+
 namespace serial {
 
     void outb(hcpp::u16 port, hcpp::u8 value) noexcept { asm volatile("outb %0, %1" : : "a"(value), "Nd"(port)); }
@@ -24,6 +26,11 @@ namespace serial {
         while ((inb(COM1 + 5) & 0x20) == 0) {
         }
         outb(COM1, static_cast<hcpp::u8>(value));
+        // Permanent internal tap: every serial byte — klog lines, the
+        // boot "marker=ok" lines and panic dumps — is mirrored into the
+        // crash ring (issue #119). klog::log() suspends this around its
+        // own emission so its lines are stored once.
+        kring::kring_putc(value);
     }
 
     void write(hcpp::StringView text) noexcept {
