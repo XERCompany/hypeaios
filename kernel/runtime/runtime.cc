@@ -8,6 +8,7 @@
 #include "kernel/core_services.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/klog.h"
+#include "kernel/kvm/kvm.h"
 #include "kernel/memory/pmm.h"
 #include "kernel/memory/vmm.h"
 #include "kernel/pci/pci.h"
@@ -85,6 +86,13 @@ namespace hype::runtime {
             usb::usb_initialize();
             return true;
         }
+        bool kvm_enter(void*) noexcept {
+            // Runs after memory.pmm (VMXON/VMCS regions come from the
+            // PMM). Never fails the boot: VMX is optional hardware and
+            // plain QEMU (-cpu qemu64) doesn't expose it.
+            kvm::kvm_initialize();
+            return true;
+        }
         bool context_enter(void*) noexcept {
             current.context_switch_ready = sched::context_selftest();
             sched::scheduler_initialize();
@@ -141,6 +149,7 @@ namespace hype::runtime {
         RuntimeStage timer_stage{"time.timer", 55, timer_enter, nullptr, StageState::Pending};
         RuntimeStage smp_stage{"smp.ap", 56, smp_enter, nullptr, StageState::Pending};
         RuntimeStage usb_stage{"usb.xhci", 57, usb_enter, nullptr, StageState::Pending};
+        RuntimeStage kvm_stage{"kvm.vmx", 58, kvm_enter, nullptr, StageState::Pending};
         RuntimeStage context_stage{"sched.context", 60, context_enter, nullptr, StageState::Pending};
     }  // namespace
 
@@ -158,6 +167,7 @@ namespace hype::runtime {
         register_stage(timer_stage);
         register_stage(smp_stage);
         register_stage(usb_stage);
+        register_stage(kvm_stage);
         register_stage(context_stage);
         current.stages_registered = stage_count;
     }
