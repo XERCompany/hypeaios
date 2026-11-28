@@ -47,6 +47,12 @@ namespace hype::codec {
         Zip,
         Gzip,
         Tar,
+        Midi,
+        Mod,
+        Xm,
+        Apng,
+        Aiff,
+        Woff,
         Count
     };
 

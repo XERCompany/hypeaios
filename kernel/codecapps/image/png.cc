@@ -259,6 +259,48 @@ namespace hype::codec::image {
         return CodecStatus::Ok;
     }
 
+    CodecStatus png_pixels_decode(hcpp::u32 width, hcpp::u32 height,
+                                  hcpp::u8 color_type, const hcpp::u8 *palette,
+                                  hcpp::size_t palette_size, const hcpp::u8 *zdata,
+                                  hcpp::size_t zdata_size, hcpp::u8 *rgba,
+                                  hcpp::size_t rgba_cap, Arena &arena) noexcept {
+        if (zdata == nullptr || rgba == nullptr || !dims_valid(width, height))
+            return CodecStatus::BadInput;
+        const hcpp::size_t bpp = bytes_per_pixel(color_type);
+        if (bpp == 0 || (color_type == 3 && palette == nullptr))
+            return CodecStatus::BadInput;
+        if (rgba_cap < static_cast<hcpp::size_t>(width) * height * 4)
+            return CodecStatus::NoSpace;
+        const hcpp::size_t stride = static_cast<hcpp::size_t>(width) * bpp;
+        const hcpp::size_t raw_size =
+            static_cast<hcpp::size_t>(height) * (stride + 1);
+        const hcpp::size_t image_size = static_cast<hcpp::size_t>(height) * stride;
+        hcpp::u8 *raw = static_cast<hcpp::u8 *>(arena_alloc(arena, raw_size, 8));
+        hcpp::u8 *image = static_cast<hcpp::u8 *>(arena_alloc(arena, image_size, 8));
+        if (raw == nullptr || image == nullptr) return CodecStatus::NoSpace;
+        hcpp::size_t produced = 0;
+        if (!inflate_zlib(zdata, zdata_size, raw, raw_size, produced) ||
+            produced != raw_size)
+            return CodecStatus::BadInput;
+        for (hcpp::u32 y = 0; y < height; ++y) {
+            const hcpp::u8 *src = raw + static_cast<hcpp::size_t>(y) * (stride + 1);
+            hcpp::u8 *dst = image + static_cast<hcpp::size_t>(y) * stride;
+            copy_bytes(dst, src + 1, stride);
+            const hcpp::u8 *prev = y == 0 ? nullptr : dst - stride;
+            if (!unfilter_row(dst, prev, stride, src[0], bpp)) return CodecStatus::BadInput;
+        }
+        PngInfo info{};
+        info.width = width;
+        info.height = height;
+        info.color_type = color_type;
+        info.palette = palette;
+        info.palette_size = palette_size;
+        FrameBuf tmp{width, height, width * 4, video::PixelFormat::RGB32, rgba,
+                     rgba_cap, static_cast<hcpp::size_t>(width) * height * 4};
+        emit_pixels(info, image, tmp);
+        return CodecStatus::Ok;
+    }
+
     CodecStatus png_encode(const void *input, hcpp::u8 *output, hcpp::size_t output_cap,
                            hcpp::size_t &written, Arena &arena) noexcept {
         written = 0;
