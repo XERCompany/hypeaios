@@ -841,7 +841,8 @@ namespace {
                             hype::ui::feedback_selftest() &&
                             hype::ui::data_selftest() &&
                             hype::ui::anim_selftest() &&
-                            hype::ui::entry_selftest();
+                            hype::ui::entry_selftest() &&
+                            hype::ui::wave1_selftest();
         report("ui kit selftests=", kit_ok);
         report("wm selftest=", hype::win::wm_selftest());
         hype::ui::ui_scale_set(saved_scale);

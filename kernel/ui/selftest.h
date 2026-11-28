@@ -11,5 +11,6 @@ namespace hype::ui {
     bool data_selftest() noexcept;
     bool anim_selftest() noexcept;
     bool entry_selftest() noexcept;
+    bool wave1_selftest() noexcept;
 
 }  // namespace hype::ui

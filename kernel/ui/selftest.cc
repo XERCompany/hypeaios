@@ -17,6 +17,7 @@
 #include "kernel/ui/widgets/chart.h"
 #include "kernel/ui/widgets/checkbox.h"
 #include "kernel/ui/widgets/dialog.h"
+#include "kernel/ui/widgets/dropdownmenu.h"
 #include "kernel/ui/widgets/empty.h"
 #include "kernel/ui/widgets/field.h"
 #include "kernel/ui/widgets/inputotp.h"
@@ -30,12 +31,15 @@
 #include "kernel/ui/widgets/radiogroup.h"
 #include "kernel/ui/widgets/separator.h"
 #include "kernel/ui/widgets/skeleton.h"
+#include "kernel/ui/widgets/slider.h"
 #include "kernel/ui/widgets/spinner.h"
 #include "kernel/ui/widgets/stepper.h"
 #include "kernel/ui/widgets/switch.h"
 #include "kernel/ui/widgets/table.h"
 #include "kernel/ui/widgets/tabs.h"
 #include "kernel/ui/widgets/tagsinput.h"
+#include "kernel/ui/widgets/textinput.h"
+#include "kernel/ui/widgets/tooltip.h"
 
 namespace hype::ui {
 
@@ -51,6 +55,25 @@ namespace hype::ui {
             if (context != nullptr) {
                 *static_cast<bool*>(context) = true;
             }
+        }
+
+        void wave1_slider_change(Slider& slider, hcpp::i32 value,
+                                 void* context) noexcept {
+            hcpp::u32* count = static_cast<hcpp::u32*>(context);
+            if (count != nullptr) {
+                ++*count;
+            }
+            (void)slider;
+            (void)value;
+        }
+
+        void wave1_menu_select(DropdownMenu& menu, hcpp::size_t index,
+                               void* context) noexcept {
+            hcpp::size_t* slot = static_cast<hcpp::size_t*>(context);
+            if (slot != nullptr) {
+                *slot = index;
+            }
+            (void)menu;
         }
 
     }  // namespace
@@ -1148,6 +1171,254 @@ namespace hype::ui {
         serial::write("\r\n");
         ok = ok && otp_ok && tags_ok && list_ok && error_ok;
         serial::write_line(ok ? "ui2 entry ok" : "ui2 entry fail");
+        return ok;
+    }
+
+    bool wave1_selftest() noexcept {
+        static hcpp::u8 pixels[320 * 240 * 4] = {};
+        hcpp::graphics::Framebuffer target(pixels, 320, 240, 320 * 4, 32, 8,
+                                           16, 8, 8, 8, 0);
+        if (!target.valid()) {
+            return false;
+        }
+        Canvas canvas(target);
+        const Theme& theme = theme_active();
+        const Rect screen{0, 0, 320, 240};
+        const hcpp::u32 bg = canvas.color(theme.bg);
+        const hcpp::u32 c_accent = canvas.color(theme.accent);
+        const hcpp::u32 c_muted = canvas.color(theme.muted);
+        const hcpp::u32 c_card = canvas.color(theme.card);
+        const hcpp::u32 c_ring = canvas.color(theme.ring);
+        const hcpp::u32 c_secondary = canvas.color(theme.secondary);
+        const hcpp::u32 c_fg = canvas.color(theme.fg);
+        bool ok = true;
+
+        // --- Slider: drag commits, keys step, disabled ignores input ---
+        static Slider slider{0, 100, 0};
+        static hcpp::u32 slider_changes = 0;
+        static hcpp::u32 slider_commits = 0;
+        slider.set_on_change(&wave1_slider_change, &slider_changes);
+        slider.set_on_commit(&wave1_slider_change, &slider_commits);
+        slider.set_enabled(true);
+        slider.set_value(0);
+        slider.layout(Rect{8, 8, 168, 24});
+
+        slider_changes = 0;
+        slider_commits = 0;
+        const bool drag_ok =
+            slider.handle_mouse(Point{60, 20}, SliderMouse::Down) &&
+            slider.grabbed() && slider.value() == 29 &&
+            slider.handle_mouse(Point{92, 20}, SliderMouse::Move) &&
+            slider.value() == 50 && slider_changes >= 2 &&
+            slider.handle_mouse(Point{92, 20}, SliderMouse::Up) &&
+            !slider.grabbed() && slider_commits == 1;
+        const bool key_ok =
+            slider.on_key(keys::right) && slider.value() == 51 &&
+            slider_commits == 2 && slider.on_key(keys::left) &&
+            slider.value() == 50;
+        slider.set_enabled(false);
+        const bool dis_ok =
+            !slider.handle_mouse(Point{30, 20}, SliderMouse::Down) &&
+            !slider.on_key(keys::right) && slider.value() == 50;
+        slider.set_enabled(true);
+        slider.set_focused(true);
+        if (!(drag_ok && key_ok && dis_ok)) {
+            ok = false;
+        }
+
+        canvas.fill_rect(screen, bg);
+        slider.paint(canvas);
+        // value=50 -> thumb cx=92; range covers x 16..92 on the track.
+        const bool slider_paint_ok =
+            target.get_pixel(30, 20) == c_accent &&
+            target.get_pixel(165, 20) == c_muted &&
+            target.get_pixel(92, 20) == c_card &&
+            target.get_pixel(92, 10) == c_ring;
+
+        // --- Progress: determinate fill + indeterminate sweep ---
+        static Progress progress;
+        progress.set_indeterminate(false);
+        progress.set_progress(60);
+        progress.layout(Rect{200, 12, 100, 8});
+        canvas.fill_rect(screen, bg);
+        progress.paint(canvas);
+        const bool prog_det_ok =
+            target.get_pixel(210, 16) == canvas.color(theme.primary) &&
+            target.get_pixel(290, 16) == c_muted;
+        progress.set_indeterminate(true);
+        for (hcpp::u32 i = 0; i < 45; ++i) {
+            progress.tick(i);
+        }
+        canvas.fill_rect(screen, bg);
+        progress.paint(canvas);
+        // phase=45 -> segment covers ~x 234..266 of the 200..300 track
+        // (track rows y 12..19).
+        const bool prog_ind_ok =
+            progress.phase() == 45 &&
+            target.get_pixel(250, 16) == canvas.color(theme.primary) &&
+            target.get_pixel(205, 16) == c_muted;
+        if (!prog_det_ok || !prog_ind_ok) {
+            ok = false;
+        }
+
+        // --- Tooltip: arm delay -> visible, placement, dismiss ---
+        static Tooltip tip;
+        tip.set_screen(screen);
+        tip.arm(Rect{100, 100, 40, 20}, "hint text", "Title");
+        const hcpp::u32 base_frame = anim_ticker().frame();
+        bool armed_ok = tip.armed() && !tip.visible();
+        for (hcpp::u32 i = 0; i < Tooltip::delay_frames; ++i) {
+            anim_tick();
+            tip.tick(anim_ticker().frame());
+        }
+        armed_ok = armed_ok && tip.visible() &&
+                   tip.armed_for() >= Tooltip::delay_frames;
+        (void)base_frame;
+        const Rect tip_box = tip.tip_rect();
+        const bool tip_pos_ok =
+            tip_box.y + tip_box.h + Tooltip::gap == 100;
+        canvas.fill_rect(screen, bg);
+        tip.paint(canvas);
+        const bool tip_paint_ok =
+            target.get_pixel(static_cast<hcpp::u32>(tip_box.x + 4),
+                             static_cast<hcpp::u32>(tip_box.y + 4)) ==
+                c_fg;
+        tip.dismiss();
+        const bool tip_hide_ok = !tip.visible() && !tip.armed();
+
+        // Auto placement flips below when the target hugs the top edge.
+        tip.set_placement(TooltipPlacement::Auto);
+        tip.arm(Rect{100, 6, 40, 20}, "hint");
+        for (hcpp::u32 i = 0; i < Tooltip::delay_frames; ++i) {
+            anim_tick();
+            tip.tick(anim_ticker().frame());
+        }
+        const bool tip_flip_ok =
+            tip.visible() && tip.tip_rect().y == 26 + Tooltip::gap;
+        tip.dismiss();
+        if (!armed_ok || !tip_pos_ok || !tip_paint_ok || !tip_hide_ok ||
+            !tip_flip_ok) {
+            ok = false;
+        }
+
+        // --- DropdownMenu: items, separator, disabled, destructive,
+        //     hover, keys, dismiss ---
+        static DropdownMenu menu;
+        static hcpp::size_t menu_pick = DropdownMenu::no_item;
+        menu.clear();
+        menu.set_on_select(&wave1_menu_select, &menu_pick);
+        menu.set_screen(screen);
+        bool menu_build_ok =
+            menu.add_heading("File") &&
+            menu.add_item("o", "Open", "Ctrl+O") &&
+            menu.add_item("Save") && menu.add_separator() &&
+            menu.add_item("Delete") && menu.item_count() == 5;
+        menu.set_item_enabled(2, false);
+        menu.set_item_flags(4, menu_f_destructive);
+        menu.set_item_checked(1, true);
+
+        menu.open(Rect{20, 40, 60, 24});
+        const Rect mr = menu.menu_rect();
+        const bool menu_open_ok =
+            menu_build_ok && menu.is_open() && mr.x == 20 && mr.y == 64 &&
+            mr.w >= DropdownMenu::min_width &&
+            menu.highlighted() == 1;
+
+        menu_pick = DropdownMenu::no_item;
+        // Hover over the disabled row clears the highlight.
+        const bool menu_hover_ok =
+            menu.handle_mouse(Point{30, 130}, MenuMouse::Move) &&
+            menu.highlighted() == DropdownMenu::no_item &&
+            menu.handle_mouse(Point{30, 100}, MenuMouse::Move) &&
+            menu.highlighted() == 1;
+        // Down outside dismisses without commit.
+        const bool menu_outside_ok =
+            menu.handle_mouse(Point{5, 5}, MenuMouse::Down) &&
+            !menu.is_open() && menu_pick == DropdownMenu::no_item;
+        // Keyboard: open -> highlighted 1, down skips disabled+sep -> 4,
+        // enter commits via callback.
+        menu.open(Rect{20, 40, 60, 24});
+        const bool menu_key_ok =
+            menu.highlighted() == 1 &&
+            menu.handle_key(keys::down) && menu.highlighted() == 4 &&
+            menu.handle_key(keys::enter) && !menu.is_open() &&
+            menu_pick == 4;
+        // Esc closes.
+        menu.open(Rect{20, 40, 60, 24});
+        menu_pick = DropdownMenu::no_item;
+        const bool menu_esc_ok = menu.handle_key(27) && !menu.is_open() &&
+                                 menu_pick == DropdownMenu::no_item;
+
+        menu.open(Rect{20, 40, 60, 24});
+        menu.handle_mouse(Point{30, 100}, MenuMouse::Move);
+        canvas.fill_rect(screen, bg);
+        menu.paint(canvas);
+        // Highlighted "Open" row -> secondary wash; content pad -> card.
+        const Rect hl_row{mr.x + 6, mr.y + 6 + 22, mr.w - 12, 28};
+        const bool menu_paint_ok =
+            target.get_pixel(static_cast<hcpp::u32>(hl_row.x + 30),
+                             static_cast<hcpp::u32>(hl_row.y + 1)) ==
+                c_secondary &&
+            target.get_pixel(static_cast<hcpp::u32>(mr.x + mr.w / 2),
+                             static_cast<hcpp::u32>(mr.y + 2)) == c_card;
+        // Checked glyph: at least one accent pixel in the icon slot.
+        bool check_glyph_ok = false;
+        for (hcpp::i32 gy = hl_row.y; gy < hl_row.bottom() && !check_glyph_ok;
+             ++gy) {
+            for (hcpp::i32 gx = mr.x + 8; gx < mr.x + 28; ++gx) {
+                if (target.get_pixel(static_cast<hcpp::u32>(gx),
+                                     static_cast<hcpp::u32>(gy)) ==
+                    c_accent) {
+                    check_glyph_ok = true;
+                    break;
+                }
+            }
+        }
+        menu.close();
+        if (!menu_open_ok || !menu_hover_ok || !menu_outside_ok ||
+            !menu_key_ok || !menu_esc_ok || !menu_paint_ok ||
+            !check_glyph_ok) {
+            ok = false;
+        }
+
+        // --- TextInput covers the input role: placeholder, focus ring,
+        //     caret ---
+        static TextInput input{"type here"};
+        input.layout(Rect{200, 60, 110, 26});
+        input.set_focused(true);
+        input.push_char('h');
+        input.push_char('i');
+        canvas.fill_rect(screen, bg);
+        input.paint(canvas);
+        const bool input_ok =
+            input.length() == 2 &&
+            target.get_pixel(205, 62) == c_card &&  // card fill inside
+            target.get_pixel(250, 60) == c_ring &&  // focused border
+            (input.clear(), input.length() == 0);
+
+        serial::write("w1 slider=");
+        serial::write_dec32((drag_ok && key_ok && dis_ok &&
+                             slider_paint_ok)
+                                ? 1
+                                : 0);
+        serial::write("\r\n");
+        serial::write("w1 progress=");
+        serial::write_dec32((prog_det_ok && prog_ind_ok) ? 1 : 0);
+        serial::write("\r\n");
+        serial::write("w1 tooltip=");
+        serial::write_dec32((armed_ok && tip_pos_ok && tip_paint_ok &&
+                             tip_flip_ok)
+                                ? 1
+                                : 0);
+        serial::write("\r\n");
+        serial::write("w1 menu=");
+        serial::write_dec32((menu_open_ok && menu_key_ok && menu_paint_ok &&
+                             menu_esc_ok)
+                                ? 1
+                                : 0);
+        serial::write("\r\n");
+        ok = ok && slider_paint_ok && input_ok;
+        serial::write_line(ok ? "widgets w1=ok" : "widgets w1=fail");
         return ok;
     }
 
