@@ -821,6 +821,15 @@ namespace hype::win {
             const bool pressed =
                 e.value !=
                 static_cast<hcpp::u32>(input::KeyState::Released);
+            // The open Start menu owns the keyboard: typed chars feed its
+            // search field and Enter/Esc/arrows drive the results, so
+            // chords like Alt-Tab must not run underneath (issue #129).
+            if (hype::ui::deskbar_start_open()) {
+                hype::ui::deskbar_handle_key(
+                    e.code,
+                    pressed ? input::scancode_last_ascii() : '\0');
+                return;
+            }
             if (e.code == key_alt) {
                 if (!pressed && switcher_open) {
                     alttab_close(true);
@@ -1576,6 +1585,11 @@ namespace hype::win {
     }
 
     bool wm_handle_key(char ascii) noexcept {
+        // Character-only callers still reach the open Start menu's
+        // search field (scancode-less path, issue #129).
+        if (hype::ui::deskbar_start_open()) {
+            return hype::ui::deskbar_handle_key(0, ascii);
+        }
         if (overlays.is_open()) {
             const bool consumed = overlays.handle_key(ascii);
             if (!overlays.is_open()) {

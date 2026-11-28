@@ -112,6 +112,9 @@ namespace hype::hxrt {
 
         hype::win::XAU fx_win = hype::win::XAU_INVALID;
         bool fx_input_hooked = false;
+        // Requested target dir for the next window create (Start-menu
+        // file results call hxfiles_nav before the window exists).
+        char fx_pending_nav[fx_path_cap]{};
 
         HypePath fx_cwd{};
         char fx_cwd_text[fx_path_cap]{};
@@ -1480,6 +1483,15 @@ namespace hype::hxrt {
                     }
                     cwd_format();
                     refresh();
+                    // A pending navigation (Start-menu file result)
+                    // overrides the default landing dir.
+                    if (fx_pending_nav[0] != '\0') {
+                        char pending[fx_path_cap];
+                        str_copy(pending, fx_pending_nav,
+                                 static_cast<hcpp::u32>(sizeof(pending)));
+                        fx_pending_nav[0] = '\0';
+                        nav_text(pending);
+                    }
                     hype::win::xau_set_title(xau_win, "Files");
                     serial::write("hxfiles nav=");
                     serial::write_line(fx_cwd_text);
@@ -1599,6 +1611,23 @@ namespace hype::hxrt {
     }  // namespace
 
     const HxerHeader* hxfiles_app() noexcept { return &desc; }
+
+    // Navigates HxFiles to `path` (HYPEOS:// text form). Live-navigates
+    // the open window; when no window is bound yet the path is stashed
+    // and consumed by the next XAU_MSG_CREATE, so callers can fire
+    // hxfiles_nav + desk_open_app in either order (issue #129).
+    void hxfiles_nav(const char* path) noexcept {
+        if (path == nullptr || path[0] == '\0') {
+            return;
+        }
+        if (fx_win != hype::win::XAU_INVALID) {
+            nav_text(path);
+            invalidate();
+            return;
+        }
+        str_copy(fx_pending_nav, path,
+                 static_cast<hcpp::u32>(sizeof(fx_pending_nav)));
+    }
 
     // Registers the "HxFiles" XAU class plus the wheel-scroll input
     // subscription (subscribe_keys has no unsubscribe, so hook once).

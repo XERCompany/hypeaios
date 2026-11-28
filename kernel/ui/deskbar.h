@@ -22,6 +22,14 @@ namespace hype::ui {
     // true when the click was consumed (bar area or open Start menu).
     bool deskbar_handle_mouse(hcpp::i32 x, hcpp::i32 y, bool pressed) noexcept;
 
+    // Key routing while the Start menu is open (issue #129): printable
+    // `ascii` feeds the auto-focused search field, Backspace edits,
+    // Up/Down move the result selection, Enter activates it and Esc
+    // clears the query (a second Esc closes the menu). `code` is the
+    // set-1 scancode; pass 0 when only the character is known. Returns
+    // true while the menu is open — it owns the keyboard.
+    bool deskbar_handle_key(hcpp::u16 code, char ascii) noexcept;
+
     bool deskbar_start_open() noexcept;
     void deskbar_open_start() noexcept;
     void deskbar_close_start() noexcept;

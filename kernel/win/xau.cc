@@ -17,6 +17,7 @@
 #include "kernel/serial.hpp"
 #include "kernel/session/session.h"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/deskbar.h"
 #include "kernel/ui/theme.h"
 #include "kernel/win/winman.h"
 
@@ -331,6 +332,12 @@ namespace hype::win {
                 return;
             }
             if (hype::session::session_locked()) {
+                return;
+            }
+            // The open Start menu owns the keyboard for its search
+            // field — typed chars must not also reach a focused app
+            // (issue #129).
+            if (hype::ui::deskbar_start_open()) {
                 return;
             }
             const Win* focused = wm_focused();

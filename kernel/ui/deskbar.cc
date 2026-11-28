@@ -4,6 +4,7 @@
 #include "kernel/font/hypefont.h"
 #include "kernel/font/hypetext.h"
 #include "kernel/gfx/hypegfx.h"
+#include "kernel/hxrt/apps/builtins.h"
 #include "kernel/hxrt/hxrt.h"
 #include "kernel/input/curstat.h"
 #include "kernel/input/ptrmv.h"
@@ -17,6 +18,7 @@
 #include "kernel/ui/overlays/toast.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
+#include "kernel/vfs/hypefs.h"
 #include "kernel/win/deskman.h"
 #include "kernel/win/winman.h"
 
@@ -67,6 +69,22 @@ namespace hype::ui {
         constexpr hcpp::i32 menu_item_h = 24;
         constexpr hcpp::i32 menu_head_h = 24;
         constexpr hcpp::u32 menu_max_items = 12;
+        // Start-menu search (issue #129): auto-focused field on top, live
+        // app-name filter + a bounded 1-level file walk under U:/.
+        constexpr hcpp::i32 menu_search_h = 26;
+        constexpr hcpp::i32 menu_search_gap = 6;
+        constexpr hcpp::i32 menu_section_h = 18;
+        constexpr hcpp::u32 search_cap = 31;
+        constexpr hcpp::u32 search_files_max = 8;
+        constexpr hcpp::u32 search_list_cap = 48;
+        constexpr hcpp::u32 search_scan_max = 128;
+        constexpr const char* search_root = "HYPEOS://U";
+        // Set-1 scancodes routed through deskbar_handle_key.
+        constexpr hcpp::u16 key_escape = 1;
+        constexpr hcpp::u16 key_backspace = 14;
+        constexpr hcpp::u16 key_enter = 28;
+        constexpr hcpp::u16 key_up = 72;
+        constexpr hcpp::u16 key_down = 80;
         constexpr hcpp::u32 rtc_poll_mask = 31;
 
         Rect bar{};
@@ -74,6 +92,23 @@ namespace hype::ui {
         hcpp::u32 menu_order[hype::hxrt::hxrt_max_apps];
         hcpp::u32 menu_count = 0;
         bool start_open = false;
+
+        // Start-menu search state. `menu_order`/`menu_count` hold the
+        // *filtered* app list whenever the query is non-empty; file hits
+        // sit in the fixed FileHit pool and are informational-or-launch
+        // rows painted under an "Files" section.
+        struct FileHit {
+            char name[hype::vfs::fs_name_size];
+            char path[hype::vfs::hypepath_max_length];
+            hcpp::u32 flags;
+        };
+        char search_query[search_cap + 1]{};
+        hcpp::u32 search_len = 0;
+        FileHit file_hits[search_files_max];
+        hcpp::u32 file_hits_count = 0;
+        // Highlighted result row across the combined Apps+Files list
+        // (Enter activates it; defaults to the top hit).
+        hcpp::u32 search_sel = 0;
         bool painted_once = false;
         bool clock_announced = false;
         hcpp::u8 clock_hour = 0xFF;
@@ -389,13 +424,39 @@ namespace hype::ui {
             return a[i] == '\0' && b[i] != '\0';
         }
 
+        bool searching() noexcept { return search_len != 0; }
+
+        // Case-insensitive substring match of the query against `name`
+        // (an empty query passes everything through).
+        bool query_match(const char* name) noexcept {
+            if (search_len == 0) {
+                return true;
+            }
+            for (hcpp::u32 i = 0; name[i] != '\0'; ++i) {
+                hcpp::u32 j = 0;
+                while (j < search_len && name[i + j] != '\0' &&
+                       upper(name[i + j]) == upper(search_query[j])) {
+                    ++j;
+                }
+                if (j == search_len) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         void build_menu_order() noexcept {
             const hcpp::u32 n = hype::hxrt::hxrt_count();
+            const hype::hxrt::HxerHeader* const* list =
+                hype::hxrt::hxrt_list();
             menu_count = 0;
-            for (hcpp::u32 i = 0; i < n && menu_count < menu_max_items; ++i) {
+            for (hcpp::u32 i = 0; i < n && menu_count < menu_max_items;
+                 ++i) {
+                if (list[i] == nullptr || !query_match(list[i]->name)) {
+                    continue;
+                }
                 menu_order[menu_count++] = i;
             }
-            const hype::hxrt::HxerHeader* const* list = hype::hxrt::hxrt_list();
             for (hcpp::u32 i = 1; i < menu_count; ++i) {
                 const hcpp::u32 key = menu_order[i];
                 hcpp::u32 j = i;
@@ -408,13 +469,101 @@ namespace hype::ui {
             }
         }
 
+        void path_join(char* out, hcpp::size_t cap, const char* dir,
+                       const char* leaf) noexcept {
+            hcpp::size_t n = 0;
+            while (n + 1 < cap && dir[n] != '\0') {
+                out[n] = dir[n];
+                ++n;
+            }
+            if (n > 0 && out[n - 1] != '/' && n + 1 < cap) {
+                out[n++] = '/';
+            }
+            copy_text(out + n, cap - n, leaf);
+        }
+
+        void file_hit_add(const hype::vfs::FsStat& entry,
+                          const char* dir) noexcept {
+            if (file_hits_count >= search_files_max) {
+                return;
+            }
+            FileHit& hit = file_hits[file_hits_count];
+            copy_text(hit.name, sizeof(hit.name), entry.name);
+            path_join(hit.path, sizeof(hit.path), dir, entry.name);
+            hit.flags = entry.flags;
+            ++file_hits_count;
+        }
+
+        // Bounded walk: U:/ root entries plus one level into each
+        // directory that fits the scan budget (~128 entries max).
+        void collect_file_hits() noexcept {
+            file_hits_count = 0;
+            if (search_len == 0) {
+                return;
+            }
+            // Listing scratch stays off the stack: this runs inside the
+            // keyboard IRQ path (emit_key_event -> wm -> deskbar).
+            static hype::vfs::FsStat root[search_list_cap];
+            static hype::vfs::FsStat kids[search_list_cap];
+            const hcpp::u32 found =
+                hype::vfs::fs_list(search_root, root, search_list_cap);
+            const hcpp::u32 n =
+                found < search_list_cap ? found : search_list_cap;
+            hcpp::u32 scanned = 0;
+            for (hcpp::u32 i = 0; i < n && scanned < search_scan_max; ++i) {
+                ++scanned;
+                if (query_match(root[i].name)) {
+                    file_hit_add(root[i], search_root);
+                }
+                if ((root[i].flags & hype::vfs::FS_DIR) == 0 ||
+                    file_hits_count >= search_files_max) {
+                    continue;
+                }
+                char sub[hype::vfs::hypepath_max_length];
+                path_join(sub, sizeof(sub), search_root, root[i].name);
+                const hcpp::u32 kfound =
+                    hype::vfs::fs_list(sub, kids, search_list_cap);
+                const hcpp::u32 kn =
+                    kfound < search_list_cap ? kfound : search_list_cap;
+                for (hcpp::u32 j = 0; j < kn && scanned < search_scan_max;
+                     ++j) {
+                    ++scanned;
+                    if (query_match(kids[j].name)) {
+                        file_hit_add(kids[j], sub);
+                    }
+                }
+            }
+        }
+
+        // Clickable result rows: filtered apps first, then file hits
+        // (files only exist while a query is active).
+        hcpp::u32 menu_result_rows() noexcept {
+            return menu_count + (searching() ? file_hits_count : 0);
+        }
+
         Rect compute_menu() noexcept {
             if (!start_open) {
                 return {};
             }
-            const hcpp::u32 rows = menu_count > 0 ? menu_count : 1;
-            const hcpp::i32 h = menu_pad * 2 + menu_head_h +
-                                static_cast<hcpp::i32>(rows) * menu_item_h;
+            hcpp::i32 h = menu_pad * 2 + menu_search_h + menu_search_gap;
+            if (!searching()) {
+                const hcpp::u32 rows = menu_count > 0 ? menu_count : 1;
+                h += menu_head_h +
+                     static_cast<hcpp::i32>(rows) * menu_item_h;
+            } else {
+                if (menu_count > 0) {
+                    h += menu_section_h +
+                         static_cast<hcpp::i32>(menu_count) * menu_item_h;
+                }
+                if (file_hits_count > 0) {
+                    h += menu_section_h +
+                         static_cast<hcpp::i32>(file_hits_count) *
+                             menu_item_h;
+                }
+                if (menu_result_rows() == 0) {
+                    h += menu_item_h;  // "No results" row
+                }
+            }
             Rect r{bar.x + bar_pad, bar.y - 4 - h, menu_w, h};
             if (r.y < 2) {
                 r.y = 2;
@@ -422,17 +571,142 @@ namespace hype::ui {
             return r;
         }
 
-        hcpp::i32 menu_item_at(Point p) noexcept {
+        Rect menu_field_rect(const Rect& menu) noexcept {
+            return {menu.x + menu_pad, menu.y + menu_pad,
+                    menu.w - 2 * menu_pad, menu_search_h};
+        }
+
+        // Screen rect of combined result row `index` (apps first, file
+        // hits after). Kept in sync with paint_menu's section headers:
+        // each section label sits exactly menu_section_h above its
+        // section's first row.
+        Rect menu_row_rect(const Rect& menu, hcpp::u32 index) noexcept {
+            hcpp::i32 y = menu.y + menu_pad + menu_search_h +
+                          menu_search_gap;
+            if (!searching()) {
+                return {menu.x + 1,
+                        y + menu_head_h +
+                            static_cast<hcpp::i32>(index) * menu_item_h,
+                        menu.w - 2, menu_item_h};
+            }
+            if (index < menu_count) {
+                return {menu.x + 1,
+                        y + menu_section_h +
+                            static_cast<hcpp::i32>(index) * menu_item_h,
+                        menu.w - 2, menu_item_h};
+            }
+            if (menu_count > 0) {
+                y += menu_section_h +
+                     static_cast<hcpp::i32>(menu_count) * menu_item_h;
+            }
+            y += menu_section_h;
+            return {menu.x + 1,
+                    y + static_cast<hcpp::i32>(index - menu_count) *
+                            menu_item_h,
+                    menu.w - 2, menu_item_h};
+        }
+
+        hcpp::i32 menu_row_at(Point p) noexcept {
             const Rect r = compute_menu();
             if (r.empty() || !r.contains(p)) {
                 return -1;
             }
-            const hcpp::i32 idx =
-                (p.y - r.y - menu_pad - menu_head_h) / menu_item_h;
-            if (idx < 0 || idx >= static_cast<hcpp::i32>(menu_count)) {
-                return -1;
+            const hcpp::u32 rows = menu_result_rows();
+            for (hcpp::u32 i = 0; i < rows; ++i) {
+                if (menu_row_rect(r, i).contains(p)) {
+                    return static_cast<hcpp::i32>(i);
+                }
             }
-            return idx;
+            return -1;
+        }
+
+        // Rebuilds filtered results after the query text changed.
+        // `before` is the menu paint bounds captured *before* the query
+        // mutated, so the union always covers both geometries.
+        void search_refresh(const Rect& before) noexcept {
+            build_menu_order();
+            collect_file_hits();
+            if (search_sel >= menu_result_rows()) {
+                search_sel = 0;
+            }
+            serial::write("start search=");
+            serial::write(search_query);
+            serial::write(" hits=");
+            serial::write_dec32(menu_result_rows());
+            serial::write("\r\n");
+            invalidate(
+                before.united(rui_paint_bounds(compute_menu())));
+        }
+
+        void search_push(char c) noexcept {
+            if (search_len >= search_cap) {
+                return;
+            }
+            const Rect before = rui_paint_bounds(compute_menu());
+            search_query[search_len++] = c;
+            search_query[search_len] = '\0';
+            search_refresh(before);
+        }
+
+        void search_pop() noexcept {
+            if (search_len == 0) {
+                return;
+            }
+            const Rect before = rui_paint_bounds(compute_menu());
+            search_query[--search_len] = '\0';
+            search_refresh(before);
+        }
+
+        void search_clear() noexcept {
+            if (search_len == 0) {
+                return;
+            }
+            const Rect before = rui_paint_bounds(compute_menu());
+            search_len = 0;
+            search_query[0] = '\0';
+            search_refresh(before);
+        }
+
+        // Activates a combined result row: apps launch through the
+        // normal desk_open_app path, file hits open HxFiles on the
+        // containing dir (dir hits navigate straight into it).
+        void launch_result(hcpp::u32 index) noexcept {
+            if (index < menu_count) {
+                const hype::hxrt::HxerHeader* const* list =
+                    hype::hxrt::hxrt_list();
+                const hype::hxrt::HxerHeader* app =
+                    list[menu_order[index]];
+                if (app != nullptr) {
+                    serial::write("start launch=");
+                    serial::write_line(app->name);
+                    hype::win::desk_open_app(app->name);
+                }
+                return;
+            }
+            const hcpp::u32 f = index - menu_count;
+            if (!searching() || f >= file_hits_count) {
+                return;
+            }
+            const FileHit& hit = file_hits[f];
+            serial::write("start launch=");
+            serial::write_line(hit.name);
+            char target[hype::vfs::hypepath_max_length];
+            copy_text(target, sizeof(target), hit.path);
+            if ((hit.flags & hype::vfs::FS_DIR) == 0) {
+                // Files: navigate to the parent dir — trim the leaf
+                // component (a root-level file leaves "HYPEOS://U").
+                hcpp::u32 last = 0;
+                for (hcpp::u32 i = 0; target[i] != '\0'; ++i) {
+                    if (target[i] == '/') {
+                        last = i;
+                    }
+                }
+                if (last > 9) {
+                    target[last] = '\0';
+                }
+            }
+            hype::hxrt::hxfiles_nav(target);
+            hype::win::desk_open_app("HxFiles");
         }
 
         void open_start() noexcept {
@@ -445,6 +719,12 @@ namespace hype::ui {
             if (nc_open) {
                 deskbar_close_nc();
             }
+            // Fresh query every open — the field is empty and the full
+            // app list shows until the first keystroke filters it.
+            search_len = 0;
+            search_query[0] = '\0';
+            file_hits_count = 0;
+            search_sel = 0;
             build_menu_order();
             start_open = true;
             serial::write_line("start menu=open");
@@ -688,45 +968,158 @@ namespace hype::ui {
             canvas.set_clip(saved_clip);
         }
 
+        void paint_search_field(Canvas& canvas, const Theme& theme,
+                                const Rect& field) noexcept {
+            rui_control_bg(canvas, field, theme.secondary, theme.accent);
+            const hcpp::u32 muted = canvas.color(theme.muted_fg);
+            const hcpp::i32 cy = field.y + field.h / 2;
+            // Magnifier: stroked lens + short handle.
+            canvas.stroke_circle(field.x + 11, cy - 1, 4, muted);
+            canvas.draw_line(field.x + 14, cy + 2, field.x + 17, cy + 5,
+                             muted);
+            const hcpp::i32 tx = field.x + 24;
+            if (search_len == 0) {
+                paint_label(canvas, tx, label_top(field), "Search",
+                            theme.muted_fg, 13);
+                return;
+            }
+            const hcpp::StringView text{search_query, search_len};
+            // The field is always focused while the menu is open — clip
+            // so an over-long query never bleeds past the control edge.
+            const Rect saved_clip = canvas.clip();
+            canvas.set_clip(saved_clip.intersection(
+                Rect{tx, field.y, field.right() - tx - 4, field.h}));
+            paint_label(canvas, tx, label_top(field), text,
+                        theme.card_fg, 13);
+            canvas.set_clip(saved_clip);
+            // Caret right after the measured text.
+            const hcpp::i32 tw =
+                hype::font::hypefont_ready()
+                    ? hype::font::text_measure(text, 13)
+                    : static_cast<hcpp::i32>(search_len) * 8;
+            hcpp::i32 cx = tx + tw + 1;
+            if (cx > field.right() - 4) {
+                cx = field.right() - 4;
+            }
+            canvas.fill_rect(Rect{cx, cy - 6, 1, 12},
+                             canvas.color(theme.accent));
+        }
+
+        void paint_section_label(Canvas& canvas, const Theme& theme,
+                                 const Rect& menu, hcpp::i32 y,
+                                 const char* text) noexcept {
+            paint_label(canvas, menu.x + menu_pad + 6, y + 3, text,
+                        theme.muted_fg, 11);
+        }
+
+        void paint_file_glyph(Canvas& canvas, const Theme& theme,
+                              const Rect& row, bool is_dir) noexcept {
+            const hcpp::i32 cy = row.y + row.h / 2;
+            const hcpp::i32 gx = row.x + 9;
+            if (is_dir) {
+                const hcpp::u32 folder = canvas.color(theme.accent);
+                canvas.fill_rect(Rect{gx, cy - 5, 5, 3}, folder);
+                canvas.fill_rect(Rect{gx, cy - 3, 12, 9}, folder);
+                canvas.fill_rect(Rect{gx, cy - 3, 12, 1},
+                                 canvas.color(rui_lift(theme.accent, 1)));
+                return;
+            }
+            // Mini page glyph: card sheet + folded corner + text lines.
+            const hcpp::u32 page = canvas.color(theme.card);
+            canvas.fill_rect(Rect{gx + 1, cy - 6, 10, 13}, page);
+            canvas.stroke_rect(Rect{gx + 1, cy - 6, 10, 13},
+                               canvas.color(theme.border));
+            const hcpp::u32 edge = canvas.color(theme.border);
+            canvas.draw_line(gx + 8, cy - 6, gx + 11, cy - 3, edge);
+            const hcpp::u32 ink = canvas.color(theme.muted_fg);
+            canvas.fill_rect(Rect{gx + 3, cy - 1, 6, 1}, ink);
+            canvas.fill_rect(Rect{gx + 3, cy + 2, 6, 1}, ink);
+        }
+
         void paint_menu(Canvas& canvas, const Theme& theme,
                         const Rect& menu) noexcept {
             rui_panel(canvas, menu, rui_elev_panel);
-            const Rect head{menu.x + 1, menu.y + menu_pad, menu.w - 2,
-                            menu_head_h};
-            canvas.fill_rect(
-                head, canvas.color(
-                          rui_lift(theme.card, rui_elev_panel)));
-            canvas.fill_circle(head.x + 12, head.y + head.h / 2, 4,
-                               canvas.color(theme.accent));
-            paint_label(canvas, head.x + 24, label_top(head), "HypeAI OS",
-                        theme.muted_fg, 13);
+            paint_search_field(canvas, theme, menu_field_rect(menu));
+            const hcpp::u32 card_lift =
+                rui_lift(theme.card, rui_elev_panel);
+            if (!searching()) {
+                const Rect head{menu.x + 1,
+                                menu.y + menu_pad + menu_search_h +
+                                    menu_search_gap,
+                                menu.w - 2, menu_head_h};
+                canvas.fill_rect(head, canvas.color(card_lift));
+                canvas.fill_circle(head.x + 12, head.y + head.h / 2, 4,
+                                   canvas.color(theme.accent));
+                paint_label(canvas, head.x + 24, label_top(head),
+                            "HypeAI OS", theme.muted_fg, 13);
+            } else if (menu_result_rows() == 0) {
+                const Rect row{menu.x + 1,
+                               menu.y + menu_pad + menu_search_h +
+                                   menu_search_gap,
+                               menu.w - 2, menu_item_h};
+                canvas.fill_rect(row, canvas.color(card_lift));
+                paint_label(canvas, row.x + 10, label_top(row),
+                            "No results", theme.muted_fg, 13);
+            }
             const hype::hxrt::HxerHeader* const* list =
                 hype::hxrt::hxrt_list();
-            const hcpp::u32 rows = menu_count > 0 ? menu_count : 1;
+            const hcpp::u32 rows =
+                !searching() ? (menu_count > 0 ? menu_count : 1)
+                             : menu_result_rows();
+            if (searching() && menu_count > 0) {
+                paint_section_label(canvas, theme, menu,
+                                    menu_row_rect(menu, 0).y -
+                                        menu_section_h,
+                                    "Apps");
+            }
+            if (searching() && file_hits_count > 0) {
+                paint_section_label(canvas, theme, menu,
+                                    menu_row_rect(menu, menu_count).y -
+                                        menu_section_h,
+                                    "Files");
+            }
             for (hcpp::u32 i = 0; i < rows; ++i) {
-                const Rect row{menu.x + 1,
-                               head.bottom() +
-                                   static_cast<hcpp::i32>(i) * menu_item_h,
-                               menu.w - 2, menu_item_h};
-                canvas.fill_rect(
-                    row, canvas.color(
-                             rui_lift(theme.card, rui_elev_panel)));
+                const Rect row = menu_row_rect(menu, i);
+                canvas.fill_rect(row, canvas.color(card_lift));
+                const bool sel = i == search_sel;
+                if (sel) {
+                    canvas.fill_rect_alpha(row, canvas.color(theme.accent),
+                                           48);
+                    canvas.fill_rect(Rect{row.x, row.y, 2, row.h},
+                                     canvas.color(theme.accent));
+                }
                 const hcpp::i32 cy = row.y + row.h / 2;
-                if (menu_count == 0) {
-                    paint_label(canvas, row.x + 10, label_top(row), "No apps",
-                                theme.muted_fg, 13);
+                if (menu_count == 0 && !searching()) {
+                    paint_label(canvas, row.x + 10, label_top(row),
+                                "No apps", theme.muted_fg, 13);
                     continue;
                 }
-                const hype::hxrt::HxerHeader* app = list[menu_order[i]];
-                const Rect icon{row.x + 8, cy - 7, 14, 14};
-                rui_rounded_gradient(
-                    canvas, icon, 4, rui_lift(theme.primary, 1),
-                    theme.primary);
-                char mono[2] = {upper(app->name[0]), '\0'};
-                paint_label(canvas, icon.x + 4, icon.y + 1,
-                            hcpp::StringView{mono, 1}, theme.primary_fg, 11);
-                paint_label(canvas, row.x + 30, label_top(row),
-                            hcpp::StringView{app->name}, theme.card_fg, 13);
+                const Rect saved_clip = canvas.clip();
+                canvas.set_clip(saved_clip.intersection(row));
+                if (i < menu_count) {
+                    const hype::hxrt::HxerHeader* app =
+                        list[menu_order[i]];
+                    const Rect icon{row.x + 8, cy - 7, 14, 14};
+                    rui_rounded_gradient(
+                        canvas, icon, 4, rui_lift(theme.primary, 1),
+                        theme.primary);
+                    char mono[2] = {upper(app->name[0]), '\0'};
+                    paint_label(canvas, icon.x + 4, icon.y + 1,
+                                hcpp::StringView{mono, 1},
+                                theme.primary_fg, 11);
+                    paint_label(canvas, row.x + 30, label_top(row),
+                                hcpp::StringView{app->name},
+                                theme.card_fg, 13);
+                } else {
+                    const FileHit& hit = file_hits[i - menu_count];
+                    const bool is_dir =
+                        (hit.flags & hype::vfs::FS_DIR) != 0;
+                    paint_file_glyph(canvas, theme, row, is_dir);
+                    paint_label(canvas, row.x + 30, label_top(row),
+                                hcpp::StringView{hit.name},
+                                theme.card_fg, 13);
+                }
+                canvas.set_clip(saved_clip);
             }
             if (rui_dark_surface()) {
                 hype::gfx::gfx_inner_glow_edge(
@@ -1102,15 +1495,16 @@ namespace hype::ui {
         }
         const Point p{x, y};
         if (start_open) {
-            const hcpp::i32 item = menu_item_at(p);
-            if (item >= 0) {
-                const hype::hxrt::HxerHeader* const* list =
-                    hype::hxrt::hxrt_list();
-                const hype::hxrt::HxerHeader* app =
-                    list[menu_order[item]];
-                if (app != nullptr) {
-                    hype::win::desk_open_app(app->name);
-                }
+            const Rect menu = compute_menu();
+            // Clicks inside the search field keep the menu open (it is
+            // always focused); result rows launch, everything else
+            // dismisses.
+            if (menu.contains(p) && menu_field_rect(menu).contains(p)) {
+                return true;
+            }
+            const hcpp::i32 row = menu_row_at(p);
+            if (row >= 0) {
+                launch_result(static_cast<hcpp::u32>(row));
             }
             deskbar_close_start();
             return true;
@@ -1329,6 +1723,61 @@ namespace hype::ui {
     }
 
     bool deskbar_start_open() noexcept { return start_open; }
+
+    // Key routing while the Start menu is open (issue #129). Called from
+    // winman's key subscriber with the set-1 scancode + decoded ascii —
+    // the menu owns the whole keyboard: printable chars feed the search
+    // field, Backspace edits, Up/Down move the highlight, Enter launches
+    // the selected (or top) result and Esc clears the query, then a
+    // second Esc closes the menu.
+    bool deskbar_handle_key(hcpp::u16 code, char ascii) noexcept {
+        if (!start_open) {
+            return false;
+        }
+        switch (code) {
+            case key_escape:
+                if (search_len > 0) {
+                    search_clear();
+                } else {
+                    deskbar_close_start();
+                }
+                return true;
+            case key_enter: {
+                const hcpp::u32 rows = menu_result_rows();
+                if (rows > 0) {
+                    if (search_sel >= rows) {
+                        search_sel = 0;
+                    }
+                    launch_result(search_sel);
+                }
+                deskbar_close_start();
+                return true;
+            }
+            case key_backspace:
+                search_pop();
+                return true;
+            case key_up:
+            case key_down: {
+                const hcpp::u32 rows = menu_result_rows();
+                if (rows > 1) {
+                    if (code == key_up) {
+                        search_sel =
+                            (search_sel + rows - 1) % rows;
+                    } else {
+                        search_sel = (search_sel + 1) % rows;
+                    }
+                    invalidate(rui_paint_bounds(compute_menu()));
+                }
+                return true;
+            }
+            default:
+                break;
+        }
+        if (ascii >= ' ' && ascii < 127) {
+            search_push(ascii);
+        }
+        return true;
+    }
 
     void deskbar_open_start() noexcept {
         if (!start_open) {

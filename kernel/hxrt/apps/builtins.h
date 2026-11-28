@@ -22,6 +22,10 @@ namespace hype::hxrt {
     // Registers the "HxFiles" XAU class + its wheel-scroll input hook
     // (kernel/hxrt/apps/hxfiles.cc, issue #128).
     void hxfiles_register_xau() noexcept;
+    // Navigates the HxFiles window to a HYPEOS:// dir path — live when a
+    // window is open, otherwise deferred to the next create (used by the
+    // Start-menu search file results, issue #129).
+    void hxfiles_nav(const char* path) noexcept;
 
     hcpp::size_t dbg_refresh() noexcept;
     bool dbg_select(hcpp::size_t index) noexcept;
