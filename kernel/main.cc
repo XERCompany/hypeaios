@@ -527,6 +527,22 @@ namespace {
         serial::write_line(vfs_selftest.sys_locked ? "locked" : "fail");
         serial::write("vfs io=");
         serial::write_line(vfs_selftest.io_ok ? "ok" : "fail");
+        // VFS hardening probes (issue #103): fd table open/close, dir
+        // enumeration, block reclaim, write-through sync.
+        serial::write("vfs fd=");
+        serial::write_dec32(vfs_selftest.fd_value);
+        serial::write(" open/close=");
+        serial::write_line(vfs_selftest.fd_ok ? "ok" : "fail");
+        serial::write("vfs dir items=");
+        serial::write_dec32(vfs_selftest.dir_items);
+        serial::write("\r\n");
+        serial::write("vfs dir=");
+        serial::write_line(vfs_selftest.dir_ok ? "ok" : "fail");
+        serial::write("vfs reclaim=");
+        serial::write_line(vfs_selftest.reclaim_ok ? "ok" : "fail");
+        serial::write("vfs sync=");
+        serial::write_line(vfs_selftest.sync_auto ? "auto"
+                           : (vfs_selftest.sync_ok ? "manual" : "fail"));
         report("vfs selftest=", vfs_ok && vfs_seeded &&
                                    hype::vfs::fs_disk_count() == 3);
         report("audio api selftest=", hype::audio::audio_api_selftest());
@@ -969,6 +985,9 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         }
         hype::audio::hasio_pump_active();
         hype::net::net_poll();
+        // Write-through backstop: mutations that outran the debounced
+        // auto-sync still reach the HYPEDATA blob from idle.
+        hype::vfs::fs_sync();
         hype::interrupts::pit_wait_ticks(1);
     }
 }

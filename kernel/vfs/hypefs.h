@@ -26,6 +26,8 @@ namespace hype::vfs {
         Exists,
         AccessDenied,
         NoSpace,
+        BadFd,
+        IoError,
     };
 
     struct FsStat {
@@ -39,12 +41,23 @@ namespace hype::vfs {
         bool path_ok;
         bool sys_locked;
         bool io_ok;
+        // VFS hardening probes (issue #103).
+        bool fd_ok;        // fs_open/pwrite/seek/fread/close round-trip
+        hcpp::u32 fd_value;  // fd number the probe ran on (0 when open failed)
+        bool dir_ok;       // fs_list enumerates U:/ and U:/home
+        hcpp::u32 dir_items;
+        bool reclaim_ok;   // write+delete+rewrite frees and reuses blocks
+        bool sync_ok;      // dirty state reached the blob (auto or manual)
+        bool sync_auto;    // true when the debounced auto-sync beat fs_sync()
     };
 
     void fs_init() noexcept;
     bool fs_seed() noexcept;
     hcpp::u32 fs_disk_count() noexcept;
     hcpp::u32 fs_disk_file_count(char disk) noexcept;
+    // Per-mount space accounting in bytes, from the fixed-block allocator.
+    hcpp::u32 fs_disk_used(char disk) noexcept;
+    hcpp::u32 fs_disk_free(char disk) noexcept;
     FsStatus fs_mkdir(const char* path) noexcept;
     FsStatus fs_write(const char* path, const void* data, hcpp::u32 size) noexcept;
     FsStatus fs_read(const char* path, void* out, hcpp::u32 capacity,
@@ -52,6 +65,13 @@ namespace hype::vfs {
     FsStatus fs_stat(const char* path, FsStat& out) noexcept;
     FsStatus fs_delete(const char* path) noexcept;
     hcpp::u32 fs_list(const char* dir_path, FsStat* out, hcpp::u32 out_max) noexcept;
+    // Write-through policy: fs_write/fs_delete/fs_pwrite set a dirty flag
+    // and a debounced auto-sync pushes the memfs to the HYPEDATA blob at
+    // most once per fs_sync_debounce window. fs_sync() flushes pending
+    // state immediately (called from the kernel idle loop and fs_flush).
+    // Returns true when nothing is dirty or the sync succeeded.
+    bool fs_sync() noexcept;
+    bool fs_dirty() noexcept;
     bool fs_selftest(FsSelftest& out) noexcept;
 
 }

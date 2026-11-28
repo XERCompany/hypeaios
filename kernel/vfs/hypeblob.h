@@ -29,4 +29,9 @@ namespace hype::vfs {
     // the region. Format matches tools/mkimage.py exactly.
     bool hypeblob_sync() noexcept;
 
+    // True while mount or sync is running. The memfs write-through path
+    // checks this so fs_write() calls made by mount_file() cannot
+    // re-enter a blob serialization mid-flight.
+    bool hypeblob_io_active() noexcept;
+
 }
