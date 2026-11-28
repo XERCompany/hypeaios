@@ -172,7 +172,8 @@ namespace hype::ui {
         if (box.empty()) {
             return;
         }
-        rui_panel(canvas, box, rui_elev_panel);
+        // L5 modal dialog (issue #177): sh-xl under the scrim.
+        rui_panel(canvas, box, rui_elev_dialog);
     }
 
     AlertDialog::AlertDialog() noexcept : Dialog() {

@@ -104,7 +104,9 @@ namespace hype::ui {
             const Rect card{screen.right() - margin - card_w + slide,
                             cursor_y, card_w, card_h};
 
-            rui_card(canvas, card);
+            // L6 toast (issue #177): elevated surface at sh-lg, above
+            // the taskbar layer.
+            rui_panel(canvas, card, rui_elev_panel);
             if (rui_dark_surface()) {
                 hype::gfx::gfx_inner_glow_edge(
                     canvas, card.inset(Insets::uniform(1)),

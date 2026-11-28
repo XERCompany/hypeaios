@@ -32,6 +32,7 @@ namespace {
         {"audio.volume", CfgType::Int, "100", 0, 100},
         {"ui.brightness", CfgType::Int, "75", 0, 100},
         {"ui.theme", CfgType::Str, "dark", 0, 0},
+        {"ui.accent", CfgType::Str, "blue", 0, 0},
         {"ui.hard_shadow", CfgType::Bool, "0", 0, 1},
         {"ui.lock_timeout_min", CfgType::Int, "5", 0, 1440},
         {"desktop.wallpaper", CfgType::Str, "", 0, 0},
@@ -183,6 +184,10 @@ namespace {
                     if (!str_eq(text, "dark") && !str_eq(text, "light")) {
                         return false;
                     }
+                } else if (str_eq(key.name, "ui.accent")) {
+                    // Fixed accent palette (issue #177):
+                    // blue/violet/emerald/rose.
+                    if (!hype::ui::theme_accent_valid(text)) return false;
                 } else if (str_eq(key.name, "desktop.wallpaper")) {
                     if (!wallpaper_name_ok(text)) return false;
                 } else if (str_len(text) >= settings_val_max) {
@@ -384,6 +389,13 @@ namespace hype::cfg {
             hype::ui::theme_set(str_eq(settings_get("ui.theme"), "light")
                                     ? hype::ui::theme_light()
                                     : hype::ui::theme_dark());
+            hype::win::wm_invalidate_all();
+            return true;
+        }
+        if (str_eq(key, "ui.accent")) {
+            // Accent palette (issue #177): rewrites the accent_*/ring
+            // tokens of the live theme; prints "theme accent=<name>".
+            hype::ui::theme_set_accent(settings_get("ui.accent"));
             hype::win::wm_invalidate_all();
             return true;
         }

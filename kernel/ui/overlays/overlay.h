@@ -10,8 +10,6 @@ namespace hype::ui {
 
     class OverlayHost {
     public:
-        static constexpr hcpp::u8 scrim_alpha = 140;
-
         bool open(Widget* modal) noexcept;
         void close() noexcept;
         Widget* modal() const noexcept;

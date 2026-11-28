@@ -247,15 +247,21 @@ namespace hype::ui {
         const Theme& light = theme_light();
         const hcpp::u32 dark_tokens[] = {
             dark.bg,          dark.fg,       dark.card,     dark.card_fg,
-            dark.primary,     dark.primary_fg, dark.secondary,
-            dark.destructive, dark.success,  dark.warning,  dark.muted,
-            dark.muted_fg,    dark.border,   dark.ring,     dark.accent,
+            dark.surface_sunk, dark.primary, dark.primary_fg, dark.secondary,
+            dark.destructive, dark.destructive_soft,
+            dark.success,     dark.warning,  dark.muted,
+            dark.muted_fg,    dark.border,   dark.border_strong,
+            dark.ring,        dark.accent,   dark.accent_fg,
+            dark.accent_hover, dark.accent_active, dark.accent_soft,
         };
         const hcpp::u32 light_tokens[] = {
             light.bg,          light.fg,       light.card,    light.card_fg,
-            light.primary,     light.primary_fg, light.secondary,
-            light.destructive, light.success,  light.warning, light.muted,
-            light.muted_fg,    light.border,   light.ring,    light.accent,
+            light.surface_sunk, light.primary, light.primary_fg, light.secondary,
+            light.destructive, light.destructive_soft,
+            light.success,     light.warning,  light.muted,
+            light.muted_fg,    light.border,   light.border_strong,
+            light.ring,        light.accent,   light.accent_fg,
+            light.accent_hover, light.accent_active, light.accent_soft,
         };
         constexpr hcpp::size_t token_count =
             sizeof(dark_tokens) / sizeof(dark_tokens[0]) + 5;
@@ -266,6 +272,15 @@ namespace hype::ui {
                 nonzero = false;
             }
         }
+        // v2 alpha channels must all be armed (scrim/top_edge are
+        // black or light-only, so only the alpha carries the check).
+        const bool alphas_ok =
+            dark.accent_soft_alpha != 0 && light.accent_soft_alpha != 0 &&
+            dark.destructive_soft_alpha != 0 &&
+            light.destructive_soft_alpha != 0 &&
+            dark.ring_alpha != 0 && light.ring_alpha != 0 &&
+            dark.scrim_alpha != 0 && light.scrim_alpha != 0 &&
+            dark.top_edge_alpha != 0;
         bool chart_distinct = true;
         for (hcpp::size_t i = 0; i < 5; ++i) {
             if (dark.chart[i] == 0 || light.chart[i] == 0) {
@@ -289,12 +304,28 @@ namespace hype::ui {
         const bool restore_ok = theme_active().bg == dark.bg;
         serial::write_line(restore_ok ? "theme dark=ok" : "theme dark=fail");
 
+        // Accent palettes (issue #177): invalid names reject, valid
+        // names rewrite the live accent tokens and must restore to
+        // the blue default afterwards.
+        const hcpp::u32 blue_rest = dark.accent;
+        const bool accent_ok =
+            !theme_accent_valid("neon") && !theme_set_accent("neon") &&
+            theme_accent_valid("violet") && theme_set_accent("violet") &&
+            theme_active().accent == 0x7C3AED &&
+            theme_active().accent_hover == 0x8B5CF6 &&
+            theme_set_accent("blue") &&
+            theme_active().accent == blue_rest &&
+            theme_active().accent_hover == dark.accent_hover;
+        serial::write_line(accent_ok ? "theme accent=ok"
+                                     : "theme accent=fail");
+
         serial::write("ui2 theme tokens=");
         serial::write_dec32(tokens);
         serial::write(" variants=2\r\n");
-        const bool ok = nonzero && chart_distinct && variants_differ && set_ok &&
-                        restore_ok;
+        const bool ok = nonzero && alphas_ok && chart_distinct &&
+                        variants_differ && set_ok && restore_ok && accent_ok;
         serial::write_line(ok ? "ui2 theme ok" : "ui2 theme fail");
+        serial::write_line(ok ? "theme v2=ok" : "theme v2=fail");
         return ok;
     }
 

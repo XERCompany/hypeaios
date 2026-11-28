@@ -45,7 +45,9 @@ namespace hype::ui {
     void OverlayHost::paint_overlays(Canvas& canvas, const Rect& screen) noexcept {
         if (modal_ != nullptr && modal_->is_visible()) {
             const Theme& theme = theme_active();
-            canvas.fill_rect_alpha(screen, canvas.color(theme.bg), scrim_alpha);
+            // Modal scrim (issue #177): #000 @55% dark / @40% light.
+            canvas.fill_rect_alpha(screen, canvas.color(theme.scrim),
+                                   theme.scrim_alpha);
 
             const Size desired = modal_->measure({screen.w, screen.h});
             hcpp::i32 width = desired.width > 0 ? desired.width : screen.w / 2;
