@@ -3,6 +3,8 @@
 #include "hcpp/memory.hpp"
 #include "kernel/guard/nfuip.h"
 #include "kernel/interrupts/idt.h"
+#include "kernel/net/e1000.h"
+#include "kernel/net/netdev.h"
 #include "kernel/net/virtio_net.h"
 #include "kernel/serial.hpp"
 
@@ -153,6 +155,20 @@ namespace hype::net {
         // ping consumer for ICMP echo replies (kernel/net/ping.cc).
         NetIcmpHandler icmp_handler;
 
+        // NIC registry (issue #125): both drivers register a NetDev
+        // vtable; net_initialize() probes in order and binds the first
+        // device that comes up. e1000 goes first so real silicon wins
+        // when QEMU happens to carry both NICs; virtio-net remains the
+        // fallback for pure-virtio setups.
+        const NetDev e1000_dev{"e1000",      e1000_probe,     e1000_ready,
+                               e1000_mac,    e1000_send,      e1000_recv,
+                               e1000_print_stats};
+        const NetDev virtio_dev{"virtio-net", virtio_net_probe,
+                                virtio_net_ready, virtio_net_mac,
+                                virtio_net_send, virtio_net_recv, nullptr};
+        const NetDev* const netdevs[] = {&e1000_dev, &virtio_dev};
+        const NetDev* active_dev;
+
         constexpr hcpp::size_t dhcp_options_offset =
             sizeof(DhcpPacket) - 312;  // fixed BOOTP header + magic cookie
 
@@ -226,7 +242,7 @@ namespace hype::net {
             eth->type = net_htons(type);
             hcpp::copy(tx_frame + sizeof(EthHdr), payload, length);
             const bool sent =
-                virtio_net_send(tx_frame, sizeof(EthHdr) + length);
+                active_dev->send(tx_frame, sizeof(EthHdr) + length);
             if (sent) ++stat_tx;
             return sent;
         }
@@ -319,8 +335,8 @@ namespace hype::net {
             hcpp::copy(eth->dst, src_mac, 6);
             hcpp::copy(eth->src, our_mac, 6);
             eth->type = net_htons(eth_type_ipv4);
-            if (virtio_net_send(tx_frame,
-                                sizeof(EthHdr) + sizeof(Ipv4Hdr) + length))
+            if (active_dev->send(tx_frame,
+                                 sizeof(EthHdr) + sizeof(Ipv4Hdr) + length))
                 ++stat_tx;
         }
 
@@ -548,9 +564,9 @@ namespace hype::net {
                 udp->csum = 0;  // UDP checksum optional over IPv4
             }
             hcpp::copy(l4 + l4_hdr, payload, payload_len);
-            const bool sent = virtio_net_send(
-                tx_frame, sizeof(EthHdr) + sizeof(Ipv4Hdr) + l4_hdr +
-                              payload_len);
+            const bool sent = active_dev->send(
+                tx_frame,
+                sizeof(EthHdr) + sizeof(Ipv4Hdr) + l4_hdr + payload_len);
             if (sent) ++stat_tx;
             return sent;
         }
@@ -646,8 +662,17 @@ namespace hype::net {
     bool net_initialize() noexcept {
         ready = false;
         have_ip = false;
-        if (!virtio_net_probe()) return false;
-        hcpp::copy(our_mac, virtio_net_mac(), 6);
+        // First-probed wins (e1000, then virtio-net); each probe prints
+        // its own "<name> dev=ok|absent" marker.
+        active_dev = nullptr;
+        for (const NetDev* dev : netdevs) {
+            if (dev->probe()) {
+                active_dev = dev;
+                break;
+            }
+        }
+        if (active_dev == nullptr) return false;
+        hcpp::copy(our_mac, active_dev->mac(), 6);
         for (auto& e : arp_cache) e.valid = false;
         for (auto& b : udp_binds) b = {};
         ip_id = 0;
@@ -664,6 +689,7 @@ namespace hype::net {
         hcpp::u8 mac_out[6];
         if (have_ip && gateway_ip != 0) (void)arp_resolve_impl(gateway_ip, mac_out);
         ready = true;
+        if (active_dev->print_stats != nullptr) active_dev->print_stats();
         serial::write("net tx=");
         serial::write_dec32(stat_tx);
         serial::write(" rx=");
@@ -675,10 +701,13 @@ namespace hype::net {
 
     bool net_ready() noexcept { return ready; }
 
+    const NetDev* netdev_active() noexcept { return active_dev; }
+
     void net_poll() noexcept {
-        if (!virtio_net_ready()) return;
+        if (active_dev == nullptr || !active_dev->ready()) return;
         for (hcpp::u32 i = 0; i < 16; ++i) {
-            const hcpp::size_t n = virtio_net_recv(rx_frame, sizeof(rx_frame));
+            const hcpp::size_t n =
+                active_dev->recv(rx_frame, sizeof(rx_frame));
             if (n == 0) break;
             ++stat_rx;
             handle_frame(rx_frame, n);

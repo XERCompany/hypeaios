@@ -4,9 +4,11 @@
 
 namespace hype::net {
 
-    // Minimal IPv4 stack on top of virtio-net: ethernet + ARP (8-entry
-    // cache) + ICMP echo reply + UDP sockets-lite + a one-shot DHCP
-    // client. Poll-driven: call net_poll() from the idle loop.
+    // Minimal IPv4 stack on top of a NetDev NIC (e1000 preferred,
+    // virtio-net fallback — see kernel/net/netdev.h): ethernet + ARP
+    // (8-entry cache) + ICMP echo reply + UDP sockets-lite + a
+    // one-shot DHCP client. Poll-driven: call net_poll() from the
+    // idle loop.
     using NetUdpHandler = void (*)(hcpp::u32 src_ip, hcpp::u16 src_port,
                                    const hcpp::u8* data,
                                    hcpp::size_t length) noexcept;
@@ -16,9 +18,10 @@ namespace hype::net {
                                     hcpp::u16 seq, const hcpp::u8* data,
                                     hcpp::size_t length) noexcept;
 
-    // Probes the NIC, starts DHCP when present. Prints the serial
-    // markers "virtio-net dev=ok mac=.."/"dev=absent", "dhcp ip=..",
-    // "arp rx=N", "net stack=ok". Never hangs when the device is absent.
+    // Probes the NICs (e1000 first, virtio-net fallback), starts DHCP
+    // when one is present. Prints the serial markers "<nic> dev=ok"/
+    // "dev=absent", "dhcp ip=..", "arp rx=N", "net stack=ok". Never
+    // hangs when no NIC is present.
     bool net_initialize() noexcept;
     bool net_ready() noexcept;
     void net_poll() noexcept;
