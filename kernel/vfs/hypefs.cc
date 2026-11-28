@@ -33,8 +33,10 @@ namespace {
     // to the map so space is reclaimed instead of bumped forever.
     constexpr hcpp::u32 fs_block_shift = 12;
     constexpr hcpp::u32 fs_block_size = 1u << fs_block_shift;
+    // Bitmap rows are sized for the largest disk (U: grew to 4 MiB for
+    // full-res screenshots — see fs_disk_u_bytes in hypefs.h).
     constexpr hcpp::u32 fs_max_blocks =
-        hype::vfs::fs_disk_s_bytes >> fs_block_shift;  // largest disk
+        hype::vfs::fs_disk_u_bytes >> fs_block_shift;
     constexpr hcpp::u32 fs_map_words = fs_max_blocks / 32;
 
     // Write-through policy: successful mutations set a dirty bit and a

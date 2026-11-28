@@ -8,7 +8,9 @@ namespace hype::vfs {
     constexpr hcpp::u32 fs_name_size = 32;
     constexpr hcpp::u32 fs_max_entries = 192;
     constexpr hcpp::u32 fs_disk_s_bytes = 2u * 1024u * 1024u;
-    constexpr hcpp::u32 fs_disk_u_bytes = 2u * 1024u * 1024u;
+    // 4 MiB so a full-res 24-bit BMP screenshot (1024x768 ≈ 2.36 MB,
+    // issue #131) fits on U:/shots alongside the seeded user files.
+    constexpr hcpp::u32 fs_disk_u_bytes = 4u * 1024u * 1024u;
     constexpr hcpp::u32 fs_disk_t_bytes = 128u * 1024u;
 
     enum FsFlags : hcpp::u32 {

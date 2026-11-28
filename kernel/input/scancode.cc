@@ -37,13 +37,26 @@ namespace hype::input {
         const bool extended = extended_prefix;
         extended_prefix = false;
         const bool pressed = (scancode & 0x80) == 0;
-        const hcpp::u16 code = scancode & 0x7F;
+        hcpp::u16 code = scancode & 0x7F;
+        ++event_count;
+        // PrintScreen (issue #131): set-1 PrtSc make is "E0 2A E0 37" and
+        // the break is "E0 B7 E0 AA". The extended 0x2A is a fake-shift
+        // pad byte that must neither light the real left-shift bit nor
+        // emit a spurious shift key event — swallow it outright. The E0
+        // prefix on 0x37 only ever comes from PrtSc (plain 0x37 is the
+        // keypad '*' key; Alt+PrtSc sends E0 37 without the pad), so it
+        // remaps to the synthetic key_prtsc code.
+        if (extended && code == 0x2A) {
+            return {0, 0, false, true, false};
+        }
+        if (extended && code == 0x37) {
+            code = key_prtsc;
+        }
         if (pressed)
             keybit_set(pressed_keys, code);
         else
             keybit_clear(pressed_keys, code);
         if (pressed && code == caps_lock_code) caps_lock = !caps_lock;
-        ++event_count;
 
         char ascii = 0;
         last_ascii = 0;
@@ -93,6 +106,8 @@ namespace hype::input {
                 return "right";
             case 80:
                 return "down";
+            case key_prtsc:
+                return "print screen";
             default:
                 return "key";
         }

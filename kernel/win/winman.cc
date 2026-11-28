@@ -12,6 +12,7 @@
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/overlay.h"
+#include "kernel/ui/screenshot.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
 #include "kernel/ui/widget.h"
@@ -54,6 +55,7 @@ namespace hype::win {
         // Set-1 scancodes used by the switcher.
         constexpr hcpp::u16 key_escape = 1;
         constexpr hcpp::u16 key_tab = 15;
+        constexpr hcpp::u16 key_ctrl = 29;
         constexpr hcpp::u16 key_alt = 56;
         // Titlebar hot-tracking part ids.
         constexpr hcpp::u8 hot_none = 0;
@@ -839,6 +841,14 @@ namespace hype::win {
                 }
             } else if (e.code == key_escape && switcher_open) {
                 alttab_close(false);
+            } else if (e.code == input::key_prtsc) {
+                // Screenshots (issue #131): PrtSc grabs the full desktop,
+                // Ctrl/Alt+PrtSc the focused window. The request only arms
+                // a flag — screenshot_pump() runs the encode+memfs write
+                // on the next desktop-loop pass, off the IRQ path.
+                hype::ui::screenshot_request(
+                    input::scancode_key_pressed(key_ctrl) ||
+                    input::scancode_key_pressed(key_alt));
             }
         }
 

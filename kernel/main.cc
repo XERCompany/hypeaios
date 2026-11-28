@@ -71,6 +71,7 @@
 #include "kernel/svc/revsvc.h"
 #include "kernel/time/rtc.h"
 #include "kernel/ui/deskbar.h"
+#include "kernel/ui/screenshot.h"
 #include "kernel/ui/selftest.h"
 #include "kernel/vfs/fat32.h"
 #include "kernel/vfs/hypeblob.h"
@@ -1095,6 +1096,11 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         } else {
             if (shell_active) {
                 hype::ui::deskbar_idle();
+                // Screenshots (issue #131): PrtSc arms a flag from the
+                // keyboard IRQ; the BMP encode + memfs write runs here,
+                // off the IRQ path, while the compositor surface still
+                // holds the frame that was on screen at press time.
+                hype::ui::screenshot_pump();
             }
             if (shell_active && hype::win::wm_dirty()) {
                 hype::input::cursor_erase(framebuffer);
