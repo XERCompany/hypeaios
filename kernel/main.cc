@@ -55,7 +55,10 @@
 #include "kernel/log/loggeru16550.h"
 #include "kernel/log/lmpu401.h"
 #include "kernel/log/lmpu401-trace.h"
+#include "kernel/net/dns.h"
 #include "kernel/net/net.h"
+#include "kernel/net/ntp.h"
+#include "kernel/net/ping.h"
 #include "kernel/panic.h"
 #include "kernel/rng/entropy.h"
 #include "kernel/runner/runnervx.h"
@@ -830,6 +833,16 @@ namespace {
         // Probe is graceful: prints "virtio-net dev=absent" and returns
         // without touching PMM queues or DHCP when no NIC is present.
         hype::net::net_initialize();
+        // Issue #120 selftests, each fully bounded: ICMP echo to the
+        // gateway ("ping gw=ok"), a real DNS A-record lookup
+        // ("dns example.com=<ip>|fail"), and SNTP against the DHCP
+        // option-42 server ("ntp utc=<ts>" or honest "ntp timeout=ok"
+        // under QEMU slirp, which has no NTP endpoint).
+        if (hype::net::net_ready()) {
+            hype::net::net_ping_selftest();
+            hype::net::dns_selftest();
+            hype::net::ntp_selftest();
+        }
     }
 
     void stage_input() noexcept {
