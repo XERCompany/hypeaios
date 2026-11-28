@@ -1,7 +1,6 @@
 #include "kernel/ui/widgets/panel.h"
 
 #include "kernel/font/hypefont.h"
-#include "kernel/gfx/hypegfx.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
@@ -103,11 +102,6 @@ namespace hype::ui {
         }
         const Theme& theme = theme_active();
         rui_panel(canvas, box, rui_elev_window);
-        if (rui_dark_surface()) {
-            hype::gfx::gfx_inner_glow_edge(
-                canvas, box.inset(Insets::uniform(1)),
-                static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
-        }
 
         const hcpp::i32 strip_h = title_bar_height();
         const Rect strip{box.x + 1, box.y + 1, box.w - 2, strip_h};

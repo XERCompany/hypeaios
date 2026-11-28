@@ -30,7 +30,10 @@ PSF2_HEADER_SIZE = 32
 PSF2_FLAG_UNICODE = 0x01
 
 # ------------------------------------------------- vendored font source ---
-# font8x8 basic latin (U+0020 - U+007E), 8 bytes per glyph, MSB-first rows.
+# font8x8 basic latin (U+0020 - U+007E), 8 bytes per glyph.
+# NOTE: upstream font8x8 rows are LSB-first (bit 0 = leftmost pixel) while
+# PSF2/HPF expect MSB-first (bit 7 = leftmost pixel). build_default_psf2()
+# bit-reverses every row byte on export — do not strip that step.
 # Author: Daniel Hepper, released into the Public Domain.
 # https://github.com/dhepper/font8x8/blob/master/font8x8_basic.h
 FONT8X8 = {
@@ -131,7 +134,8 @@ FONT8X8 = {
     0x7E: (0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00),  # '~'
 }
 
-# Cyrillic (U+0401, U+0410 - U+044F, U+0451), 8 bytes per glyph, MSB-first.
+# Cyrillic (U+0401, U+0410 - U+044F, U+0451), 8 bytes per glyph, LSB-first
+# (same bit order as the Latin table above).
 # Glyphs identical to a Latin letter reuse the font8x8_basic bitmap verbatim
 # (АВЕКМНОРСТХ аеорсху); the rest were drawn for HypeAI OS in the font8x8
 # style (caps on rows 0-6, lowercase on rows 2-6, descenders into row 7).
@@ -217,6 +221,15 @@ class FontcError(Exception):
 
 
 # ------------------------------------------------------------- PSF2 write ---
+def rev8(value):
+    """Reverse the bit order of one byte (LSB-first <-> MSB-first rows)."""
+    out = 0
+    for i in range(8):
+        if value & (1 << i):
+            out |= 1 << (7 - i)
+    return out
+
+
 def psf2_build(glyphs):
     """glyphs: list of (codepoints:list[int], rows:bytes). Returns PSF2 bytes."""
     if not glyphs:
@@ -248,10 +261,14 @@ def psf2_build(glyphs):
 
 
 def build_default_psf2():
-    """Vendored 8x16 font: font8x8 rows doubled vertically."""
+    """Vendored 8x16 font: font8x8 rows doubled vertically.
+
+    The FONT8X8 tables are LSB-first (font8x8 convention); PSF2 and HPF are
+    MSB-first, so every row byte is bit-reversed here. Forgetting rev8()
+    renders every glyph horizontally mirrored (issue #175)."""
     glyphs = []
     for cp in sorted(FONT8X8_ALL):
-        rows = bytes(b for row in FONT8X8_ALL[cp] for b in (row, row))
+        rows = bytes(rev8(b) for row in FONT8X8_ALL[cp] for b in (row, row))
         glyphs.append(([cp], rows))
     return psf2_build(glyphs)
 
@@ -562,15 +579,15 @@ def selftest():
     assert font["name"] == DEFAULT_FACE_NAME
     assert font["height"] == 16 and font["default_advance"] == 8
     assert len(font["glyphs"]) == len(FONT8X8_ALL) == 95 + 66
-    expected_a = bytes(x for r in FONT8X8[0x41] for x in (r, r))
+    expected_a = bytes(rev8(x) for r in FONT8X8[0x41] for x in (r, r))
     assert font["glyphs"][0x41]["bitmap"] == expected_a
     assert font["glyphs"][0x20]["bitmap"] == bytes(16)
     assert list(font["glyphs"])[0] == 0x20 and list(font["glyphs"])[-1] == 0x0451
     # Cyrillic round-trip: every required codepoint maps to its doubled rows.
     for cp in (0x0401, *range(0x0410, 0x0450), 0x0451):
-        expected = bytes(x for r in FONT8X8_CYRILLIC[cp] for x in (r, r))
+        expected = bytes(rev8(x) for r in FONT8X8_CYRILLIC[cp] for x in (r, r))
         assert font["glyphs"][cp]["bitmap"] == expected, f"U+{cp:04X} mismatch"
-    expected_pe = bytes(x for r in FONT8X8_CYRILLIC[0x041F] for x in (r, r))
+    expected_pe = bytes(rev8(x) for r in FONT8X8_CYRILLIC[0x041F] for x in (r, r))
     assert font["glyphs"][0x041F]["bitmap"] == expected_pe
 
     # 3) If the vendored .psfu exists, it must parse identically.

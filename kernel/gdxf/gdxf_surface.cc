@@ -11,6 +11,12 @@ namespace hype::gdxf {
     namespace {
 
         void blt_rect(const hype::ui::Rect& rect) noexcept {
+            hcpp::graphics::Framebuffer& out =
+                g_gdxf.present_fb != nullptr ? *g_gdxf.present_fb
+                                             : g_gdxf.scanout;
+            if (!out.valid()) {
+                return;
+            }
             const hype::ui::Rect surface_bounds{
                 0, 0, static_cast<hcpp::i32>(g_gdxf.surf_w),
                 static_cast<hcpp::i32>(g_gdxf.surf_h)};
@@ -22,8 +28,8 @@ namespace hype::gdxf {
                 g_gdxf.present_dst.x + clipped.x,
                 g_gdxf.present_dst.y + clipped.y, clipped.w, clipped.h};
             const hype::ui::Rect screen{
-                0, 0, static_cast<hcpp::i32>(g_gdxf.scanout.width()),
-                static_cast<hcpp::i32>(g_gdxf.scanout.height())};
+                0, 0, static_cast<hcpp::i32>(out.width()),
+                static_cast<hcpp::i32>(out.height())};
             const hype::ui::Rect on = dst.intersection(screen);
             if (on.empty()) {
                 return;
@@ -37,10 +43,10 @@ namespace hype::gdxf {
                 const hcpp::i32 dy = on.y + y;
                 for (hcpp::i32 x = 0; x < on.w; ++x) {
                     const hcpp::u32 px = src[x];
-                    g_gdxf.scanout.put_pixel(
+                    out.put_pixel(
                         static_cast<hcpp::u32>(on.x + x),
                         static_cast<hcpp::u32>(dy),
-                        g_gdxf.scanout.encode_rgb(
+                        out.encode_rgb(
                             static_cast<hcpp::u8>(px >> 16),
                             static_cast<hcpp::u8>(px >> 8),
                             static_cast<hcpp::u8>(px)));
@@ -150,7 +156,8 @@ namespace hype::gdxf {
         return g_gdxf.initialized && !g_gdxf.windowed;
     }
 
-    bool gdxf_bind_window(hype::ui::Rect dst) noexcept {
+    bool gdxf_bind_window(hype::ui::Rect dst,
+                          hcpp::graphics::Framebuffer* target) noexcept {
         if (!g_gdxf.initialized || dst.empty()) {
             return false;
         }
@@ -160,11 +167,13 @@ namespace hype::gdxf {
         }
         g_gdxf.windowed = true;
         g_gdxf.present_dst = dst;
+        g_gdxf.present_fb = target;
         return true;
     }
 
     void gdxf_unbind_window() noexcept {
         g_gdxf.windowed = false;
+        g_gdxf.present_fb = nullptr;
         g_gdxf.present_dst = hype::ui::Rect{
             0, 0, static_cast<hcpp::i32>(g_gdxf.scanout.width()),
             static_cast<hcpp::i32>(g_gdxf.scanout.height())};
