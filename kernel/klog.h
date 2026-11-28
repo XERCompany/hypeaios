@@ -2,6 +2,7 @@
 
 #include "hcpp/string_view.hpp"
 #include "hcpp/types.hpp"
+#include "kernel/log/kring.h"
 #include "kernel/serial.hpp"
 #include "kernel/time/timer.h"
 
@@ -46,15 +47,26 @@ namespace klog {
             return;
         }
         if (timestamps_ref()) {
+            // The raw tap keeps the "T+<ms>ms " prefix in the ring; it
+            // lands just before the canonical line written below.
             serial::write("T+");
             serial::write_dec32(static_cast<hcpp::u32>(hype::time::uptime_ms()));
             serial::write("ms ");
         }
+        // Suspend the raw serial->kring tap for this line's serial
+        // bytes: kring_line() below records the line once, in canonical
+        // form, so it must not also land via kring_putc().
+        kring::kring_tap_begin();
         serial::write_char('[');
         serial::write(tag);
         serial::write("] ");
         serial::write(message);
         serial::write("\r\n");
+        kring::kring_tap_end();
+        // Permanent internal tap: every klog line goes into the 64 KiB
+        // crash ring (kernel/log/kring.cc). Deliberately separate from
+        // set_sink() — that slot stays free for revsvc.
+        kring::kring_line(static_cast<hcpp::u8>(level), tag, message);
         const Sink sink = sink_ref();
         if (sink != nullptr) {
             sink(level, tag, message);

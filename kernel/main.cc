@@ -50,6 +50,8 @@
 #include "kernel/input/scancode.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/klog.h"
+#include "kernel/log/crashdump.h"
+#include "kernel/log/kring.h"
 #include "kernel/log/logger.h"
 #include "kernel/log/logger-dummy.h"
 #include "kernel/log/loggeru16550.h"
@@ -607,6 +609,11 @@ namespace {
         serial::write(" sync=");
         serial::write_line(sync_ok ? "ok" : "fail");
 
+        // Crash-dump selftest (issue #119): exercises the same
+        // fs_write + hypeblob_sync pipeline panic() uses, then removes
+        // the probe file so U: stays clean. Prints "crash test=ok".
+        hype::crashdump_test();
+
         // MP3 load+decode test: read the embedded payload track through vfs
         // and decode it via the codec path into a PMM-backed PCM buffer.
         static const char mp3_test_path[] = "HYPEOS://U/music/test.mp3";
@@ -860,6 +867,11 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         (*fn)();
     }
     serial::initialize();
+    // Crash-ring marker (issue #119): the 64 KiB klog ring is live from
+    // this point — every serial line below (and every klog line) is
+    // mirrored into it for the panic crash dump.
+    serial::write_line("kring size=64K");
+    kring::kring_mark("boot");
     if (has_framebuffer) {
         serial::write_line("boot fb=black");
     }
