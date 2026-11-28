@@ -65,6 +65,7 @@
 #include "kernel/video/videov4lv.h"
 #include "kernel/win/deskman.h"
 #include "kernel/win/winman.h"
+#include "kernel/xdp/xdp.h"
 
 using InitArrayFunction = void (*)();
 extern "C" InitArrayFunction __init_array_start[];
@@ -877,6 +878,22 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
         {"gdxf", 99, stage_gdxf},
     };
     hype::boot::bootseq_run(boot_steps, 12);
+
+    // XDP render manager (issue #108): probe the backend ladder
+    // (software -> virtio-gpu -> bare Vulkan/OpenCL-class GPUs), bind
+    // the VBE scanout and allocate the compositor surface desk_paint
+    // renders into. PCI scan + PMM are both live by now (runtime::boot
+    // ran inside stage_boot_devices).
+    if (has_framebuffer) {
+        hype::xdp::xdp_init(
+            reinterpret_cast<volatile hcpp::u8 *>(
+                static_cast<hcpp::uintptr_t>(boot_info->framebuffer)),
+            framebuffer, boot_info->bits_per_pixel,
+            boot_info->red_position, boot_info->green_position,
+            boot_info->blue_position);
+    } else {
+        serial::write_line("xdp core=skip nofb");
+    }
 
     if (boot_info == nullptr || boot_info->magic != HYPEBOOT_MAGIC) {
         klog::err("boot", "boot info missing or invalid");
