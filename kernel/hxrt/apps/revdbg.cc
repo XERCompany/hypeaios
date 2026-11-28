@@ -210,10 +210,15 @@ namespace hype::hxrt {
             dbg_layout = false;
         }
 
+        void revdbg_click(AppCtx& ctx, hcpp::i32 x, hcpp::i32 y) noexcept {
+            (void)ctx;
+            dbg_click(x, y);
+        }
+
         const HxerHeader desc = {
             hxer_magic, 1, static_cast<hcpp::u8>(HxerKind::System), 0,
             "RevDBGService", "HYPEOS://S/apps/RevDBGService.hxersys",
-            revdbg_entry, revdbg_close};
+            revdbg_entry, revdbg_close, revdbg_click};
 
     }
 

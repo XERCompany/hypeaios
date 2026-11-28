@@ -693,6 +693,10 @@ namespace {
         hype::svc::svc_register("ac97", svc_ac97_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("es1370", svc_es1370_start, nullptr, SvcRestart::OnFail, true);
         hype::svc::svc_register("video", svc_video_start, nullptr, SvcRestart::OnFail, true);
+        hype::svc::svc_attach_klog();
+        serial::write("revsvc registered=");
+        serial::write_dec32(static_cast<hcpp::u32>(hype::svc::svc_count()));
+        serial::write("\r\n");
         const hcpp::u32 started = hype::svc::svc_autostart();
         serial::write("svc autostart=");
         serial::write_dec32(started);
@@ -956,8 +960,16 @@ extern "C" void hype_kernel_main(BootInfo *boot_info) noexcept {
     if (hype::input::keyring_count() != 0) serial::write_char(hype::input::keyring_peek(0));
     serial::write("\r\n");
     serial::write_line("cursor poll=active");
+    hcpp::u64 dbg_refresh_tick = hype::interrupts::pit_ticks();
     for (;;) {
         const bool ptr_dirty = hype::input::cursor_poll();
+        // RevDBGService auto-refresh: repaint its window every ~30 ticks so
+        // service state/log changes surface without user input.
+        const hcpp::u64 loop_ticks = hype::interrupts::pit_ticks();
+        if (loop_ticks - dbg_refresh_tick >= 30) {
+            dbg_refresh_tick = loop_ticks;
+            hype::win::wm_invalidate_app("RevDBGService");
+        }
         const bool locked = hype::session::session_locked();
         const bool shell_active = hype::session::session_logged_in();
         if (locked) {

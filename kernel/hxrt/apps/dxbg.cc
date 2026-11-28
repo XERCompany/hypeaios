@@ -371,7 +371,8 @@ namespace hype::hxrt {
         const HxerHeader desc = {
             hxer_magic, 1, static_cast<hcpp::u8>(HxerKind::User), 0,
             "DXBackgroundDesktop",
-            "HYPEOS://U/apps/DXBackgroundDesktop.hxer", dxbg_entry, dxbg_close};
+            "HYPEOS://U/apps/DXBackgroundDesktop.hxer", dxbg_entry, dxbg_close,
+            nullptr};
 
     }
 

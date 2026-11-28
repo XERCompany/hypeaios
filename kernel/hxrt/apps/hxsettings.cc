@@ -50,7 +50,7 @@ namespace hype::hxrt {
         const HxerHeader desc = {
             hxer_magic, 1, static_cast<hcpp::u8>(HxerKind::System), 0,
             "HxSettings", "HYPEOS://S/apps/HxSettings.hxersys",
-            hxsettings_entry, hxsettings_close};
+            hxsettings_entry, hxsettings_close, nullptr};
 
     }
 

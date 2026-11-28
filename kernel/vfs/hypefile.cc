@@ -89,7 +89,7 @@ namespace {
         hype::hxrt::hxer_magic, 1,
         static_cast<hcpp::u8>(HxerKind::User), 0,
         "hxf_probe", "HYPEOS://U/apps/hxf_probe.hxer",
-        selftest_entry, nullptr};
+        selftest_entry, nullptr, nullptr};
 
 }
 

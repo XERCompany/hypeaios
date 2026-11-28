@@ -33,7 +33,7 @@ namespace hype::hxrt {
         const HxerHeader selftest_app = {
             hxer_magic, 1, static_cast<hcpp::u8>(HxerKind::System), 0,
             "hxrt_selftest", "HYPEOS://S/apps/hxrt_selftest.hxersys",
-            selftest_entry, selftest_close};
+            selftest_entry, selftest_close, nullptr};
 
     }
 

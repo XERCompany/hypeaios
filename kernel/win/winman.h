@@ -61,6 +61,7 @@ namespace hype::win {
     bool wm_snap(hcpp::u32 id, SnapZone zone) noexcept;
     void wm_paint(hcpp::graphics::Framebuffer& fb) noexcept;
     void wm_invalidate(hype::ui::Rect region) noexcept;
+    void wm_invalidate_app(const char* app_name) noexcept;
     void wm_invalidate_all() noexcept;
     bool wm_dirty() noexcept;
     hype::ui::Rect wm_damage_clip(hype::ui::Rect bounds) noexcept;
