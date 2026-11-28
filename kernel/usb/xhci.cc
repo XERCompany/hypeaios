@@ -11,8 +11,10 @@
 // OUT/IN endpoint pairs for mass-storage class (0x08/0x06/0x50), and hub
 // devices (device/interface class 0x09) whose downstream ports are
 // enumerated through usbhub.cc with route strings + TT fields in the
-// slot context. Single polled event ring, no MSI, <= 8 slots (shared by
-// all devices incl. hubs), no hot-removal. Devices are enumerated during
+// slot context. UAC1 audio devices (class 01) bind through usbuac.cc
+// and use the isoch-OUT path added below (Isoch TRBs with SIA + IOC,
+// one TD per 1 ms frame). Single polled event ring, no MSI, <= 8
+// slots (shared by all devices incl. hubs), no hot-removal. Devices are enumerated during
 // init; afterwards the interrupt-IN rings stay armed and usb_poll()
 // (called from input::cursor_poll) turns completion events into the same
 // key/ptr counters PS/2 feeds.
@@ -27,6 +29,7 @@
 
 #include "kernel/usb/usbhub.h"
 #include "kernel/usb/usbmsc.h"
+#include "kernel/usb/usbuac.h"
 #include "kernel/usb/xhci_host.h"
 
 #include "kernel/arch/x86/cpu.h"
@@ -91,6 +94,7 @@ namespace hype::usb {
         constexpr hcpp::u8 trb_type_setup = 2;
         constexpr hcpp::u8 trb_type_data = 3;
         constexpr hcpp::u8 trb_type_status = 4;
+        constexpr hcpp::u8 trb_type_isoch = 5;
         constexpr hcpp::u8 trb_type_link = 6;
         constexpr hcpp::u8 trb_type_enable_slot = 9;
         constexpr hcpp::u8 trb_type_address_device = 11;
@@ -111,6 +115,9 @@ namespace hype::usb {
         constexpr hcpp::u32 trb_trt_none = 0u << 16;
         constexpr hcpp::u32 trb_trt_out = 2u << 16;
         constexpr hcpp::u32 trb_trt_in = 3u << 16;
+        // Isoch TRB: SIA (Start Isoch ASAP, control bit 31) lets the xHC
+        // pick the frame; TBC/TLBPC stay 0 (one packet per TD).
+        constexpr hcpp::u32 trb_sia = 1u << 31;
 
         constexpr hcpp::u8 code_success = 1;
         constexpr hcpp::u8 code_short_packet = 13;
@@ -118,6 +125,7 @@ namespace hype::usb {
         // the bounded wait expires (not a real xHCI completion code).
         constexpr hcpp::u8 code_wait_timeout = 0xFE;
 
+        constexpr hcpp::u8 ep_type_isoch_out = 1;
         constexpr hcpp::u8 ep_type_bulk_out = 2;
         constexpr hcpp::u8 ep_type_control = 4;
         constexpr hcpp::u8 ep_type_bulk_in = 6;
@@ -182,6 +190,7 @@ namespace hype::usb {
             Other = 3,
             Hub = 4,
             Mass = 5,
+            Audio = 6,
         };
 
     }  // namespace
@@ -225,6 +234,10 @@ namespace hype::usb {
         hcpp::u16 bulk_in_mps;
         Ring bulk_out;
         Ring bulk_in;
+        // UAC isochronous-OUT endpoint (usbuac).
+        hcpp::u8 iso_dci;
+        hcpp::u16 iso_mps;
+        Ring iso;
         hcpp::u8 prev_keys[6];
         hcpp::u8 prev_mods;
     };
@@ -593,6 +606,15 @@ namespace hype::usb {
         void handle_transfer_event(const Trb &t) noexcept {
             Device *dev = device_for_slot(trb_slot(t));
             if (dev == nullptr) return;
+            if (dev->kind == DevKind::Audio) {
+                // UAC isoch-OUT completions: usbuac counts them while a
+                // bounded stream burst is in flight; the TDs are not
+                // reposted here (each burst is self-contained).
+                if (trb_endpoint(t) == dev->iso_dci) {
+                    usbuac::uac_iso_done(dev, trb_code(t));
+                }
+                return;
+            }
             if (trb_endpoint(t) != dev->ep_dci ||
                 (dev->kind != DevKind::Keyboard && dev->kind != DevKind::Mouse)) {
                 return;  // EP0 events are consumed by wait_event() above.
@@ -754,6 +776,16 @@ namespace hype::usb {
             // Hub (interface class 09).
             bool hub_found;
             hcpp::u8 hub_iface;
+            // USB Audio (UAC1): AudioControl interface (class 01 /
+            // subclass 01) plus an AudioStreaming interface (01/02)
+            // carrying at least one isoch-OUT endpoint across its alt
+            // settings. Format/alt-setting parsing is usbuac.cc's job.
+            bool uac_found;
+            bool uac_ac_seen;
+            bool uac_as_seen;
+            bool uac_iso_out;
+            hcpp::u8 uac_ac_iface;
+            hcpp::u8 uac_as_iface;
         };
 
         // Walk a fetched config descriptor, recording the first
@@ -783,6 +815,14 @@ namespace hype::usb {
                         out.hub_found = true;
                         out.hub_iface = iface_num;
                     }
+                    if (cls == 1 && sub == 1 && !out.uac_ac_seen) {
+                        out.uac_ac_seen = true;
+                        out.uac_ac_iface = iface_num;
+                    }
+                    if (cls == 1 && sub == 2 && !out.uac_as_seen) {
+                        out.uac_as_seen = true;
+                        out.uac_as_iface = iface_num;
+                    }
                 } else if (btype == 5 && i + 6 < len) {  // endpoint
                     const hcpp::u8 addr = d[i + 2];
                     const hcpp::u8 attr = d[i + 3] & 0x03;
@@ -807,11 +847,18 @@ namespace hype::usb {
                             out.msc_out_ep = static_cast<hcpp::u8>(addr & 0x0F);
                             out.msc_out_mps = mps;
                         }
+                    } else if (attr == 1 && cls == 1 && sub == 2 &&
+                               (addr & 0x80) == 0) {
+                        // Isoch-OUT endpoint on an AudioStreaming
+                        // interface (any alt setting).
+                        out.uac_iso_out = true;
                     }
                 }
                 i = static_cast<hcpp::u32>(i + blen);
             }
             out.msc_found = out.msc_in_ep != 0 && out.msc_out_ep != 0;
+            out.uac_found =
+                out.uac_ac_seen && out.uac_as_seen && out.uac_iso_out;
             return out;
         }
 
@@ -1014,6 +1061,22 @@ namespace hype::usb {
                     return false;
                 }
                 usbmsc::msc_bind(dev, dev->iface);
+                return true;
+            }
+
+            // USB Audio Class: AC + AS with an isoch-OUT endpoint.
+            // usbuac.cc parses the class-specific descriptors itself
+            // from the config blob still sitting in ctrl_buf, picks a
+            // PCM alt setting, arms the isoch pipe via host_iso_arm()
+            // and streams a burst of 1 ms TDs.
+            if (scan.uac_found) {
+                dev->kind = DevKind::Audio;
+                dev->iface = scan.uac_ac_iface;
+                if (!set_configuration(*dev, scan.config_value)) {
+                    fail_step = 18;
+                    return false;
+                }
+                usbuac::uac_bind(dev, ctrl_buf, total);
                 return true;
             }
 
@@ -1267,6 +1330,51 @@ namespace hype::usb {
                          static_cast<hcpp::u8>(dev->depth + 1));
     }
 
+    bool host_iso_arm(HostDevice *dev, hcpp::u8 ep_num, hcpp::u16 mps,
+                      hcpp::u8 binterval) noexcept {
+        if (dev == nullptr || ep_num == 0 || ep_num > 15 || mps == 0 ||
+            dev->iso_dci != 0) {
+            return false;
+        }
+        if (!ring_init(dev->iso)) return false;
+        dev->iso_dci = static_cast<hcpp::u8>(ep_num * 2);  // OUT ep DCI
+        dev->iso_mps = mps;
+        // xHCI EP-context Interval for isoch endpoints is bInterval - 1
+        // (unlike the log2 encoding interrupt endpoints use).
+        const hcpp::u8 interval =
+            static_cast<hcpp::u8>(binterval == 0 ? 0 : binterval - 1);
+        zero_page(input_ctx_phys);
+        volatile hcpp::u32 *ctl = ctx_dwords(input_ctx_phys, 0);
+        ctl[1] = (1u << 0) | (1u << dev->iso_dci);
+        fill_slot_ctx(input_ctx_phys, *dev, dev->iso_dci);
+        fill_ep_ctx(input_ctx_phys, dev->iso_dci + 1, ep_type_isoch_out,
+                    mps, interval, dev->iso.phys, mps, mps);
+        hcpp::u8 code = 0;
+        if (!run_command(trb_type_configure_ep, input_ctx_phys, 0,
+                         dev->slot_id, &code) ||
+            code != code_success) {
+            dev->iso_dci = 0;
+            return false;
+        }
+        return true;
+    }
+
+    bool host_iso_queue(HostDevice *dev, hcpp::u64 phys,
+                        hcpp::u32 len) noexcept {
+        if (dev == nullptr || dev->iso_dci == 0 || len == 0 ||
+            len > 0x1FFFFu) {
+            return false;
+        }
+        ring_push(dev->iso, phys, len,
+                  (hcpp::u32(trb_type_isoch) << 10) | trb_ioc | trb_sia);
+        return true;
+    }
+
+    void host_iso_kick(HostDevice *dev) noexcept {
+        if (dev == nullptr || dev->iso_dci == 0) return;
+        ring_doorbell(dev->slot_id, dev->iso_dci);
+    }
+
     hcpp::u64 host_scratch() noexcept { return ctrl_buf_phys; }
 
     bool usb_initialize() noexcept {
@@ -1280,12 +1388,14 @@ namespace hype::usb {
         const pci::PciDevice *pdev = pci::find_class(0x0C, 0x03);
         if (pdev == nullptr || pdev->program_interface != 0x30) {
             serial::write_line("xhci dev=absent");
+            serial::write_line("uac dev=absent");
             return true;  // graceful: PS/2 input path keeps working
         }
         if (!controller_init(*pdev)) {
             serial::write("xhci dev=fail s=");
             serial::write_dec32(fail_step);
             serial::write("\r\n");
+            serial::write_line("uac dev=absent");
             return true;  // never fail the boot over USB
         }
         present = true;
@@ -1304,6 +1414,9 @@ namespace hype::usb {
                 static_cast<hcpp::u8>((portsc(port) >> 10) & 0x0F);
             enumerate_device(static_cast<hcpp::u8>(port), speed,
                              static_cast<hcpp::u8>(port), 0, 0, 0, 0);
+        }
+        if (!usbuac::uac_device_seen()) {
+            serial::write_line("uac dev=absent");
         }
         return true;
     }
