@@ -16,6 +16,14 @@ extern "C" hcpp::uintptr_t isr_stub_table[];
 namespace hype::interrupts {
     namespace {
         IdtEntry entries[256];
+        struct VectorEntry {
+            kernel::IrqHandler handler;
+            void* context;
+        };
+        // Secondary handler table for vectors 48..255 (MSI/MSI-X etc.),
+        // indexed by vector. Consulted by interrupt_handle() after the
+        // legacy 32..47 IRQ path.
+        VectorEntry vector_entries[256];
         bool initialized;
         volatile hcpp::u64 ticks;
         void set_gate(hcpp::size_t index, hcpp::uintptr_t handler) noexcept {
@@ -43,6 +51,13 @@ namespace hype::interrupts {
             // EOI goes to the LAPIC when the APIC path is live and to
             // the 8259 pair otherwise; handlers stay agnostic.
             x86::apic_send_eoi(static_cast<hcpp::u8>(vector - 32));
+        } else if (vector >= 48) {
+            // Secondary dispatch: MSI/MSI-X vectors land here. The LAPIC
+            // EOI is sent whether or not a handler was registered so a
+            // stray message-signalled interrupt cannot wedge the APIC.
+            const VectorEntry& entry = vector_entries[vector];
+            if (entry.handler != nullptr) entry.handler(entry.context, static_cast<hcpp::u32>(vector));
+            x86::apic_lapic_eoi();
         } else if (vector < 32) {
             // CPU faults re-execute the faulting instruction on iret,
             // so returning here would re-fault forever. Route every
@@ -57,7 +72,17 @@ namespace hype::interrupts {
             panic_exception(*regs);
         }
     }
+    bool idt_vector_register(hcpp::u8 vector, kernel::IrqHandler handler, void* context) noexcept {
+        if (vector < 48 || handler == nullptr) return false;
+        vector_entries[vector] = {handler, context};
+        return true;
+    }
+    void idt_vector_unregister(hcpp::u8 vector) noexcept {
+        if (vector < 48) return;
+        vector_entries[vector] = {};
+    }
     void idt_initialize() noexcept {
+        for (auto& entry : vector_entries) entry = {};
         for (hcpp::size_t i = 0; i < 256; ++i) set_gate(i, reinterpret_cast<hcpp::uintptr_t>(isr_stub_table[i]));
         const IdtPointer pointer{sizeof(entries) - 1, reinterpret_cast<hcpp::u64>(entries)};
         asm volatile("lidt %0" ::"m"(pointer));

@@ -312,4 +312,12 @@ namespace hype::x86 {
     hcpp::u8 apic_gsi_vector(hcpp::u32 gsi) noexcept {
         return gsi < max_tracked_gsis ? gsi_vector[gsi] : 0;
     }
+
+    hcpp::u32 apic_lapic_id() noexcept {
+        return lapic != nullptr ? lapic_read(lapic_reg_id) >> 24 : 0;
+    }
+
+    void apic_lapic_eoi() noexcept {
+        if (lapic != nullptr) lapic[lapic_reg_eoi / 4] = 0;
+    }
 }  // namespace hype::x86

@@ -1,5 +1,6 @@
 #pragma once
 #include "hcpp/types.hpp"
+#include "kernel/irq.h"
 namespace hype::interrupts {
     struct IdtEntry {
         hcpp::u16 offset_low;
@@ -19,6 +20,13 @@ namespace hype::interrupts {
     // Unmasks a legacy IRQ on whichever controller is live: the 8259
     // pair, or the IOAPIC once x86::apic_initialize() has switched over.
     void irq_enable(hcpp::u8 irq) noexcept;
+    // Secondary dispatch table for vectors 48..255 (MSI/MSI-X and
+    // other non-legacy interrupt sources; the irq_dispatch table only
+    // covers the 16 legacy lines on vectors 32..47). The handler gets
+    // the vector number as its irq argument; a LAPIC EOI is sent after
+    // the handler returns. Registration fails for vectors < 48.
+    bool idt_vector_register(hcpp::u8 vector, kernel::IrqHandler handler, void* context) noexcept;
+    void idt_vector_unregister(hcpp::u8 vector) noexcept;
     void pit_initialize(hcpp::u32 frequency) noexcept;
     void keyboard_initialize() noexcept;
     void mouse_initialize() noexcept;

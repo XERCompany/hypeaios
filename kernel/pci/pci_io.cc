@@ -1,10 +1,17 @@
 #include "kernel/pci/pci_io.h"
 namespace hype::pci {
-    void config_write16(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u8 offset, hcpp::u16 value) noexcept {
-        const hcpp::u8 aligned = offset & ~3;
-        const hcpp::u8 shift = (offset & 2) * 8;
+    void config_write16(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u16 offset, hcpp::u16 value) noexcept {
+        const hcpp::u16 aligned = static_cast<hcpp::u16>(offset & ~3u);
+        const hcpp::u8 shift = static_cast<hcpp::u8>((offset & 2) * 8);
         hcpp::u32 value32 = config_read32(bus, slot, function, aligned);
         value32 = (value32 & ~(hcpp::u32(0xFFFF) << shift)) | (hcpp::u32(value) << shift);
+        config_write32(bus, slot, function, aligned, value32);
+    }
+    void config_write8(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u16 offset, hcpp::u8 value) noexcept {
+        const hcpp::u16 aligned = static_cast<hcpp::u16>(offset & ~3u);
+        const hcpp::u8 shift = static_cast<hcpp::u8>((offset & 3) * 8);
+        hcpp::u32 value32 = config_read32(bus, slot, function, aligned);
+        value32 = (value32 & ~(hcpp::u32(0xFF) << shift)) | (hcpp::u32(value) << shift);
         config_write32(bus, slot, function, aligned, value32);
     }
     hcpp::u32 bar_read(const PciDevice& device, hcpp::u8 index) noexcept { return bar(device, index); }
@@ -43,6 +50,11 @@ namespace hype::pci {
         const hcpp::u16 command = config_read16(device.bus, device.slot, device.function, 0x04);
         config_write16(device.bus, device.slot, device.function, 0x04,
                        static_cast<hcpp::u16>(command | bits));
+    }
+    void pci_clear_command(const PciDevice& device, hcpp::u16 bits) noexcept {
+        const hcpp::u16 command = config_read16(device.bus, device.slot, device.function, 0x04);
+        config_write16(device.bus, device.slot, device.function, 0x04,
+                       static_cast<hcpp::u16>(command & ~bits));
     }
     void pci_enable_busmaster(const PciDevice& device) noexcept { pci_set_command(device, command_bus_master); }
     void pci_enable_mem(const PciDevice& device) noexcept { pci_set_command(device, command_memory); }

@@ -1,6 +1,7 @@
 #include "kernel/pci/pci_msi.h"
 
 #include "kernel/pci/pci_io.h"
+#include "kernel/serial.hpp"
 namespace hype::pci {
     bool msi_supported(const PciDevice& device) noexcept { return find_capability(device, capability_msi) != 0; }
     bool msi_read(const PciDevice& device, MsiConfig& output) noexcept {
@@ -32,6 +33,24 @@ namespace hype::pci {
         if (!pos) return false;
         const hcpp::u16 control = config_read16(device.bus, device.slot, device.function, pos + 2);
         config_write16(device.bus, device.slot, device.function, pos + 2, control & ~hcpp::u16(1));
+        if (PciDevice *entry = device_lookup(device.bus, device.slot, device.function); entry != nullptr)
+            entry->msi_enabled = false;
+        return true;
+    }
+    bool pci_msi_setup(const PciDevice& device, hcpp::u8 vector, hcpp::u32 lapic_id) noexcept {
+        if (!msi_supported(device)) return false;
+        // xAPIC interrupt-message address: 0xFEE00000 base, physical
+        // destination id in bits [19:12]. Data: fixed delivery mode,
+        // physical destination, edge triggered => vector only.
+        const hcpp::u64 address = 0xFEE00000ull | (hcpp::u64(lapic_id & 0xFF) << 12);
+        if (!msi_enable(device, address, vector)) return false;
+        if (PciDevice *entry = device_lookup(device.bus, device.slot, device.function); entry != nullptr) {
+            entry->msi_enabled = true;
+            entry->irq_vector = vector;
+        }
+        serial::write("msi setup=ok vec=");
+        serial::write_dec32(vector);
+        serial::write("\r\n");
         return true;
     }
 }  // namespace hype::pci

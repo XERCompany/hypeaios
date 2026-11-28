@@ -1,5 +1,7 @@
 #include "kernel/pci/pci.h"
 
+#include "kernel/acpi/mcfg.h"
+#include "kernel/pci/pci_capability.h"
 #include "kernel/pci/pci_io.h"
 #include "kernel/serial.hpp"
 
@@ -17,9 +19,9 @@ namespace hype::pci {
             asm volatile("inl %1, %0" : "=a"(value) : "Nd"(port));
             return value;
         }
-        hcpp::u32 address(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u8 offset) noexcept {
+        hcpp::u32 address(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u16 offset) noexcept {
             return 0x80000000u | (hcpp::u32(bus) << 16) | (hcpp::u32(slot & 31) << 11) |
-                   (hcpp::u32(function & 7) << 8) | (offset & 0xFC);
+                   (hcpp::u32(function & 7) << 8) | (hcpp::u32(offset) & 0xFC);
         }
         bool bus_seen(hcpp::u8 bus) noexcept {
             return (visited_buses[bus >> 3] & hcpp::u8(1u << (bus & 7))) != 0;
@@ -76,17 +78,35 @@ namespace hype::pci {
             }
         }
     }  // namespace
-    hcpp::u32 config_read32(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u8 offset) noexcept {
+    bool ecam_available() noexcept { return acpi::mcfg_info().usable; }
+    hcpp::uintptr_t pci_ecam_addr(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function) noexcept {
+        const acpi::McfgSegment *segment = acpi::mcfg_segment_for_bus(bus);
+        if (segment == nullptr) return 0;
+        // base + ((bus - start) << 20) | (dev << 15) | (func << 12)
+        return static_cast<hcpp::uintptr_t>(segment->base) +
+               (hcpp::uintptr_t(bus - segment->bus_start) << 20) + (hcpp::uintptr_t(slot & 31) << 15) +
+               (hcpp::uintptr_t(function & 7) << 12);
+    }
+    hcpp::u32 config_read32(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u16 offset) noexcept {
+        const hcpp::uintptr_t ecam = pci_ecam_addr(bus, slot, function);
+        if (ecam != 0) return *reinterpret_cast<volatile hcpp::u32 *>(ecam + (offset & 0xFFCu));
+        if (offset > 0xFC) return 0xFFFFFFFFu;  // CF8/CFC cannot reach extended config space
         out32(config_address_port, address(bus, slot, function, offset));
         return in32(config_data_port);
     }
-    hcpp::u16 config_read16(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u8 offset) noexcept {
+    hcpp::u16 config_read16(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u16 offset) noexcept {
         return static_cast<hcpp::u16>(config_read32(bus, slot, function, offset) >> ((offset & 2) * 8));
     }
-    hcpp::u8 config_read8(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u8 offset) noexcept {
+    hcpp::u8 config_read8(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u16 offset) noexcept {
         return static_cast<hcpp::u8>(config_read32(bus, slot, function, offset) >> ((offset & 3) * 8));
     }
-    void config_write32(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u8 offset, hcpp::u32 value) noexcept {
+    void config_write32(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function, hcpp::u16 offset, hcpp::u32 value) noexcept {
+        const hcpp::uintptr_t ecam = pci_ecam_addr(bus, slot, function);
+        if (ecam != 0) {
+            *reinterpret_cast<volatile hcpp::u32 *>(ecam + (offset & 0xFFCu)) = value;
+            return;
+        }
+        if (offset > 0xFC) return;  // CF8/CFC cannot reach extended config space
         out32(config_address_port, address(bus, slot, function, offset));
         out32(config_data_port, value);
     }
@@ -94,6 +114,17 @@ namespace hype::pci {
         count = 0;
         bridge_count = 0;
         for (hcpp::u8 &entry : visited_buses) entry = 0;
+        // Bring up ECAM before the first probe. pci.scan runs before
+        // acpi.discover, so mcfg_initialize() may lazily locate the
+        // ACPI root tables here; either is fine.
+        acpi::mcfg_initialize();
+        if (acpi::mcfg_info().usable) {
+            serial::write("pci ecam=ok base=");
+            serial::write_hex64(acpi::mcfg_info().segments[0].base);
+            serial::write("\r\n");
+        } else {
+            serial::write_line("pci ecam=absent");
+        }
         scan_bus(0);
         serial::write("pci devs=");
         serial::write_dec32(static_cast<hcpp::u32>(count));
@@ -105,6 +136,17 @@ namespace hype::pci {
             bar_size_ok = pci_bar_size(*display, 0) != 0;
         serial::write("pci bar=size ");
         serial::write_line(bar_size_ok ? "ok" : "fail");
+        // Self-check the extended-config path on a virtio-net
+        // transitional device (0x1AF4:0x1041) when one is present:
+        // count its PCIe extended capabilities. Enumeration only —
+        // virtio keeps using its legacy INTx line for now.
+        if (const PciDevice *vnet = find(0x1AF4, 0x1041); vnet != nullptr) {
+            const hcpp::u16 caps = pcie_ext_cap_count(*vnet);
+            (void)pcie_caps_find(*vnet, pcie_ext_cap_aer);
+            serial::write("pcie caps=");
+            serial::write_dec32(caps);
+            serial::write("\r\n");
+        }
         return count;
     }
     const PciDevice *devices() noexcept { return found; }
@@ -122,5 +164,10 @@ namespace hype::pci {
     }
     hcpp::u32 bar(const PciDevice &device, hcpp::u8 index) noexcept {
         return index < 6 ? device.bars[index] : 0;
+    }
+    PciDevice *device_lookup(hcpp::u8 bus, hcpp::u8 slot, hcpp::u8 function) noexcept {
+        for (hcpp::size_t i = 0; i < count; ++i)
+            if (found[i].bus == bus && found[i].slot == slot && found[i].function == function) return &found[i];
+        return nullptr;
     }
 }  // namespace hype::pci

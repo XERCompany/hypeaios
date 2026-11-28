@@ -43,4 +43,14 @@ namespace hype::x86 {
     // IDT vector programmed for a GSI, or 0 when unrouted.
     hcpp::u8 apic_gsi_vector(hcpp::u32 gsi) noexcept;
 
+    // BSP LAPIC id (physical destination for MSI/MSI-X messages), or 0
+    // when the LAPIC MMIO window has not been mapped.
+    hcpp::u32 apic_lapic_id() noexcept;
+
+    // End-of-interrupt for message-signalled vectors (48..255): writes
+    // the LAPIC EOI register whenever the LAPIC is mapped. Unlike
+    // apic_send_eoi() it never falls back to the 8259 — MSI delivery
+    // does not involve the PIC at all.
+    void apic_lapic_eoi() noexcept;
+
 }  // namespace hype::x86
