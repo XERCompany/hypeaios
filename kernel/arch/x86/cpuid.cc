@@ -119,6 +119,10 @@ namespace hype::x86 {
                 return bit(current.leaf1_ecx, 24);
             case CpuFeature::Hypervisor:
                 return bit(current.leaf1_ecx, 31);
+            case CpuFeature::Rdrand:
+                return bit(current.leaf1_ecx, 30);
+            case CpuFeature::Rdseed:
+                return bit(current.leaf7_ebx, 18);
             case CpuFeature::Nx:
                 return bit(current.ext1_edx, 20);
             case CpuFeature::LongMode:

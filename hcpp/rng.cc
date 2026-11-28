@@ -6,6 +6,7 @@ namespace hcpp {
         constexpr u8 rdrand_max_retries = 16;
 
         RngBackend active_backend = RngBackend::Tsc;
+        RngProvider provider = nullptr;
         bool probed = false;
         bool seeded = false;
         u64 xorshift_state[4];
@@ -99,7 +100,16 @@ namespace hcpp {
         return active_backend;
     }
 
+    void rng_set_provider(RngProvider new_provider) noexcept {
+        provider = new_provider;
+    }
+
     u64 rng_u64() noexcept {
+        if (provider != nullptr) {
+            u64 value = 0;
+            provider(&value, sizeof(value));
+            return value;
+        }
         if (!probed) {
             probe();
         }
@@ -114,6 +124,10 @@ namespace hcpp {
     }
 
     void rng_fill(void* out, size_t bytes) noexcept {
+        if (provider != nullptr) {
+            provider(out, bytes);
+            return;
+        }
         auto* target = static_cast<u8*>(out);
         while (bytes != 0) {
             const u64 value = rng_u64();

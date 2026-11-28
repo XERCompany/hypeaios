@@ -57,6 +57,7 @@
 #include "kernel/log/lmpu401-trace.h"
 #include "kernel/net/net.h"
 #include "kernel/panic.h"
+#include "kernel/rng/entropy.h"
 #include "kernel/runner/runnervx.h"
 #include "kernel/runtime/runtime.h"
 #include "kernel/serial.hpp"
@@ -433,6 +434,8 @@ namespace {
         serial::write(hcpp::rng_backend() == hcpp::RngBackend::Rdrand ? "rdrand" : "tsc");
         serial::write(" selftest=");
         serial::write_line(hcpp::rng_selftest() ? "ok" : "failed");
+        // Entropy-pool selftest — prints "rng selftest=ok|failed".
+        hype::rng::rng_selftest();
         serial::write("ecdsa=");
         serial::write_line(hcpp::ecdsa_selftest() ? "ok" : "failed");
         const bool display_core_ok = hype::display::display_selftest();

@@ -18,6 +18,8 @@ namespace hype::x86 {
         XSave,
         TscDeadline,
         Hypervisor,
+        Rdrand,
+        Rdseed,
         Nx,
         LongMode,
         InvariantTsc,

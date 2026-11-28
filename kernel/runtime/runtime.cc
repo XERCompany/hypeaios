@@ -14,6 +14,7 @@
 #include "kernel/memory/pmm.h"
 #include "kernel/memory/vmm.h"
 #include "kernel/pci/pci.h"
+#include "kernel/rng/entropy.h"
 #include "kernel/sched/context.h"
 #include "kernel/sched/scheduler.h"
 #include "kernel/time/timer.h"
@@ -150,6 +151,14 @@ namespace hype::runtime {
             klog::set_timestamps(true);
             return true;
         }
+        bool rng_enter(void*) noexcept {
+            // Runs after pci.scan + memory.pmm (virtio-rng vring/buffer)
+            // and time.timer (uptime_ms backs the reseed interval).
+            // Never fails the boot: every source is optional hardware
+            // and the pool still seeds from weak stirs on a bare CPU.
+            rng::entropy_initialize();
+            return true;
+        }
         bool guard_enter(void*) noexcept {
             // Runs after sched.context (60): HypeGuard needs nothing
             // but serial — no memory, irq or fs dependency — and the
@@ -174,6 +183,7 @@ namespace hype::runtime {
         RuntimeStage kvm_stage{"kvm.vmx", 58, kvm_enter, nullptr, StageState::Pending};
         RuntimeStage firewire_stage{"firewire.ohci", 59, firewire_enter, nullptr, StageState::Pending};
         RuntimeStage context_stage{"sched.context", 60, context_enter, nullptr, StageState::Pending};
+        RuntimeStage rng_stage{"rng.entropy", 61, rng_enter, nullptr, StageState::Pending};
         RuntimeStage guard_stage{"guard.hypeguard", 62, guard_enter, nullptr, StageState::Pending};
     }  // namespace
 
@@ -194,6 +204,7 @@ namespace hype::runtime {
         register_stage(kvm_stage);
         register_stage(firewire_stage);
         register_stage(context_stage);
+        register_stage(rng_stage);
         register_stage(guard_stage);
         current.stages_registered = stage_count;
     }
