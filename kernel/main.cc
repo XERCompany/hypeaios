@@ -45,6 +45,7 @@
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hello/hello.h"
 #include "kernel/hxbvm/hxbc.h"
+#include "kernel/hypejs/hjs.h"
 #include "kernel/hxrt/apps/builtins.h"
 #include "kernel/hxrt/apps/dxbg.h"
 #include "kernel/hxrt/hxrt.h"
@@ -794,6 +795,10 @@ namespace {
         // hxbvm (issue #136): bytecode VM selftest + loads the seeded
         // U:/apps/hxdemo.hxbc and registers it as a .hxer app.
         hype::hxbvm::hxbvm_boot();
+        // HypeAIJS (issue #181): tokenizer + AST parser + tree-walking
+        // interpreter; prints "hjs engine=...", "hjs tests pass=N/N",
+        // "hjs eval=ok" and "hjs selftest=ok" on the serial log.
+        hype::hjs::hjs_boot();
         report("dxbg selftest=", hype::hxrt::dxbg_selftest());
         // Wallpaper restore (issue #130): deferred from settings_load()
         // in stage_vfs because the dxbg decode path needs the seeded
