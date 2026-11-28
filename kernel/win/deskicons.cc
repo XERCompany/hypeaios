@@ -1,5 +1,6 @@
 #include "kernel/win/deskicons.h"
 
+#include "kernel/cfg/settings.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/apps/dxbg.h"
 #include "kernel/hxrt/hxrt.h"
@@ -188,6 +189,10 @@ namespace hype::win {
                 if (hype::hxrt::dxbg_apply(path)) {
                     serial::write("wallpaper=");
                     serial::write_line(listing[i].name);
+                    // Persisted pref (issue #130): restored at next boot.
+                    hype::cfg::settings_set("desktop.wallpaper",
+                                            listing[i].name);
+                    hype::cfg::settings_request_save();
                 } else {
                     serial::write_line("wallpaper cycle=fail");
                 }
