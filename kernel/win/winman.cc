@@ -18,6 +18,7 @@
 #include "kernel/ui/screenshot.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
+#include "kernel/ui/uiscale.h"
 #include "kernel/ui/widget.h"
 #include "kernel/ui/widgets/commandpalette.h"
 #include "kernel/ui/widgets/contextmenu.h"
@@ -41,8 +42,9 @@ namespace hype::win {
         constexpr hcpp::i32 chrome_btn = 18;
         constexpr hcpp::i32 chrome_gap = 6;
         constexpr hcpp::i32 chrome_pad = 8;
-        // Windows-style caption buttons: ~26-30 px hit boxes, flush together.
-        constexpr hcpp::i32 ctl_btn_w = 30;
+        // Caption-dot hit boxes: 22 px cells keep the macOS traffic
+        // light trio tight (~10 px dots, ~12 px pitch).
+        constexpr hcpp::i32 ctl_btn_w = 22;
         constexpr hcpp::i32 ctl_btn_h = 24;
         // Aero Snap zones: edge proximity 16 px, corner boxes 32 px.
         constexpr hcpp::i32 snap_edge = 16;
@@ -188,25 +190,25 @@ namespace hype::win {
 
         Rect close_btn_rect(const Win& w) noexcept {
             const Rect strip = chrome_strip(w);
-            return {strip.right() - chrome_pad - ctl_btn_w,
-                    strip.y + (strip.h - ctl_btn_h) / 2, ctl_btn_w,
-                    ctl_btn_h};
+            return {strip.right() - ui::ui_px(chrome_pad) - ui::ui_px(ctl_btn_w),
+                    strip.y + (strip.h - ui::ui_px(ctl_btn_h)) / 2, ui::ui_px(ctl_btn_w),
+                    ui::ui_px(ctl_btn_h)};
         }
 
         Rect max_btn_rect(const Win& w) noexcept {
             const Rect close = close_btn_rect(w);
-            return {close.x - ctl_btn_w, close.y, ctl_btn_w, ctl_btn_h};
+            return {close.x - ui::ui_px(ctl_btn_w), close.y, ui::ui_px(ctl_btn_w), ui::ui_px(ctl_btn_h)};
         }
 
         Rect min_btn_rect(const Win& w) noexcept {
             const Rect max = max_btn_rect(w);
-            return {max.x - ctl_btn_w, max.y, ctl_btn_w, ctl_btn_h};
+            return {max.x - ui::ui_px(ctl_btn_w), max.y, ui::ui_px(ctl_btn_w), ui::ui_px(ctl_btn_h)};
         }
 
         Rect menu_btn_rect(const Win& w) noexcept {
             const Rect min = min_btn_rect(w);
-            return {min.x - chrome_gap - chrome_btn,
-                    min.y + (min.h - chrome_btn) / 2, chrome_btn, chrome_btn};
+            return {min.x - ui::ui_px(chrome_gap) - ui::ui_px(chrome_btn),
+                    min.y + (min.h - ui::ui_px(chrome_btn)) / 2, ui::ui_px(chrome_btn), ui::ui_px(chrome_btn)};
         }
 
         // Work area = screen minus the bottom deskbar band; maximize and
@@ -232,10 +234,10 @@ namespace hype::win {
         SnapZone zone_at(hcpp::i32 x, hcpp::i32 y) noexcept {
             const Rect area = work_area();
             // Corner boxes (2x edge threshold) take precedence over edges.
-            const bool near_l = x < area.x + snap_corner;
-            const bool near_r = x >= area.right() - snap_corner;
-            const bool near_t = y < area.y + snap_corner;
-            const bool near_b = y >= area.bottom() - snap_corner;
+            const bool near_l = x < area.x + ui::ui_px(snap_corner);
+            const bool near_r = x >= area.right() - ui::ui_px(snap_corner);
+            const bool near_t = y < area.y + ui::ui_px(snap_corner);
+            const bool near_b = y >= area.bottom() - ui::ui_px(snap_corner);
             if (near_l && near_t) {
                 return SnapZone::Nw;
             }
@@ -248,13 +250,13 @@ namespace hype::win {
             if (near_r && near_b) {
                 return SnapZone::Se;
             }
-            if (x < area.x + snap_edge) {
+            if (x < area.x + ui::ui_px(snap_edge)) {
                 return SnapZone::Left;
             }
-            if (x >= area.right() - snap_edge) {
+            if (x >= area.right() - ui::ui_px(snap_edge)) {
                 return SnapZone::Right;
             }
-            if (y < area.y + snap_edge) {
+            if (y < area.y + ui::ui_px(snap_edge)) {
                 return SnapZone::Top;
             }
             return SnapZone::None;
@@ -299,9 +301,9 @@ namespace hype::win {
         }
 
         Rect menu_rect_now() noexcept {
-            Rect r{menu_anchor.x, menu_anchor.y, menu_width,
-                   menu_pad * 2 +
-                       static_cast<hcpp::i32>(menu_item_count) * menu_item_h};
+            Rect r{menu_anchor.x, menu_anchor.y, ui::ui_px(menu_width),
+                   ui::ui_px(menu_pad) * 2 +
+                       static_cast<hcpp::i32>(menu_item_count) * ui::ui_px(menu_item_h)};
             if (r.right() > menu_screen.right() - 2) {
                 r.x = menu_screen.right() - 2 - r.w;
             }
@@ -322,7 +324,7 @@ namespace hype::win {
             if (!r.contains(p)) {
                 return -1;
             }
-            const hcpp::i32 idx = (p.y - r.y - menu_pad) / menu_item_h;
+            const hcpp::i32 idx = (p.y - r.y - ui::ui_px(menu_pad)) / ui::ui_px(menu_item_h);
             if (idx < 0 || idx >= static_cast<hcpp::i32>(menu_item_count)) {
                 return -1;
             }
@@ -371,12 +373,9 @@ namespace hype::win {
                                            : 16;
                 for (hcpp::u32 i = 0; i < menu_item_count; ++i) {
                     const Rect row{box.x + 1,
-                                   box.y + menu_pad +
-                                       static_cast<hcpp::i32>(i) * menu_item_h,
-                                   box.w - 2, menu_item_h};
-                    canvas.fill_rect(
-                        row, canvas.color(hype::ui::rui_lift(
-                                 theme.card, hype::ui::rui_elev_panel)));
+                                   box.y + ui::ui_px(menu_pad) +
+                                       static_cast<hcpp::i32>(i) * ui::ui_px(menu_item_h),
+                                   box.w - 2, ui::ui_px(menu_item_h)};
                     hcpp::i32 top = row.y + (row.h - line) / 2;
                     if (top < row.y) {
                         top = row.y;
@@ -501,6 +500,47 @@ namespace hype::win {
             }
         }
 
+        // Caption-dot kinds for paint_caption_dot.
+        constexpr hcpp::u8 dot_min = 0;
+        constexpr hcpp::u8 dot_max = 1;
+        constexpr hcpp::u8 dot_close = 2;
+
+        // macOS-style caption dots (reskin v2): a traffic-light trio at
+        // the right of the strip — amber minimize, green maximize, red
+        // close — dimmed on unfocused windows, revealing a dark glyph
+        // on hover. Colors come straight from the destructive/warning/
+        // success tokens so both palettes work.
+        void paint_caption_dot(Canvas& canvas, const Rect& cell,
+                               hcpp::u32 rgb, hcpp::u8 kind, bool lit,
+                               bool hover, bool maximized) noexcept {
+            const hcpp::i32 cx = cell.x + cell.w / 2;
+            const hcpp::i32 cy = cell.y + cell.h / 2;
+            const hcpp::u32 dot = canvas.color(
+                lit ? rgb : hype::ui::rui_shade(rgb, 0x60));
+            canvas.fill_circle(cx, cy, 5, dot);
+            if (!hover) {
+                return;
+            }
+            // Hover reveal: a darker shade of the same hue reads as the
+            // engraved macOS glyph on the lit dot.
+            const hcpp::u32 mark =
+                canvas.color(hype::ui::rui_shade(rgb, 0xA0));
+            if (kind == dot_close) {
+                canvas.draw_line(cx - 3, cy - 3, cx + 3, cy + 3, mark);
+                canvas.draw_line(cx - 3, cy + 3, cx + 3, cy - 3, mark);
+            } else if (kind == dot_max) {
+                if (maximized) {
+                    // Restore: two overlapping squares.
+                    canvas.stroke_rect(Rect{cx - 1, cy - 4, 5, 5}, mark, 1);
+                    canvas.stroke_rect(Rect{cx - 4, cy - 1, 5, 5}, mark, 1);
+                } else {
+                    canvas.stroke_rect(Rect{cx - 3, cy - 3, 7, 7}, mark, 1);
+                }
+            } else {
+                canvas.fill_rect(Rect{cx - 4, cy - 1, 9, 2}, mark);
+            }
+        }
+
         void paint_chrome(Canvas& canvas, const Win& w) noexcept {
             const Theme& theme = hype::ui::theme_active();
             const Rect box = w.frame;
@@ -509,40 +549,51 @@ namespace hype::win {
             }
             const bool focused = w.state == WinState::Focused;
             hype::ui::rui_panel(canvas, box, hype::ui::rui_elev_window);
+            const hcpp::i32 radius =
+                static_cast<hcpp::i32>(theme.radius_lg);
+            if (focused) {
+                // Focused windows get the stronger outline over the
+                // Type-3 2xl shadow (reskin v2 §5).
+                canvas.stroke_rounded_rect(
+                    box, radius, canvas.color(theme.border_strong));
+            }
             const Rect strip = chrome_strip(w);
             if (strip.empty()) {
                 return;
             }
-            // HypeUI caption: flat band one tier below the surface, with
-            // a 1px hairline separator under it (no gradient, no glow).
-            const hcpp::i32 radius =
-                static_cast<hcpp::i32>(theme.radius_lg);
+            // HypeUI caption: flat `surface` band one tier below the
+            // elevated window body, with a 1px hairline separator under
+            // it (no gradient, no glow).
             hcpp::i32 band_h = strip.h + radius;
             const hcpp::i32 max_h = box.bottom() - 1 - strip.y;
             if (band_h > max_h) {
                 band_h = max_h;
             }
-            hype::ui::rui_rounded_gradient(
-                canvas, Rect{strip.x, strip.y, strip.w, band_h}, radius,
-                theme.secondary, theme.secondary);
+            canvas.fill_rounded_rect(
+                Rect{strip.x, strip.y, strip.w, band_h}, radius,
+                canvas.color(theme.card));
             canvas.fill_rect(
                 Rect{strip.x, strip.bottom() - 1, strip.w, 1},
                 canvas.color(theme.border));
 
             const hcpp::i32 cy = strip.y + strip.h / 2;
-            canvas.fill_circle(strip.x + chrome_pad + 3, cy, 3,
+            canvas.fill_circle(strip.x + ui::ui_px(chrome_pad) + 3, cy, 3,
                                canvas.color(theme.accent));
 
             const bool hot = hover_win == w.id;
-            const hcpp::u32 glyph = canvas.color(theme.card_fg);
 
+            // Window-menu chip: ghost button — no border at rest, a
+            // muted fill on hover; three bars for the glyph.
             const Rect menu_btn = menu_btn_rect(w);
-            hype::ui::rui_control_bg(
-                canvas, menu_btn,
-                hot && hover_part == hot_menu
-                    ? hype::ui::rui_lift(theme.secondary, 2)
-                    : theme.secondary,
-                theme.border);
+            const bool menu_hot = hot && hover_part == hot_menu;
+            if (menu_hot) {
+                canvas.fill_rounded_rect(
+                    menu_btn,
+                    static_cast<hcpp::i32>(theme.radius_xs),
+                    canvas.color(theme.muted));
+            }
+            const hcpp::u32 glyph =
+                canvas.color(menu_hot ? theme.card_fg : theme.muted_fg);
             for (hcpp::i32 k = 0; k < 3; ++k) {
                 canvas.fill_rect(
                     Rect{menu_btn.x + 4, menu_btn.y + 4 + k * 4,
@@ -550,57 +601,22 @@ namespace hype::win {
                     glyph);
             }
 
-            // Minimize "_" caption button.
-            const Rect min_btn = min_btn_rect(w);
-            hype::ui::rui_control_bg(
-                canvas, min_btn,
-                hot && hover_part == hot_min
-                    ? hype::ui::rui_lift(theme.secondary, 2)
-                    : theme.secondary,
-                theme.border);
-            canvas.fill_rect(Rect{min_btn.x + 9, min_btn.bottom() - 8,
-                                  min_btn.w - 18, 2},
-                             glyph);
+            // Caption dots: min (amber) / max (green) / close (red),
+            // matching the menu/right-side hit rects. Unfocused windows
+            // paint the dots dimmed.
+            paint_caption_dot(canvas, min_btn_rect(w), theme.warning,
+                              dot_min, focused, hot && hover_part == hot_min,
+                              false);
+            paint_caption_dot(canvas, max_btn_rect(w), theme.success,
+                              dot_max, focused, hot && hover_part == hot_max,
+                              w.maximized);
+            paint_caption_dot(canvas, close_btn_rect(w), theme.destructive,
+                              dot_close, focused,
+                              hot && hover_part == hot_close, false);
 
-            // Maximize "square" / restore "overlapping squares" glyph.
-            const Rect max_btn = max_btn_rect(w);
-            hype::ui::rui_control_bg(
-                canvas, max_btn,
-                hot && hover_part == hot_max
-                    ? hype::ui::rui_lift(theme.secondary, 2)
-                    : theme.secondary,
-                theme.border);
-            if (w.maximized) {
-                canvas.stroke_rect(
-                    Rect{max_btn.x + 11, max_btn.y + 6, 10, 8}, glyph, 1);
-                canvas.stroke_rect(
-                    Rect{max_btn.x + 8, max_btn.y + 9, 10, 9}, glyph, 1);
-            } else {
-                canvas.stroke_rect(
-                    Rect{max_btn.x + 9, max_btn.y + 7, 12, 10}, glyph, 1);
-            }
-
-            // HypeUI: close matches the other buttons at rest; red only
-            // appears on hover.
-            const Rect close_btn = close_btn_rect(w);
-            const bool close_hot = hot && hover_part == hot_close;
-            hype::ui::rui_control_bg(canvas, close_btn,
-                                     close_hot ? theme.destructive
-                                               : theme.secondary,
-                                     close_hot ? theme.destructive
-                                               : theme.border);
-            const hcpp::u32 close_glyph =
-                canvas.color(close_hot ? 0xFFFFFF : theme.card_fg);
-            canvas.draw_line(close_btn.x + 9, close_btn.y + 6,
-                             close_btn.right() - 10, close_btn.bottom() - 7,
-                             close_glyph);
-            canvas.draw_line(close_btn.x + 9, close_btn.bottom() - 7,
-                             close_btn.right() - 10, close_btn.y + 6,
-                             close_glyph);
-
-            const hcpp::i32 title_x = strip.x + chrome_pad + 12;
+            const hcpp::i32 title_x = strip.x + ui::ui_px(chrome_pad) + 12;
             const hcpp::i32 max_text =
-                menu_btn.x - chrome_gap - title_x;
+                menu_btn.x - ui::ui_px(chrome_gap) - title_x;
             if (max_text <= 0) {
                 return;
             }
@@ -613,12 +629,14 @@ namespace hype::win {
             }
             // Long titles must clip at the caption buttons, not draw over
             // them — scope the canvas clip to the title budget rect.
+            // Reskin v2: the caption always paints in the `dim` tone;
+            // focus is carried by the border_strong outline instead.
             const Rect saved_clip = canvas.clip();
             canvas.set_clip(saved_clip.intersection(
                 Rect{title_x, strip.y, max_text, strip.h}));
             paint_label(canvas, title_x, top,
                         w.caption[0] != '\0' ? w.caption : w.app_name,
-                        focused ? theme.card_fg : theme.muted_fg, 13);
+                        theme.muted_fg, 13);
             canvas.set_clip(saved_clip);
         }
 
@@ -764,13 +782,13 @@ namespace hype::win {
         hcpp::i32 switcher_item_w(hcpp::u32 n) noexcept {
             const Rect area = work_area();
             const hcpp::i32 max_w = area.w - 64;
-            hcpp::i32 w = sw_item_w;
+            hcpp::i32 w = ui::ui_px(sw_item_w);
             const hcpp::i32 need =
-                sw_pad * 2 + static_cast<hcpp::i32>(n) * w +
-                (static_cast<hcpp::i32>(n) - 1) * sw_gap;
+                ui::ui_px(sw_pad) * 2 + static_cast<hcpp::i32>(n) * w +
+                (static_cast<hcpp::i32>(n) - 1) * ui::ui_px(sw_gap);
             if (need > max_w && n > 0) {
-                w = (max_w - sw_pad * 2 -
-                     (static_cast<hcpp::i32>(n) - 1) * sw_gap) /
+                w = (max_w - ui::ui_px(sw_pad) * 2 -
+                     (static_cast<hcpp::i32>(n) - 1) * ui::ui_px(sw_gap)) /
                     static_cast<hcpp::i32>(n);
                 if (w < 40) {
                     w = 40;
@@ -784,9 +802,9 @@ namespace hype::win {
             const hcpp::u32 n = switcher_count > 0 ? switcher_count : 1;
             const hcpp::i32 item_w = switcher_item_w(n);
             const hcpp::i32 w =
-                sw_pad * 2 + static_cast<hcpp::i32>(n) * item_w +
-                (static_cast<hcpp::i32>(n) - 1) * sw_gap;
-            const hcpp::i32 h = sw_pad * 2 + sw_item_h;
+                ui::ui_px(sw_pad) * 2 + static_cast<hcpp::i32>(n) * item_w +
+                (static_cast<hcpp::i32>(n) - 1) * ui::ui_px(sw_gap);
+            const hcpp::i32 h = ui::ui_px(sw_pad) * 2 + ui::ui_px(sw_item_h);
             return {area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w,
                     h};
         }
@@ -1145,15 +1163,21 @@ namespace hype::win {
                                        : 16;
             for (hcpp::u32 i = 0; i < switcher_count; ++i) {
                 const Rect item{
-                    panel.x + sw_pad +
-                        static_cast<hcpp::i32>(i) * (item_w + sw_gap),
-                    panel.y + sw_pad, item_w, sw_item_h};
+                    panel.x + ui::ui_px(sw_pad) +
+                        static_cast<hcpp::i32>(i) * (item_w + ui::ui_px(sw_gap)),
+                    panel.y + ui::ui_px(sw_pad), item_w, ui::ui_px(sw_item_h)};
                 const bool sel = i == switcher_sel;
                 hype::ui::rui_control_bg(
                     canvas, item,
                     sel ? hype::ui::rui_lift(theme.secondary, 2)
                         : theme.secondary,
                     sel ? theme.accent : theme.border);
+                if (sel) {
+                    canvas.fill_rect_alpha(
+                        item.inset(hype::ui::Insets::uniform(1)),
+                        canvas.color(theme.accent_soft),
+                        theme.accent_soft_alpha);
+                }
                 const Win* w = slot_for(switcher_ids[i]);
                 const hcpp::i32 cy = item.y + item.h / 2;
                 canvas.fill_circle(item.x + 14, cy, 4,
@@ -1216,7 +1240,7 @@ namespace hype::win {
             const hcpp::u32 step = cascade_index % cascade_wrap;
             frame = {64 + static_cast<hcpp::i32>(step) * wm_cascade_step,
                      48 + static_cast<hcpp::i32>(step) * wm_cascade_step,
-                     cascade_w, cascade_h};
+                     ui::ui_px(cascade_w), ui::ui_px(cascade_h)};
             ++cascade_index;
         }
         Win& w = slots[slot];
@@ -1483,10 +1507,15 @@ namespace hype::win {
                             "app unavailable", theme.muted_fg, 13);
             }
         }
-        // Translucent snap-preview hint while a titlebar drag hovers a zone.
+        // Translucent snap-preview hint while a titlebar drag hovers a
+        // zone (reskin v2: accent_soft wash + r8 outline).
         if (preview_on && !preview.empty()) {
-            canvas.fill_rect_alpha(preview, canvas.color(theme.accent), 90);
-            canvas.stroke_rect(preview, canvas.color(theme.accent), 2);
+            canvas.fill_rect_alpha(preview,
+                                   canvas.color(theme.accent_soft),
+                                   theme.accent_soft_alpha);
+            canvas.stroke_rounded_rect(
+                preview, static_cast<hcpp::i32>(theme.radius_md),
+                canvas.color(theme.accent));
         }
         if (switcher_open) {
             paint_switcher(canvas);
@@ -1529,9 +1558,9 @@ namespace hype::win {
         ctx_menu.close();
         palette_open = false;
         menu_widget.set_preferred_size(
-            Size{menu_width,
-                 menu_pad * 2 +
-                     static_cast<hcpp::i32>(menu_item_count) * menu_item_h});
+            Size{ui::ui_px(menu_width),
+                 ui::ui_px(menu_pad) * 2 +
+                     static_cast<hcpp::i32>(menu_item_count) * ui::ui_px(menu_item_h)});
         if (!overlays.open(&menu_widget)) {
             menu_win = 0;
             return false;
@@ -1799,9 +1828,9 @@ namespace hype::win {
                         const bool was_snap = w->snap != SnapZone::None;
                         Rect r = w->restore;
                         if (r.empty()) {
-                            r = {x - cascade_w / 2,
-                                 y - wm_chrome_height / 2, cascade_w,
-                                 cascade_h};
+                            r = {x - ui::ui_px(cascade_w) / 2,
+                                 y - wm_chrome_height / 2, ui::ui_px(cascade_w),
+                                 ui::ui_px(cascade_h)};
                         }
                         hcpp::i32 relx = w->frame.w > 0
                                              ? (x - w->frame.x) * r.w /
@@ -1857,6 +1886,9 @@ namespace hype::win {
                 }
             }
         }
+        // Deskbar chip hot-tracking (reskin v2): the bar paints
+        // accent_soft hover washes for Start/task/tray zones.
+        hype::ui::deskbar_handle_move(x, y);
         if (drag_win == 0 && !wm_menu_visible() && !overlays.is_open()) {
             update_hover(x, y);
         } else if (hover_part != hot_none || hover_win != 0) {
@@ -1961,8 +1993,8 @@ namespace hype::win {
         if (menu_ok) {
             const Rect mr = menu_rect_now();
             const hcpp::i32 ix = mr.x + mr.w / 2;
-            const hcpp::i32 iy = mr.y + menu_pad + 2 * menu_item_h +
-                                 menu_item_h / 2;
+            const hcpp::i32 iy = mr.y + ui::ui_px(menu_pad) + 2 * ui::ui_px(menu_item_h) +
+                                 ui::ui_px(menu_item_h) / 2;
             menu_ok = wm_test_click(ix, iy) && !wm_menu_visible() &&
                       wm_window(b) == nullptr;
         }

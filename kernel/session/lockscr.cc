@@ -14,6 +14,7 @@
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
+#include "kernel/ui/uiscale.h"
 
 namespace hype::session {
 
@@ -111,17 +112,36 @@ namespace hype::session {
             draw_centered(canvas, cx, clock_y, clock_text, theme.fg, 96);
             draw_centered(canvas, cx, clock_y + 112, date_text,
                           theme.muted_fg, 20);
+            // Reskin v2 lock card: avatar monogram + user name + hint on
+            // one elevated card under the clock (was bare text on the
+            // veil with an accent dash).
             const char* name = session_user_name();
-            draw_centered(canvas, cx, clock_y + 176,
+            const hcpp::i32 card_w = ui::ui_px(260);
+            const hcpp::i32 card_h = ui::ui_px(128);
+            const ui::Rect card{cx - card_w / 2,
+                                clock_y + ui::ui_px(150), card_w, card_h};
+            ui::rui_panel(canvas, card, ui::rui_elev_dialog);
+            const hcpp::i32 av_r = ui::ui_px(20);
+            const hcpp::i32 av_cy = card.y + ui::ui_px(34);
+            canvas.fill_circle(cx, av_cy, av_r, canvas.color(theme.accent));
+            canvas.stroke_circle(cx, av_cy, av_r,
+                                 canvas.color(theme.accent_hover));
+            char mono[2] = {'U', '\0'};
+            if (name != nullptr && name[0] != '\0') {
+                char c = name[0];
+                if (c >= 'a' && c <= 'z') {
+                    c = static_cast<char>(c - 'a' + 'A');
+                }
+                mono[0] = c;
+            }
+            draw_centered(canvas, cx, av_cy - 10, hcpp::StringView{mono, 1},
+                          theme.accent_fg, 20);
+            draw_centered(canvas, cx, card.y + ui::ui_px(64),
                           name != nullptr && name[0] != '\0' ? name : "user",
-                          theme.card_fg, 24);
-            // Small accent underline under the user name.
-            canvas.fill_rect(ui::Rect{cx - 40, clock_y + 208, 80, 2},
-                             canvas.color(theme.accent));
-            draw_centered(canvas, cx,
-                          screen.bottom() - static_cast<hcpp::i32>(screen.h) / 6,
-                          "Press Enter or click to unlock", theme.muted_fg,
-                          15);
+                          theme.card_fg, 20);
+            draw_centered(canvas, cx, card.y + ui::ui_px(92),
+                          "Press Enter or click to unlock",
+                          theme.muted_fg, 13);
         }
 
         void lock_key_event(void*, const input::InputEvent& e) noexcept {

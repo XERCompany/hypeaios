@@ -150,6 +150,11 @@ namespace hype::session {
             const ui::Rect screen{0, 0, static_cast<hcpp::i32>(fb.width()),
                                   static_cast<hcpp::i32>(fb.height())};
             canvas.fill_rect(screen, canvas.color(theme.bg));
+            // Reskin v2 greeter veil: scrim-tinted dim so the card reads
+            // as the single lit surface (matches flowlogin).
+            canvas.fill_rect_alpha(screen, canvas.color(theme.scrim),
+                                   static_cast<hcpp::u8>(
+                                       theme.scrim_alpha / 3));
             const ui::Rect window_rect = ui::centered_window(screen, 460, 400);
             reg_tree.layout_root(window_rect);
             reg_tree.paint_tree(canvas);

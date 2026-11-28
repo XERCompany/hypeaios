@@ -22,6 +22,7 @@
 #include "kernel/ui/overlays/toast.h"
 #include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
+#include "kernel/ui/uiscale.h"
 #include "kernel/unicode/unicode.h"
 #include "kernel/vfs/hypefs.h"
 #include "kernel/win/deskman.h"
@@ -209,6 +210,22 @@ namespace hype::ui {
         hcpp::i32 cal_view_y = 2026;
         hcpp::u8 cal_view_m = 1;
 
+        // Bar chip hot-tracking (reskin v2): deskbar_handle_move keeps
+        // the hovered zone id + index (task slot / vdesk cell) so the
+        // paint pass can draw accent_soft hover washes.
+        enum BarHot : hcpp::u8 {
+            bar_hot_none = 0,
+            bar_hot_start,
+            bar_hot_task,
+            bar_hot_speaker,
+            bar_hot_net,
+            bar_hot_bell,
+            bar_hot_clock,
+            bar_hot_vdesk,
+        };
+        hcpp::u8 hot_zone = bar_hot_none;
+        hcpp::u32 hot_index = 0;
+
         void invalidate(const Rect& region) noexcept {
             if (!region.empty()) {
                 hype::win::wm_invalidate(region);
@@ -216,28 +233,28 @@ namespace hype::ui {
         }
 
         Rect tray_rect() noexcept {
-            return {bar.right() - bar_pad - tray_w, bar.y + bar_pad, tray_w,
-                    bar.h - bar_pad * 2};
+            return {bar.right() - ui_px(bar_pad) - ui_px(tray_w), bar.y + ui_px(bar_pad), ui_px(tray_w),
+                    bar.h - ui_px(bar_pad) * 2};
         }
 
         Rect clock_rect() noexcept {
             const Rect tray = tray_rect();
-            return {tray.right() - clock_w, tray.y, clock_w, tray.h};
+            return {tray.right() - ui_px(clock_w), tray.y, ui_px(clock_w), tray.h};
         }
 
         Rect speaker_zone() noexcept {
             const Rect tray = tray_rect();
-            return {tray.x + tray_speaker_x, tray.y, tray_cell_w, tray.h};
+            return {tray.x + ui_px(tray_speaker_x), tray.y, ui_px(tray_cell_w), tray.h};
         }
 
         Rect net_zone() noexcept {
             const Rect tray = tray_rect();
-            return {tray.x + tray_net_x, tray.y, tray_cell_w, tray.h};
+            return {tray.x + ui_px(tray_net_x), tray.y, ui_px(tray_cell_w), tray.h};
         }
 
         Rect bell_zone() noexcept {
             const Rect tray = tray_rect();
-            return {tray.x + tray_bell_x, tray.y, tray_bell_w, tray.h};
+            return {tray.x + ui_px(tray_bell_x), tray.y, ui_px(tray_bell_w), tray.h};
         }
 
         // Desktop-strip band: vd_pad gap left of the tray, one cell per
@@ -245,16 +262,16 @@ namespace hype::ui {
         Rect vdesk_strip() noexcept {
             const hcpp::i32 n =
                 static_cast<hcpp::i32>(hype::win::vdesk_count());
-            const hcpp::i32 w = n * vd_cell_w + (n - 1) * vd_gap;
+            const hcpp::i32 w = n * ui_px(vd_cell_w) + (n - 1) * ui_px(vd_gap);
             const Rect tray = tray_rect();
-            return {tray.x - vd_pad - w, tray.y, w, tray.h};
+            return {tray.x - ui_px(vd_pad) - w, tray.y, w, tray.h};
         }
 
         Rect vdesk_cell(hcpp::u32 index) noexcept {
             const Rect strip = vdesk_strip();
             return {strip.x +
-                        static_cast<hcpp::i32>(index) * (vd_cell_w + vd_gap),
-                    strip.y + 1, vd_cell_w, strip.h - 2};
+                        static_cast<hcpp::i32>(index) * (ui_px(vd_cell_w) + ui_px(vd_gap)),
+                    strip.y + 1, ui_px(vd_cell_w), strip.h - 2};
         }
 
         // Column above the taskbar where toast cards stack; invalidated as
@@ -266,8 +283,8 @@ namespace hype::ui {
             if (bar.empty()) {
                 return {};
             }
-            return {bar.right() - toast_col_w - rui_shadow_spill, 0,
-                    toast_col_w + rui_shadow_spill,
+            return {bar.right() - ui_px(toast_col_w) - rui_shadow_spill, 0,
+                    ui_px(toast_col_w) + rui_shadow_spill,
                     bar.y - 2 + rui_shadow_spill_down};
         }
 
@@ -276,7 +293,7 @@ namespace hype::ui {
             if (bar.empty()) {
                 return {};
             }
-            Rect r{bar.right() - bar_pad - qs_w, bar.y - 6 - qs_h, qs_w, qs_h};
+            Rect r{bar.right() - ui_px(bar_pad) - ui_px(qs_w), bar.y - 6 - ui_px(qs_h), ui_px(qs_w), ui_px(qs_h)};
             if (r.y < 2) {
                 r.y = 2;
             }
@@ -291,7 +308,7 @@ namespace hype::ui {
             Rect r = compute_qs();
             const hcpp::u32 left =
                 qs_age < qs_anim_ticks ? qs_anim_ticks - qs_age : 0;
-            r.y += static_cast<hcpp::i32>(left) * qs_anim_px;
+            r.y += static_cast<hcpp::i32>(left) * ui_px(qs_anim_px);
             return r;
         }
 
@@ -300,29 +317,29 @@ namespace hype::ui {
         // then grown again by the panel shadow spill on every side.
         Rect qs_anim_region() noexcept {
             Rect r = compute_qs();
-            r.h += qs_anim_ticks * qs_anim_px;
+            r.h += qs_anim_ticks * ui_px(qs_anim_px);
             return rui_paint_bounds(r);
         }
 
         Rect qs_vol_row(const Rect& panel) noexcept {
-            return {panel.x + qs_pad, panel.y + qs_pad + qs_head_h,
-                    panel.w - 2 * qs_pad, qs_row_h};
+            return {panel.x + ui_px(qs_pad), panel.y + ui_px(qs_pad) + ui_px(qs_head_h),
+                    panel.w - 2 * ui_px(qs_pad), ui_px(qs_row_h)};
         }
 
         Rect qs_bright_row(const Rect& panel) noexcept {
             const Rect vol = qs_vol_row(panel);
-            return {vol.x, vol.bottom(), vol.w, qs_row_h};
+            return {vol.x, vol.bottom(), vol.w, ui_px(qs_row_h)};
         }
 
         Rect qs_net_row(const Rect& panel) noexcept {
             const Rect br = qs_bright_row(panel);
-            return {br.x, br.bottom() + 8, br.w, qs_net_h};
+            return {br.x, br.bottom() + 8, br.w, ui_px(qs_net_h)};
         }
 
         Rect qs_lock_btn(const Rect& panel) noexcept {
-            const hcpp::i32 w = (panel.w - 2 * qs_pad - 8) / 2;
-            return {panel.x + qs_pad, panel.bottom() - qs_pad - qs_btn_h, w,
-                    qs_btn_h};
+            const hcpp::i32 w = (panel.w - 2 * ui_px(qs_pad) - 8) / 2;
+            return {panel.x + ui_px(qs_pad), panel.bottom() - ui_px(qs_pad) - ui_px(qs_btn_h), w,
+                    ui_px(qs_btn_h)};
         }
 
         Rect qs_power_btn(const Rect& panel) noexcept {
@@ -344,8 +361,8 @@ namespace hype::ui {
             if (bar.empty()) {
                 return {};
             }
-            Rect r{bar.right() - bar_pad - nc_w, bar.y - 6 - nc_h, nc_w,
-                   nc_h};
+            Rect r{bar.right() - ui_px(bar_pad) - ui_px(nc_w), bar.y - 6 - ui_px(nc_h), ui_px(nc_w),
+                   ui_px(nc_h)};
             if (r.y < 2) {
                 r.y = 2;
             }
@@ -359,38 +376,38 @@ namespace hype::ui {
             Rect r = compute_nc();
             const hcpp::u32 left =
                 nc_age < nc_anim_ticks ? nc_anim_ticks - nc_age : 0;
-            r.y += static_cast<hcpp::i32>(left) * nc_anim_px;
+            r.y += static_cast<hcpp::i32>(left) * ui_px(nc_anim_px);
             return r;
         }
 
         Rect nc_anim_region() noexcept {
             Rect r = compute_nc();
-            r.h += nc_anim_ticks * nc_anim_px;
+            r.h += nc_anim_ticks * ui_px(nc_anim_px);
             return rui_paint_bounds(r);
         }
 
         Rect nc_clear_btn(const Rect& panel) noexcept {
-            return {panel.right() - nc_pad - 52,
-                    panel.y + nc_pad - 2, 52, nc_head_h + 4};
+            return {panel.right() - ui_px(nc_pad) - 52,
+                    panel.y + ui_px(nc_pad) - 2, 52, ui_px(nc_head_h) + 4};
         }
 
         // Scrollable-looking list band under the header; only the newest
         // rows that fit are painted (no scroll offset yet).
         Rect nc_list(const Rect& panel) noexcept {
-            const hcpp::i32 top = panel.y + nc_pad + nc_head_h + 6;
+            const hcpp::i32 top = panel.y + ui_px(nc_pad) + ui_px(nc_head_h) + 6;
             return {panel.x + 6, top, panel.w - 12,
-                    panel.bottom() - nc_pad - top};
+                    panel.bottom() - ui_px(nc_pad) - top};
         }
 
         Rect nc_row_rect(const Rect& panel, hcpp::u32 index) noexcept {
             const Rect list = nc_list(panel);
             return {list.x + 2,
-                    list.y + static_cast<hcpp::i32>(index) * nc_row_h,
-                    list.w - 4, nc_row_h - 4};
+                    list.y + static_cast<hcpp::i32>(index) * ui_px(nc_row_h),
+                    list.w - 4, ui_px(nc_row_h) - 4};
         }
 
         hcpp::u32 nc_rows_fit(const Rect& panel) noexcept {
-            const hcpp::i32 fit = nc_list(panel).h / nc_row_h;
+            const hcpp::i32 fit = nc_list(panel).h / ui_px(nc_row_h);
             hcpp::u32 rows = hist_count;
             if (rows > static_cast<hcpp::u32>(fit < 0 ? 0 : fit)) {
                 rows = static_cast<hcpp::u32>(fit < 0 ? 0 : fit);
@@ -448,9 +465,9 @@ namespace hype::ui {
             }
             const hcpp::u32 rows = cv_rows();
             const hcpp::i32 h =
-                cv_pad * 2 + cv_head_h + 6 +
-                static_cast<hcpp::i32>(rows == 0 ? 1 : rows) * cv_row_h;
-            Rect r{bar.right() - bar_pad - cv_w, bar.y - 6 - h, cv_w, h};
+                ui_px(cv_pad) * 2 + ui_px(cv_head_h) + 6 +
+                static_cast<hcpp::i32>(rows == 0 ? 1 : rows) * ui_px(cv_row_h);
+            Rect r{bar.right() - ui_px(bar_pad) - ui_px(cv_w), bar.y - 6 - h, ui_px(cv_w), h};
             if (r.y < 2) {
                 r.y = 2;
             }
@@ -464,21 +481,21 @@ namespace hype::ui {
             Rect r = compute_cv();
             const hcpp::u32 left =
                 cv_age < cv_anim_ticks ? cv_anim_ticks - cv_age : 0;
-            r.y += static_cast<hcpp::i32>(left) * cv_anim_px;
+            r.y += static_cast<hcpp::i32>(left) * ui_px(cv_anim_px);
             return r;
         }
 
         Rect cv_anim_region() noexcept {
             Rect r = compute_cv();
-            r.h += cv_anim_ticks * cv_anim_px;
+            r.h += cv_anim_ticks * ui_px(cv_anim_px);
             return rui_paint_bounds(r);
         }
 
         Rect cv_row_rect(const Rect& panel, hcpp::u32 index) noexcept {
-            const hcpp::i32 top = panel.y + cv_pad + cv_head_h + 6;
+            const hcpp::i32 top = panel.y + ui_px(cv_pad) + ui_px(cv_head_h) + 6;
             return {panel.x + 6,
-                    top + static_cast<hcpp::i32>(index) * cv_row_h,
-                    panel.w - 12, cv_row_h - 4};
+                    top + static_cast<hcpp::i32>(index) * ui_px(cv_row_h),
+                    panel.w - 12, ui_px(cv_row_h) - 4};
         }
 
         // ---- calendar + clock flyout (issue #132) -----------------------
@@ -522,8 +539,8 @@ namespace hype::ui {
             if (bar.empty()) {
                 return {};
             }
-            Rect r{bar.right() - bar_pad - cal_w, bar.y - 6 - cal_h, cal_w,
-                   cal_h};
+            Rect r{bar.right() - ui_px(bar_pad) - ui_px(cal_w), bar.y - 6 - ui_px(cal_h), ui_px(cal_w),
+                   ui_px(cal_h)};
             if (r.y < 2) {
                 r.y = 2;
             }
@@ -537,31 +554,31 @@ namespace hype::ui {
             Rect r = compute_cal();
             const hcpp::u32 left =
                 cal_age < cal_anim_ticks ? cal_anim_ticks - cal_age : 0;
-            r.y += static_cast<hcpp::i32>(left) * cal_anim_px;
+            r.y += static_cast<hcpp::i32>(left) * ui_px(cal_anim_px);
             return r;
         }
 
         Rect cal_anim_region() noexcept {
             Rect r = compute_cal();
-            r.h += cal_anim_ticks * cal_anim_px;
+            r.h += cal_anim_ticks * ui_px(cal_anim_px);
             return rui_paint_bounds(r);
         }
 
         // Vertical bands inside the panel, top to bottom.
         Rect cal_clock_row(const Rect& panel) noexcept {
-            return {panel.x + cal_pad, panel.y + cal_pad,
-                    panel.w - 2 * cal_pad, cal_clock_h};
+            return {panel.x + ui_px(cal_pad), panel.y + ui_px(cal_pad),
+                    panel.w - 2 * ui_px(cal_pad), ui_px(cal_clock_h)};
         }
 
         Rect cal_date_row(const Rect& panel) noexcept {
             const Rect clk = cal_clock_row(panel);
-            return {clk.x, clk.bottom() + 2, clk.w, cal_date_h};
+            return {clk.x, clk.bottom() + 2, clk.w, ui_px(cal_date_h)};
         }
 
         Rect cal_nav_row(const Rect& panel) noexcept {
             const Rect date = cal_date_row(panel);
             // +8 clears the divider painted 4px under the date line.
-            return {date.x, date.bottom() + 8, date.w, cal_nav_h};
+            return {date.x, date.bottom() + 8, date.w, ui_px(cal_nav_h)};
         }
 
         Rect cal_prev_btn(const Rect& panel) noexcept {
@@ -576,12 +593,12 @@ namespace hype::ui {
 
         Rect cal_wd_row(const Rect& panel) noexcept {
             const Rect nav = cal_nav_row(panel);
-            return {nav.x, nav.bottom() + 2, nav.w, cal_wd_h};
+            return {nav.x, nav.bottom() + 2, nav.w, ui_px(cal_wd_h)};
         }
 
         Rect cal_grid(const Rect& panel) noexcept {
             const Rect wd = cal_wd_row(panel);
-            return {wd.x, wd.bottom() + 4, wd.w, 6 * cal_cell_h};
+            return {wd.x, wd.bottom() + 4, wd.w, 6 * ui_px(cal_cell_h)};
         }
 
         Rect cal_cell(const Rect& panel, hcpp::u32 row,
@@ -589,8 +606,8 @@ namespace hype::ui {
             const Rect grid = cal_grid(panel);
             const hcpp::i32 cw = grid.w / 7;
             return {grid.x + static_cast<hcpp::i32>(col) * cw,
-                    grid.y + static_cast<hcpp::i32>(row) * cal_cell_h,
-                    cw, cal_cell_h};
+                    grid.y + static_cast<hcpp::i32>(row) * ui_px(cal_cell_h),
+                    cw, ui_px(cal_cell_h)};
         }
 
         // Steps the viewed month by `delta` (bounded by cal_nav_max) and
@@ -726,11 +743,73 @@ namespace hype::ui {
             return v;
         }
 
+        // t/255 lerp of `top` over `base` (reskin v2): pre-blends the
+        // accent_soft wash so rounded chip fills stay crisp — the canvas
+        // has no rounded-alpha fill.
+        hcpp::u32 mix_rgb(hcpp::u32 base, hcpp::u32 top,
+                          hcpp::u8 t) noexcept {
+            const hcpp::u32 inv = 255 - t;
+            const hcpp::u32 r =
+                (((base >> 16) & 0xFF) * inv +
+                 ((top >> 16) & 0xFF) * t) / 255;
+            const hcpp::u32 g =
+                (((base >> 8) & 0xFF) * inv +
+                 ((top >> 8) & 0xFF) * t) / 255;
+            const hcpp::u32 b =
+                ((base & 0xFF) * inv + (top & 0xFF) * t) / 255;
+            return (r << 16) | (g << 8) | b;
+        }
+
+        hcpp::u32 accent_wash(hcpp::u32 base) noexcept {
+            const Theme& theme = theme_active();
+            return mix_rgb(base, theme.accent_soft,
+                           theme.accent_soft_alpha);
+        }
+
+        hcpp::i32 measure_px(hcpp::StringView text,
+                             hcpp::u32 px) noexcept {
+            if (hype::font::hypefont_ready()) {
+                return hype::font::text_measure(text, px);
+            }
+            return static_cast<hcpp::i32>(text.size()) * 8;
+        }
+
+        // Copies `text` into `buf` truncated to `max_w` px with a
+        // trailing U+2026 ellipsis; returns the fitted byte count. The
+        // Start grid + task chips route through this so long names can
+        // never collide with a neighbour cell (reskin v2).
+        hcpp::size_t ellipsize(char* buf, hcpp::size_t cap,
+                               hcpp::StringView text, hcpp::u32 px,
+                               hcpp::i32 max_w) noexcept {
+            hcpp::size_t len = 0;
+            while (len + 4 < cap && len < text.size()) {
+                buf[len] = text[len];
+                ++len;
+            }
+            if (measure_px(hcpp::StringView{buf, len}, px) <= max_w) {
+                return len;
+            }
+            while (len > 0) {
+                --len;
+                buf[len] = '\xE2';
+                buf[len + 1] = '\x80';
+                buf[len + 2] = '\xA6';
+                if (measure_px(hcpp::StringView{buf, len + 3}, px) <=
+                    max_w) {
+                    return len + 3;
+                }
+            }
+            buf[0] = '\xE2';
+            buf[1] = '\x80';
+            buf[2] = '\xA6';
+            return 3;
+        }
+
         Rect task_btn_rect(hcpp::u32 index) noexcept {
             const hcpp::i32 x =
-                start_btn.right() + task_gap +
-                static_cast<hcpp::i32>(index) * (task_w + task_gap);
-            return {x, bar.y + bar_pad, task_w, bar.h - bar_pad * 2};
+                start_btn.right() + ui_px(task_gap) +
+                static_cast<hcpp::i32>(index) * (ui_px(task_w) + ui_px(task_gap));
+            return {x, bar.y + ui_px(bar_pad), ui_px(task_w), bar.h - ui_px(bar_pad) * 2};
         }
 
         char upper(char c) noexcept {
@@ -859,26 +938,26 @@ namespace hype::ui {
             if (!start_open) {
                 return {};
             }
-            hcpp::i32 h = menu_pad * 2 + menu_search_h + menu_search_gap;
+            hcpp::i32 h = ui_px(menu_pad) * 2 + ui_px(menu_search_h) + ui_px(menu_search_gap);
             if (!searching()) {
                 const hcpp::u32 rows = menu_count > 0 ? menu_count : 1;
-                h += menu_head_h +
-                     static_cast<hcpp::i32>(rows) * menu_item_h;
+                h += ui_px(menu_head_h) +
+                     static_cast<hcpp::i32>(rows) * ui_px(menu_item_h);
             } else {
                 if (menu_count > 0) {
-                    h += menu_section_h +
-                         static_cast<hcpp::i32>(menu_count) * menu_item_h;
+                    h += ui_px(menu_section_h) +
+                         static_cast<hcpp::i32>(menu_count) * ui_px(menu_item_h);
                 }
                 if (file_hits_count > 0) {
-                    h += menu_section_h +
+                    h += ui_px(menu_section_h) +
                          static_cast<hcpp::i32>(file_hits_count) *
-                             menu_item_h;
+                             ui_px(menu_item_h);
                 }
                 if (menu_result_rows() == 0) {
-                    h += menu_item_h;  // "No results" row
+                    h += ui_px(menu_item_h);  // "No results" row
                 }
             }
-            Rect r{bar.x + bar_pad, bar.y - 4 - h, menu_w, h};
+            Rect r{bar.x + ui_px(bar_pad), bar.y - 4 - h, ui_px(menu_w), h};
             if (r.y < 2) {
                 r.y = 2;
             }
@@ -886,8 +965,8 @@ namespace hype::ui {
         }
 
         Rect menu_field_rect(const Rect& menu) noexcept {
-            return {menu.x + menu_pad, menu.y + menu_pad,
-                    menu.w - 2 * menu_pad, menu_search_h};
+            return {menu.x + ui_px(menu_pad), menu.y + ui_px(menu_pad),
+                    menu.w - 2 * ui_px(menu_pad), ui_px(menu_search_h)};
         }
 
         // Screen rect of combined result row `index` (apps first, file
@@ -895,29 +974,29 @@ namespace hype::ui {
         // each section label sits exactly menu_section_h above its
         // section's first row.
         Rect menu_row_rect(const Rect& menu, hcpp::u32 index) noexcept {
-            hcpp::i32 y = menu.y + menu_pad + menu_search_h +
-                          menu_search_gap;
+            hcpp::i32 y = menu.y + ui_px(menu_pad) + ui_px(menu_search_h) +
+                          ui_px(menu_search_gap);
             if (!searching()) {
                 return {menu.x + 1,
-                        y + menu_head_h +
-                            static_cast<hcpp::i32>(index) * menu_item_h,
-                        menu.w - 2, menu_item_h};
+                        y + ui_px(menu_head_h) +
+                            static_cast<hcpp::i32>(index) * ui_px(menu_item_h),
+                        menu.w - 2, ui_px(menu_item_h)};
             }
             if (index < menu_count) {
                 return {menu.x + 1,
-                        y + menu_section_h +
-                            static_cast<hcpp::i32>(index) * menu_item_h,
-                        menu.w - 2, menu_item_h};
+                        y + ui_px(menu_section_h) +
+                            static_cast<hcpp::i32>(index) * ui_px(menu_item_h),
+                        menu.w - 2, ui_px(menu_item_h)};
             }
             if (menu_count > 0) {
-                y += menu_section_h +
-                     static_cast<hcpp::i32>(menu_count) * menu_item_h;
+                y += ui_px(menu_section_h) +
+                     static_cast<hcpp::i32>(menu_count) * ui_px(menu_item_h);
             }
-            y += menu_section_h;
+            y += ui_px(menu_section_h);
             return {menu.x + 1,
                     y + static_cast<hcpp::i32>(index - menu_count) *
-                            menu_item_h,
-                    menu.w - 2, menu_item_h};
+                            ui_px(menu_item_h),
+                    menu.w - 2, ui_px(menu_item_h)};
         }
 
         hcpp::i32 menu_row_at(Point p) noexcept {
@@ -1192,34 +1271,71 @@ namespace hype::ui {
         }
 
         void paint_start_button(Canvas& canvas, const Theme& theme) noexcept {
-            rui_control_bg(canvas, start_btn, theme.secondary,
-                           start_open ? theme.accent : theme.border);
+            // Ghost chip (reskin v2): transparent at rest, accent_soft
+            // wash on hover, solid accent while the menu is open with a
+            // faint Type-1 accent glow — the single permitted glow on
+            // the bar.
+            const bool hot = hot_zone == bar_hot_start;
+            hcpp::u32 text_rgb = theme.card_fg;
+            hcpp::u32 glyph_rgb = theme.accent;
+            const hcpp::i32 r = static_cast<hcpp::i32>(theme.radius_sm);
+            if (start_open) {
+                rui_glow(canvas, start_btn, r, theme.accent, 64);
+                canvas.fill_rounded_rect(start_btn, r,
+                                         canvas.color(theme.accent));
+                text_rgb = theme.accent_fg;
+                glyph_rgb = theme.accent_fg;
+            } else if (hot) {
+                canvas.fill_rounded_rect(
+                    start_btn, r,
+                    canvas.color(accent_wash(hui::colors().surface)));
+            }
             // 4-pane window mark.
             const hcpp::i32 gx = start_btn.x + 10;
             const hcpp::i32 gy = start_btn.y + (start_btn.h - 12) / 2;
-            const hcpp::u32 glyph = canvas.color(theme.accent);
+            const hcpp::u32 glyph = canvas.color(glyph_rgb);
             canvas.fill_rect(Rect{gx, gy, 5, 5}, glyph);
             canvas.fill_rect(Rect{gx + 7, gy, 5, 5}, glyph);
             canvas.fill_rect(Rect{gx, gy + 7, 5, 5}, glyph);
             canvas.fill_rect(Rect{gx + 7, gy + 7, 5, 5}, glyph);
             paint_label(canvas, gx + 17, label_top(start_btn), "Start",
-                        theme.card_fg, 13);
+                        text_rgb, 13);
         }
 
         void paint_task_button(Canvas& canvas, const Theme& theme,
-                               const Rect& btn, const Win& w) noexcept {
+                               const Rect& btn, const Win& w,
+                               bool hot) noexcept {
             const bool focused = w.state == WinState::Focused;
             const bool minimized = w.state == WinState::Minimized;
-            rui_control_bg(
-                canvas, btn,
-                focused ? rui_lift(theme.secondary, 1) : theme.secondary,
-                focused ? theme.accent : theme.border);
-            // Long app names clip at the button edge instead of bleeding
-            // glyphs into the neighbouring task button.
+            const hcpp::i32 r = static_cast<hcpp::i32>(theme.radius_sm);
+            // Button-widget chip contract (reskin v2): running -> flat
+            // elev chip; focused -> accent_soft wash + hairline; hover
+            // -> accent_soft wash; minimized -> ghost + dim label.
+            if (focused) {
+                canvas.fill_rounded_rect(
+                    btn, r,
+                    canvas.color(accent_wash(hui::colors().surface)));
+                canvas.stroke_rounded_rect(
+                    btn, r, canvas.color(theme.border));
+            } else if (hot) {
+                canvas.fill_rounded_rect(
+                    btn, r,
+                    canvas.color(accent_wash(hui::colors().surface_elev)));
+            } else if (!minimized) {
+                canvas.fill_rounded_rect(
+                    btn, r,
+                    canvas.color(hui::colors().surface_elev));
+            }
+            // Long app names get an ellipsis inside the button instead
+            // of bleeding glyphs into the neighbouring task chip.
+            char label[36];
+            const hcpp::size_t len =
+                ellipsize(label, sizeof(label),
+                          hcpp::StringView{w.app_name}, 13, btn.w - 20);
             const Rect saved_clip = canvas.clip();
             canvas.set_clip(saved_clip.intersection(btn));
             paint_label(canvas, btn.x + 10, label_top(btn),
-                        hcpp::StringView{w.app_name},
+                        hcpp::StringView{label, len},
                         minimized ? theme.muted_fg : theme.card_fg, 13);
             canvas.set_clip(saved_clip);
             if (focused) {
@@ -1234,17 +1350,29 @@ namespace hype::ui {
         }
 
         // Numbered desktop squares (issue #135): the current desktop
-        // gets the accent frame + bright digit, the rest stay muted.
+        // gets the accent frame + accent_soft wash, hover gets the elev
+        // chip, the rest stay transparent ghosts (reskin v2).
         void paint_vdesk_strip(Canvas& canvas, const Theme& theme) noexcept {
             const hcpp::u32 n = hype::win::vdesk_count();
             const hcpp::u32 cur = hype::win::vdesk_current();
+            const hcpp::i32 r = static_cast<hcpp::i32>(theme.radius_xs);
             for (hcpp::u32 i = 0; i < n; ++i) {
                 const Rect cell = vdesk_cell(i);
                 const bool on = i == cur;
-                rui_control_bg(
-                    canvas, cell,
-                    on ? rui_lift(theme.secondary, 2) : theme.secondary,
-                    on ? theme.accent : theme.border);
+                const bool hot =
+                    hot_zone == bar_hot_vdesk && hot_index == i;
+                if (on) {
+                    canvas.fill_rounded_rect(
+                        cell, r,
+                        canvas.color(
+                            accent_wash(hui::colors().surface_elev)));
+                    canvas.stroke_rounded_rect(
+                        cell, r, canvas.color(theme.accent));
+                } else if (hot) {
+                    canvas.fill_rounded_rect(
+                        cell, r,
+                        canvas.color(hui::colors().surface_elev));
+                }
                 char digit[2] = {static_cast<char>('1' + i), '\0'};
                 paint_label(canvas, cell.x + (cell.w - 6) / 2,
                             label_top(cell), hcpp::StringView{digit, 1},
@@ -1296,14 +1424,32 @@ namespace hype::ui {
                         theme.primary_fg, 11);
         }
 
+        // Ghost tray chip (reskin v2): elev fill only while hovered, so
+        // the icons read as buttons without permanent chrome.
+        void paint_tray_chip(Canvas& canvas, const Rect& zone,
+                             bool hot) noexcept {
+            if (!hot) {
+                return;
+            }
+            const Theme& theme = theme_active();
+            canvas.fill_rounded_rect(
+                zone.inset(Insets::uniform(1)),
+                static_cast<hcpp::i32>(theme.radius_xs),
+                canvas.color(hui::colors().surface_elev));
+        }
+
         void paint_tray(Canvas& canvas, const Theme& theme) noexcept {
             const hcpp::u32 glyph = canvas.color(theme.muted_fg);
             const Rect spk = speaker_zone();
+            paint_tray_chip(canvas, spk, hot_zone == bar_hot_speaker);
             paint_speaker_glyph(canvas, spk.x + 3, spk.y + spk.h / 2, glyph);
             const Rect net = net_zone();
+            paint_tray_chip(canvas, net, hot_zone == bar_hot_net);
             paint_net_glyph(canvas, net.x + 1, net.y + net.h / 2, glyph,
                             hype::net::net_ip() != 0);
-            paint_bell_glyph(canvas, theme, bell_zone());
+            const Rect bell = bell_zone();
+            paint_tray_chip(canvas, bell, hot_zone == bar_hot_bell);
+            paint_bell_glyph(canvas, theme, bell);
             // Clock "HH:MM".
             char clk[6]{"--:--"};
             if (clock_hour != 0xFF) {
@@ -1315,11 +1461,12 @@ namespace hype::ui {
                 clk[5] = '\0';
             }
             const Rect clk_box = clock_rect();
+            paint_tray_chip(canvas, clk_box, hot_zone == bar_hot_clock);
             // Clock glyphs stay inside the clock cell — no bleed into the
             // bell badge or the bar edge.
             const Rect saved_clip = canvas.clip();
             canvas.set_clip(saved_clip.intersection(clk_box));
-            paint_label(canvas, clk_box.right() - clock_w + 4,
+            paint_label(canvas, clk_box.right() - ui_px(clock_w) + 4,
                         label_top(clk_box), hcpp::StringView{clk, 5},
                         theme.card_fg, 13);
             canvas.set_clip(saved_clip);
@@ -1327,7 +1474,9 @@ namespace hype::ui {
 
         void paint_search_field(Canvas& canvas, const Theme& theme,
                                 const Rect& field) noexcept {
-            rui_control_bg(canvas, field, theme.secondary, theme.accent);
+            // Input at rest = `surface` one tier under the elev panel;
+            // the accent edge is the permanent focus mark (reskin v2).
+            rui_control_bg(canvas, field, theme.card, theme.accent);
             const hcpp::u32 muted = canvas.color(theme.muted_fg);
             const hcpp::i32 cy = field.y + field.h / 2;
             // Magnifier: stroked lens + short handle.
@@ -1365,7 +1514,7 @@ namespace hype::ui {
         void paint_section_label(Canvas& canvas, const Theme& theme,
                                  const Rect& menu, hcpp::i32 y,
                                  const char* text) noexcept {
-            paint_label(canvas, menu.x + menu_pad + 6, y + 3, text,
+            paint_label(canvas, menu.x + ui_px(menu_pad) + 6, y + 3, text,
                         theme.muted_fg, 11);
         }
 
@@ -1397,24 +1546,20 @@ namespace hype::ui {
                         const Rect& menu) noexcept {
             rui_panel(canvas, menu, rui_elev_panel);
             paint_search_field(canvas, theme, menu_field_rect(menu));
-            const hcpp::u32 card_lift =
-                rui_lift(theme.card, rui_elev_panel);
             if (!searching()) {
                 const Rect head{menu.x + 1,
-                                menu.y + menu_pad + menu_search_h +
-                                    menu_search_gap,
-                                menu.w - 2, menu_head_h};
-                canvas.fill_rect(head, canvas.color(card_lift));
+                                menu.y + ui_px(menu_pad) + ui_px(menu_search_h) +
+                                    ui_px(menu_search_gap),
+                                menu.w - 2, ui_px(menu_head_h)};
                 canvas.fill_circle(head.x + 12, head.y + head.h / 2, 4,
                                    canvas.color(theme.accent));
                 paint_label(canvas, head.x + 24, label_top(head),
                             "HypeAI OS", theme.muted_fg, 13);
             } else if (menu_result_rows() == 0) {
                 const Rect row{menu.x + 1,
-                               menu.y + menu_pad + menu_search_h +
-                                   menu_search_gap,
-                               menu.w - 2, menu_item_h};
-                canvas.fill_rect(row, canvas.color(card_lift));
+                               menu.y + ui_px(menu_pad) + ui_px(menu_search_h) +
+                                   ui_px(menu_search_gap),
+                               menu.w - 2, ui_px(menu_item_h)};
                 paint_label(canvas, row.x + 10, label_top(row),
                             "No results", theme.muted_fg, 13);
             }
@@ -1426,24 +1571,28 @@ namespace hype::ui {
             if (searching() && menu_count > 0) {
                 paint_section_label(canvas, theme, menu,
                                     menu_row_rect(menu, 0).y -
-                                        menu_section_h,
+                                        ui_px(menu_section_h),
                                     "Apps");
             }
             if (searching() && file_hits_count > 0) {
                 paint_section_label(canvas, theme, menu,
                                     menu_row_rect(menu, menu_count).y -
-                                        menu_section_h,
+                                        ui_px(menu_section_h),
                                     "Files");
             }
+            const hcpp::i32 item_r =
+                static_cast<hcpp::i32>(theme.radius_sm);
             for (hcpp::u32 i = 0; i < rows; ++i) {
                 const Rect row = menu_row_rect(menu, i);
-                canvas.fill_rect(row, canvas.color(card_lift));
                 const bool sel = i == search_sel;
+                // Menu items are flat on the elev panel; selection is a
+                // rounded accent_soft wash (reskin v2 menu contract).
                 if (sel) {
-                    canvas.fill_rect_alpha(row, canvas.color(theme.accent),
-                                           48);
-                    canvas.fill_rect(Rect{row.x, row.y, 2, row.h},
-                                     canvas.color(theme.accent));
+                    canvas.fill_rounded_rect(
+                        Rect{row.x + 2, row.y + 1, row.w - 4, row.h - 2},
+                        item_r,
+                        canvas.color(
+                            accent_wash(hui::colors().surface_elev)));
                 }
                 const hcpp::i32 cy = row.y + row.h / 2;
                 if (menu_count == 0 && !searching()) {
@@ -1464,16 +1613,28 @@ namespace hype::ui {
                     paint_label(canvas, icon.x + 4, icon.y + 1,
                                 hcpp::StringView{mono, 1},
                                 theme.primary_fg, 11);
+                    // Ellipsis-fit so long names clip at the row edge,
+                    // never over the next row's icon (reskin v2).
+                    char label[36];
+                    const hcpp::size_t len = ellipsize(
+                        label, sizeof(label),
+                        hcpp::StringView{app->name}, 13,
+                        row.right() - 6 - (row.x + 30));
                     paint_label(canvas, row.x + 30, label_top(row),
-                                hcpp::StringView{app->name},
+                                hcpp::StringView{label, len},
                                 theme.card_fg, 13);
                 } else {
                     const FileHit& hit = file_hits[i - menu_count];
                     const bool is_dir =
                         (hit.flags & hype::vfs::FS_DIR) != 0;
                     paint_file_glyph(canvas, theme, row, is_dir);
+                    char label[36];
+                    const hcpp::size_t len = ellipsize(
+                        label, sizeof(label),
+                        hcpp::StringView{hit.name}, 13,
+                        row.right() - 6 - (row.x + 30));
                     paint_label(canvas, row.x + 30, label_top(row),
-                                hcpp::StringView{hit.name},
+                                hcpp::StringView{label, len},
                                 theme.card_fg, 13);
                 }
                 canvas.set_clip(saved_clip);
@@ -1519,8 +1680,8 @@ namespace hype::ui {
         void paint_qs(Canvas& canvas, const Theme& theme,
                       const Rect& panel) noexcept {
             rui_panel(canvas, panel, rui_elev_panel);
-            const Rect head{panel.x + qs_pad, panel.y + qs_pad,
-                            panel.w - 2 * qs_pad, qs_head_h};
+            const Rect head{panel.x + ui_px(qs_pad), panel.y + ui_px(qs_pad),
+                            panel.w - 2 * ui_px(qs_pad), ui_px(qs_head_h)};
             canvas.fill_circle(head.x + 8, head.y + head.h / 2, 4,
                                canvas.color(theme.accent));
             paint_label(canvas, head.x + 20, label_top(head),
@@ -1537,8 +1698,8 @@ namespace hype::ui {
 
             // Divider, then the Network status row.
             canvas.fill_rect(
-                Rect{panel.x + qs_pad, br.bottom() + 3,
-                     panel.w - 2 * qs_pad, 1},
+                Rect{panel.x + ui_px(qs_pad), br.bottom() + 3,
+                     panel.w - 2 * ui_px(qs_pad), 1},
                 canvas.color(theme.border));
             const Rect net = qs_net_row(panel);
             paint_net_glyph(canvas, net.x + 1, net.y + net.h / 2,
@@ -1580,10 +1741,13 @@ namespace hype::ui {
 
         // One history row: kind-tinted icon, title + clipped message,
         // "HH:MM" wall-clock stamp and a top-right "x" dismiss hitbox.
+        // Reskin v2: rows are sunk wells (rounded, surface_sunk) on the
+        // elev panel, not lifted flat bands.
         void paint_nc_row(Canvas& canvas, const Theme& theme,
                           const Rect& row, const HistEntry& e) noexcept {
-            canvas.fill_rect(
-                row, canvas.color(rui_lift(theme.card, rui_elev_panel)));
+            canvas.fill_rounded_rect(
+                row, static_cast<hcpp::i32>(theme.radius_xs),
+                canvas.color(theme.surface_sunk));
             const Rect icon{row.x + 8, row.y + 7, 14, 14};
             const hcpp::u32 krgb = nc_kind_rgb(e.kind, theme);
             rui_rounded_gradient(canvas, icon, 4, rui_lift(krgb, 1), krgb);
@@ -1627,8 +1791,8 @@ namespace hype::ui {
         void paint_nc(Canvas& canvas, const Theme& theme,
                       const Rect& panel) noexcept {
             rui_panel(canvas, panel, rui_elev_panel);
-            const Rect head{panel.x + nc_pad, panel.y + nc_pad,
-                            panel.w - 2 * nc_pad, nc_head_h};
+            const Rect head{panel.x + ui_px(nc_pad), panel.y + ui_px(nc_pad),
+                            panel.w - 2 * ui_px(nc_pad), ui_px(nc_head_h)};
             canvas.fill_circle(head.x + 4, head.y + head.h / 2, 4,
                                canvas.color(theme.accent));
             paint_label(canvas, head.x + 16, label_top(head),
@@ -1638,8 +1802,8 @@ namespace hype::ui {
             paint_label(canvas, clear.x + (clear.w - 28) / 2,
                         label_top(clear), "Clear", theme.card_fg, 13);
             canvas.fill_rect(
-                Rect{panel.x + nc_pad, head.bottom() + 2,
-                     panel.w - 2 * nc_pad, 1},
+                Rect{panel.x + ui_px(nc_pad), head.bottom() + 2,
+                     panel.w - 2 * ui_px(nc_pad), 1},
                 canvas.color(theme.border));
 
             const hcpp::u32 rows = nc_rows_fit(panel);
@@ -1655,10 +1819,12 @@ namespace hype::ui {
         }
 
         // One clipboard row: number-key badge + flattened text preview.
+        // Reskin v2: sunk rounded well rows like the NC archive.
         void paint_cv_row(Canvas& canvas, const Theme& theme,
                           const Rect& row, hcpp::u32 index) noexcept {
-            canvas.fill_rect(
-                row, canvas.color(rui_lift(theme.card, rui_elev_panel)));
+            canvas.fill_rounded_rect(
+                row, static_cast<hcpp::i32>(theme.radius_xs),
+                canvas.color(theme.surface_sunk));
             hcpp::i32 text_x = row.x + 10;
             if (index < 9) {
                 const Rect badge{row.x + 4,
@@ -1696,8 +1862,8 @@ namespace hype::ui {
         void paint_cv(Canvas& canvas, const Theme& theme,
                       const Rect& panel) noexcept {
             rui_panel(canvas, panel, rui_elev_panel);
-            const Rect head{panel.x + cv_pad, panel.y + cv_pad,
-                            panel.w - 2 * cv_pad, cv_head_h};
+            const Rect head{panel.x + ui_px(cv_pad), panel.y + ui_px(cv_pad),
+                            panel.w - 2 * ui_px(cv_pad), ui_px(cv_head_h)};
             canvas.fill_circle(head.x + 4, head.y + head.h / 2, 4,
                                canvas.color(theme.accent));
             paint_label(canvas, head.x + 16, label_top(head), "Clipboard",
@@ -1705,8 +1871,8 @@ namespace hype::ui {
             paint_label(canvas, head.right() - 40, label_top(head),
                         "Win+V", theme.muted_fg, 11);
             canvas.fill_rect(
-                Rect{panel.x + cv_pad, head.bottom() + 2,
-                     panel.w - 2 * cv_pad, 1},
+                Rect{panel.x + ui_px(cv_pad), head.bottom() + 2,
+                     panel.w - 2 * ui_px(cv_pad), 1},
                 canvas.color(theme.border));
             const hcpp::u32 rows = cv_rows();
             if (rows == 0) {
@@ -1800,8 +1966,8 @@ namespace hype::ui {
                         theme.muted_fg, 13);
 
             canvas.fill_rect(
-                Rect{panel.x + cal_pad, date_row.bottom() + 4,
-                     panel.w - 2 * cal_pad, 1},
+                Rect{panel.x + ui_px(cal_pad), date_row.bottom() + 4,
+                     panel.w - 2 * ui_px(cal_pad), 1},
                 canvas.color(theme.border));
 
             // Nav row: "<" prev, centered "Month YYYY", ">" next; the
@@ -2017,8 +2183,8 @@ namespace hype::ui {
                           static_cast<hcpp::i32>(fb.height())};
         bar = {screen.x, screen.bottom() - deskbar_height, screen.w,
                deskbar_height};
-        start_btn = {bar.x + bar_pad, bar.y + bar_pad, start_w,
-                     bar.h - bar_pad * 2};
+        start_btn = {bar.x + ui_px(bar_pad), bar.y + ui_px(bar_pad), ui_px(start_w),
+                     bar.h - ui_px(bar_pad) * 2};
         const Rect menu = compute_menu();
         const Rect qs = qs_rect_now();
         const Rect nc = nc_rect_now();
@@ -2042,24 +2208,24 @@ namespace hype::ui {
         canvas.set_clip(clip);
         const Theme& theme = theme_active();
         if (!area.empty()) {
-            // HypeUI taskbar: flat elevated surface, 1px hairline top
-            // border, and a soft upward shadow (shadow-l direction up)
-            // fading into the desktop above.
+            // HypeUI taskbar (reskin v2): flat `surface` strip, 1px
+            // `border` hairline on top, and a soft upward shadow fading
+            // into the desktop above.
             for (hcpp::i32 i = 0; i < 8; ++i) {
                 canvas.fill_rect_alpha(
                     Rect{bar.x, bar.y - 1 - i, bar.w, 1},
-                    canvas.color(0x000000),
+                    canvas.color(theme.shadow),
                     static_cast<hcpp::u8>((8 - i) * 3));
             }
             canvas.fill_rect(bar,
-                             canvas.color(hype::ui::hui::colors().surface_elev));
+                             canvas.color(hype::ui::hui::colors().surface));
             canvas.fill_rect(Rect{bar.x, bar.y, bar.w, 1},
                              canvas.color(theme.border));
             paint_start_button(canvas, theme);
             // Task buttons stop at the desktop strip, which stops at the
             // tray (issue #135). wm_window_at only enumerates the current
             // desktop's windows, so the buttons are per-desktop already.
-            const hcpp::i32 limit = vdesk_strip().x - task_gap;
+            const hcpp::i32 limit = vdesk_strip().x - ui_px(task_gap);
             for (hcpp::u32 i = 0; i < hype::win::wm_max_windows; ++i) {
                 const Win* w = hype::win::wm_window_at(i);
                 if (w == nullptr) {
@@ -2069,7 +2235,9 @@ namespace hype::ui {
                 if (btn.right() > limit) {
                     break;
                 }
-                paint_task_button(canvas, theme, btn, *w);
+                paint_task_button(canvas, theme, btn, *w,
+                                  hot_zone == bar_hot_task &&
+                                      hot_index == i);
             }
             paint_vdesk_strip(canvas, theme);
             paint_tray(canvas, theme);
@@ -2264,7 +2432,7 @@ namespace hype::ui {
             // Remaining tray padding: consume without action.
             return true;
         }
-        const hcpp::i32 limit = vdesk_strip().x - task_gap;
+        const hcpp::i32 limit = vdesk_strip().x - ui_px(task_gap);
         for (hcpp::u32 i = 0; i < hype::win::wm_max_windows; ++i) {
             const Win* w = hype::win::wm_window_at(i);
             if (w == nullptr) {
@@ -2288,6 +2456,65 @@ namespace hype::ui {
             return true;
         }
         return true;
+    }
+
+    void deskbar_handle_move(hcpp::i32 x, hcpp::i32 y) noexcept {
+        const Point p{x, y};
+        hcpp::u8 zone = bar_hot_none;
+        hcpp::u32 index = 0;
+        if (!bar.empty() && bar.contains(p)) {
+            if (start_btn.contains(p)) {
+                zone = bar_hot_start;
+            } else if (speaker_zone().contains(p)) {
+                zone = bar_hot_speaker;
+            } else if (net_zone().contains(p)) {
+                zone = bar_hot_net;
+            } else if (bell_zone().contains(p)) {
+                zone = bar_hot_bell;
+            } else if (clock_rect().contains(p)) {
+                zone = bar_hot_clock;
+            } else {
+                const hcpp::u32 vdn = hype::win::vdesk_count();
+                bool hit = false;
+                for (hcpp::u32 i = 0; i < vdn; ++i) {
+                    if (vdesk_cell(i).contains(p)) {
+                        zone = bar_hot_vdesk;
+                        index = i;
+                        hit = true;
+                        break;
+                    }
+                }
+                if (!hit) {
+                    const hcpp::i32 limit =
+                        vdesk_strip().x - ui_px(task_gap);
+                    for (hcpp::u32 i = 0; i < hype::win::wm_max_windows;
+                         ++i) {
+                        const Win* w = hype::win::wm_window_at(i);
+                        if (w == nullptr) {
+                            break;
+                        }
+                        const Rect btn = task_btn_rect(i);
+                        if (btn.right() > limit) {
+                            break;
+                        }
+                        if (btn.contains(p)) {
+                            zone = bar_hot_task;
+                            index = i;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (zone != bar_hot_task && zone != bar_hot_vdesk) {
+            index = 0;
+        }
+        if (zone == hot_zone && index == hot_index) {
+            return;
+        }
+        hot_zone = zone;
+        hot_index = index;
+        invalidate(bar);
     }
 
     void deskbar_notify(const char* title, const char* msg) noexcept {

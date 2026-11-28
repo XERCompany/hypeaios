@@ -1,13 +1,19 @@
 #include "kernel/ui/flowlogin.h"
 
 #include "kernel/flowlogin.h"
+#include "kernel/font/hypetext.h"
 #include "kernel/functionemitkeys.h"
+#include "kernel/gfx/hypegfx.h"
 #include "kernel/input/scancode.h"
 #include "kernel/serial.hpp"
 #include "kernel/ui/canvas.h"
 #include "kernel/ui/flex.h"
+#include "kernel/ui/huitokens.h"
+#include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/overlay.h"
+#include "kernel/ui/text_render.h"
 #include "kernel/ui/theme.h"
+#include "kernel/ui/uiscale.h"
 #include "kernel/ui/widget_tree.h"
 #include "kernel/ui/widgets/button.h"
 #include "kernel/ui/widgets/inputotp.h"
@@ -127,10 +133,53 @@ namespace hype::ui::flowlogin {
         const Rect screen{0, 0, static_cast<hcpp::i32>(framebuffer.width()),
                           static_cast<hcpp::i32>(framebuffer.height())};
         canvas.fill_rect(screen, canvas.color(theme.bg));
+        // Reskin v2 greeter veil: a radial falloff into the scrim tone
+        // so the sign-in card reads as the only lit surface (blur-ish
+        // dim without a real blur pass).
+        gfx::gfx_gradient_radial(
+            canvas, screen, rui_lift(theme.bg, 1),
+            rui_shade(theme.bg, 8));
+        canvas.fill_rect_alpha(screen, canvas.color(theme.scrim),
+                               static_cast<hcpp::u8>(theme.scrim_alpha / 3));
 
         const Rect window_rect = centered_window(screen, 440, 300);
         tree.layout_root(window_rect);
         tree.paint_tree(canvas);
+
+        // Avatar badge straddling the card's top edge: accent circle +
+        // user monogram on a soft shadow puck.
+        const hcpp::i32 av_r = ui_px(22);
+        const hcpp::i32 av_cx = window_rect.x + window_rect.w / 2;
+        const hcpp::i32 av_cy = window_rect.y;
+        hui::draw_shadow(canvas,
+                         Rect{av_cx - av_r, av_cy - av_r, av_r * 2,
+                              av_r * 2},
+                         av_r, hui::HuiShadowLevel::Md);
+        canvas.fill_circle(av_cx, av_cy, av_r, canvas.color(theme.accent));
+        canvas.stroke_circle(av_cx, av_cy, av_r,
+                             canvas.color(theme.accent_hover));
+        char mono[2] = {'U', '\0'};
+        for (hcpp::size_t i = 6; i < sizeof(user_label_text) &&
+                                 user_label_text[i] != '\0'; ++i) {
+            char c = user_label_text[i];
+            if (c >= 'a' && c <= 'z') {
+                c = static_cast<char>(c - 'a' + 'A');
+            }
+            if (c >= 'A' && c <= 'Z') {
+                mono[0] = c;
+                break;
+            }
+        }
+        const hcpp::u32 mono_px = static_cast<hcpp::u32>(av_r);
+        if (hype::font::hypefont_ready()) {
+            const hcpp::StringView mv{mono, 1};
+            const hcpp::i32 tw = hype::font::text_measure(mv, mono_px);
+            const hcpp::i32 line = static_cast<hcpp::i32>(
+                hype::font::text_line_height(mono_px));
+            draw_text_sdf_styled(canvas, av_cx - tw / 2, av_cy - line / 2,
+                                 mv, canvas.color(theme.accent_fg),
+                                 mono_px, 96, false);
+        }
         overlays.paint_overlays(canvas, screen);
     }
 
