@@ -10,6 +10,7 @@
 #include "kernel/input/scancode.h"
 #include "kernel/irq.h"
 #include "kernel/panic.h"
+#include "kernel/sched/thread.h"
 #include "kernel/serial.hpp"
 
 extern "C" hcpp::uintptr_t isr_stub_table[];
@@ -41,6 +42,12 @@ namespace hype::interrupts {
             // shared time base belongs to the BSP alone or it would
             // run N-times fast on an N-CPU machine.
             if (x86::smp_is_bsp()) ticks = ticks + 1;
+            // Preemption point: each CPU's own LAPIC timer drives its
+            // scheduler tick. The IRQ0 EOI was already sent before
+            // dispatch (interrupt_handle below) so sched may switch
+            // stacks from inside here and let the abandoned frame
+            // complete later on whichever CPU resumes the thread.
+            sched::tick();
         }
         void keyboard_handler(void*, hcpp::u32) noexcept {
             const input::DecodedKey key = input::scancode_decode(hype_port_in8(0x60));
@@ -53,10 +60,18 @@ namespace hype::interrupts {
     extern "C" void interrupt_handle(hcpp::u64 vector, hcpp::u64 error,
                                      InterruptRegisters* regs) noexcept {
         if (vector >= 32 && vector < 48) {
-            kernel::irq_dispatch(static_cast<hcpp::u8>(vector - 32));
+            const hcpp::u8 irq = static_cast<hcpp::u8>(vector - 32);
+            // IRQ0 (timer) EOI goes BEFORE dispatch: the scheduler may
+            // context-switch inside the tick handler, parking this CPU's
+            // interrupt frame on the preempted thread's stack to be
+            // completed (possibly on another CPU) when that thread is
+            // rescheduled. The EOI must therefore reach this CPU's
+            // LAPIC/8259 now; the resumed frame skips a second EOI.
+            if (irq == 0) x86::apic_send_eoi(irq);
+            kernel::irq_dispatch(irq);
             // EOI goes to the LAPIC when the APIC path is live and to
             // the 8259 pair otherwise; handlers stay agnostic.
-            x86::apic_send_eoi(static_cast<hcpp::u8>(vector - 32));
+            if (irq != 0) x86::apic_send_eoi(irq);
         } else if (vector >= 48) {
             // Secondary dispatch: MSI/MSI-X vectors land here. The LAPIC
             // EOI is sent whether or not a handler was registered so a

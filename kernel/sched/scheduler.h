@@ -1,8 +1,5 @@
 #pragma once
-#include "hcpp/types.hpp"
-namespace hype::sched {
-    void scheduler_initialize() noexcept;
-    bool scheduler_selftest() noexcept;
-    hcpp::size_t scheduler_thread_count() noexcept;
-    hcpp::u32 scheduler_context_switches() noexcept;
-}  // namespace hype::sched
+
+// Public scheduler API moved to kernel/sched/thread.h (issue #137);
+// this header stays as the historical include path.
+#include "kernel/sched/thread.h"
