@@ -19,7 +19,7 @@ namespace hcpp::atomic {
     }
     bool compare_exchange32(volatile u32 *target, u32 expected, u32 desired) noexcept {
         u32 before = expected;
-        asm volatile("lock cmpxchgl %3,%1" : "+a"(before), "+m"(*target) : "r"(desired) : "memory");
+        asm volatile("lock cmpxchgl %2,%1" : "+a"(before), "+m"(*target) : "r"(desired) : "memory");
         return before == expected;
     }
     u64 load64(const volatile u64 *value) noexcept {
