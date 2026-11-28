@@ -22,6 +22,10 @@
 
 namespace hype::win {
 
+    // Base 32/40 px; ui_scale_init rewrites them with the DPI scale.
+    hcpp::i32 wm_chrome_height = 32;
+    hcpp::i32 wm_cascade_step = 40;
+
     namespace {
 
         using hype::ui::Canvas;

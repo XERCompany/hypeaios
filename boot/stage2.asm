@@ -11,7 +11,9 @@ BOOT_INFO_ADDR   equ 0x00005000
 VBE_MODE_INFO    equ 0x00005100
 EDID_BUFFER      equ 0x00005200
 E820_BUFFER      equ 0x00005500
+VBE_INFO         equ 0x00005800
 VBE_MODE         equ 0x0118
+VBE_PREF_COUNT   equ 6
 BOOT_MAGIC       equ 0x48595045
 
 CODE32_SEL equ 0x08
@@ -254,9 +256,114 @@ init_vbe:
     xor al, al
     rep stosb
 
+    ; Issue #174: enumerate the VBE mode list and pick the best
+    ; preferred-resolution 32bpp mode instead of the fixed 0x118
+    ; (1024x768). VbeInfoBlock goes at VBE_INFO; its VideoModePtr is a
+    ; far ptr into BIOS ROM. The scan is bounded at 128 entries and
+    ; requires mode attrs bit0 (supported) + bit4 (graphics) + bit7
+    ; (linear framebuffer). Falls back to VBE_MODE when the scan finds
+    ; nothing usable.
+    mov di, VBE_INFO
+    xor ax, ax
+    mov cx, 256
+    rep stosb
+    mov dword [VBE_INFO], 0x32454256
+    mov di, VBE_INFO
+    mov ax, 0x4F00
+    int 0x10
+    cmp ax, 0x004F
+    jne .fallback
+    cmp dword [VBE_INFO], 0x41534556
+    jne .fallback
+
+    mov ax, [VBE_INFO + 14]
+    mov [vbe_scan_off], ax
+    mov ax, [VBE_INFO + 16]
+    mov [vbe_scan_seg], ax
+    mov word [vbe_best_mode], 0xFFFF
+    mov byte [vbe_best_rank], 0xFF
+    mov byte [vbe_scan_count], 0
+
+.scan_loop:
+    cmp byte [vbe_scan_count], 128
+    jae .scan_done
+    mov es, [vbe_scan_seg]
+    mov si, [vbe_scan_off]
+    mov cx, es:[si]
+    cmp cx, 0xFFFF
+    je .scan_done
+    mov [vbe_cur_mode], cx
+    add word [vbe_scan_off], 2
+    inc byte [vbe_scan_count]
+
+    mov di, VBE_MODE_INFO
+    xor ax, ax
+    mov es, ax
+    mov cx, 256
+    rep stosb
     mov di, VBE_MODE_INFO
     mov ax, 0x4F01
-    mov cx, VBE_MODE
+    mov cx, [vbe_cur_mode]
+    int 0x10
+    cmp ax, 0x004F
+    jne .scan_loop
+
+    mov ax, [VBE_MODE_INFO]
+    and ax, 0x0091
+    cmp ax, 0x0091
+    jne .scan_loop
+    cmp byte [VBE_MODE_INFO + 25], 32
+    jne .scan_loop
+
+    mov ax, [VBE_MODE_INFO + 18]
+    mov [vbe_cur_w], ax
+    mov ax, [VBE_MODE_INFO + 20]
+    mov [vbe_cur_h], ax
+
+    xor bx, bx
+.match_pref:
+    cmp bl, VBE_PREF_COUNT
+    jae .scan_loop
+    mov si, bx
+    shl si, 2
+    mov ax, [vbe_prefs + si]
+    cmp ax, [vbe_cur_w]
+    jne .pref_next
+    mov ax, [vbe_prefs + si + 2]
+    cmp ax, [vbe_cur_h]
+    je .pref_hit
+.pref_next:
+    inc bx
+    jmp .match_pref
+.pref_hit:
+    cmp bl, [vbe_best_rank]
+    jae .scan_loop
+    mov [vbe_best_rank], bl
+    mov ax, [vbe_cur_mode]
+    mov [vbe_best_mode], ax
+    jmp .scan_loop
+
+.scan_done:
+    mov ax, [vbe_best_mode]
+    cmp ax, 0xFFFF
+    je .fallback
+    mov [vbe_chosen], ax
+    jmp .set_mode
+
+.fallback:
+    mov ax, VBE_MODE
+    mov [vbe_chosen], ax
+
+.set_mode:
+    mov di, VBE_MODE_INFO
+    xor ax, ax
+    mov es, ax
+    mov cx, 256
+    rep stosb
+
+    mov di, VBE_MODE_INFO
+    mov ax, 0x4F01
+    mov cx, [vbe_chosen]
     int 0x10
     cmp ax, 0x004F
     jne .failed
@@ -265,7 +372,8 @@ init_vbe:
     jz .failed
 
     mov ax, 0x4F02
-    mov bx, VBE_MODE | 0x4000
+    mov bx, [vbe_chosen]
+    or bx, 0x4000
     int 0x10
     cmp ax, 0x004F
     jne .failed
@@ -297,7 +405,8 @@ init_vbe:
     mov [BOOT_INFO_ADDR + 26], al
 
     mov byte [BOOT_INFO_ADDR + 27], 1
-    mov word [BOOT_INFO_ADDR + 28], VBE_MODE
+    mov ax, [vbe_chosen]
+    mov [BOOT_INFO_ADDR + 28], ax
     jmp .done
 
 .failed:
@@ -377,6 +486,29 @@ gdt_descriptor:
 boot_drive db 0
 edid_block_index db 0
 edid_extension_limit db 0
+
+; Issue #174: preferred framebuffer resolutions, best first. The mode
+; scan keeps the lowest table index it can satisfy with a 32bpp LFB
+; mode; 1024x768 stays in the list as the last preferred hit and
+; VBE_MODE remains the hard fallback when the scan finds nothing.
+align 4
+vbe_prefs:
+    dw 1920, 1080
+    dw 1680, 1050
+    dw 1600, 900
+    dw 1366, 768
+    dw 1280, 720
+    dw 1024, 768
+
+vbe_scan_seg    dw 0
+vbe_scan_off    dw 0
+vbe_scan_count  db 0
+vbe_cur_mode    dw 0
+vbe_cur_w       dw 0
+vbe_cur_h       dw 0
+vbe_best_mode   dw 0
+vbe_best_rank   db 0
+vbe_chosen      dw 0
 loading_msg db "HypeBoot stage2: loading HypeCore", 13, 10, 0
 disk_error_msg db "HypeBoot stage2: kernel read failed", 13, 10, 0
 

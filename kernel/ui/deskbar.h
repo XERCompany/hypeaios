@@ -8,7 +8,9 @@ namespace hype::ui {
 
     // Bottom taskbar strip: Start button + menu, per-window task buttons,
     // system tray clock. Rendered by desk_paint on top of the window layer.
-    constexpr hcpp::i32 deskbar_height = 36;
+    // DPI-aware (issue #174): holds the scaled value after ui_scale_init,
+    // 36 px at 1.00x.
+    extern hcpp::i32 deskbar_height;
 
     // Idle hook: watches the window snapshot and the RTC minute and marks
     // only the affected bar cells dirty through winman damage tracking.

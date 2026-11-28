@@ -5,6 +5,7 @@
 #include "kernel/font/hypefont.h"
 #include "kernel/font/ttfrast.h"
 #include "kernel/serial.hpp"
+#include "kernel/ui/uiscale.h"
 
 namespace hype::font {
 
@@ -239,6 +240,10 @@ namespace hype::font {
     }
 
     hcpp::i32 text_measure(hcpp::StringView text, hcpp::u32 size_px) noexcept {
+        // DPI scale (issue #174): every hypetext entry point multiplies
+        // the caller's logical size by ui_scale_x100, so text and the
+        // metrics derived from it scale together.
+        size_px = hype::ui::ui_text_px(size_px);
         if (!hypefont_ready() || text_scale_q8(size_px) == 0) {
             return 0;
         }
@@ -246,6 +251,7 @@ namespace hype::font {
     }
 
     hcpp::u32 text_line_height(hcpp::u32 size_px) noexcept {
+        size_px = hype::ui::ui_text_px(size_px);
         if (text_scale_q8(size_px) == 0) {
             return 0;
         }
@@ -257,6 +263,7 @@ namespace hype::font {
     hcpp::i32 text_draw_clip(hcpp::graphics::Framebuffer& fb, hcpp::i32 x,
                              hcpp::i32 y, hcpp::StringView text, hcpp::u32 color,
                              hcpp::u32 size_px, Rect clip) noexcept {
+        size_px = hype::ui::ui_text_px(size_px);
         if (!hypefont_ready() || text_scale_q8(size_px) == 0 || text.empty() ||
             clip.empty()) {
             return 0;
@@ -292,6 +299,7 @@ namespace hype::font {
                                     hcpp::u32 color, hcpp::u32 size_px,
                                     hcpp::u8 weight, bool italic,
                                     Rect clip) noexcept {
+        size_px = hype::ui::ui_text_px(size_px);
         const Rect bounds{0, 0, static_cast<hcpp::i32>(fb.width()),
                           static_cast<hcpp::i32>(fb.height())};
         clip = clip.intersection(bounds);
@@ -310,6 +318,10 @@ namespace hype::font {
     hcpp::i32 text_draw_wrapped(hcpp::graphics::Framebuffer& fb, Rect rect,
                                 hcpp::StringView text, TextAlign align,
                                 hcpp::u32 size_px) noexcept {
+        // Keep the caller's logical size for the public helper calls
+        // below — they apply the DPI scale themselves (issue #174).
+        const hcpp::u32 logical_px = size_px;
+        size_px = hype::ui::ui_text_px(size_px);
         if (!hypefont_ready() || text_scale_q8(size_px) == 0 || rect.empty() ||
             text.empty()) {
             return 0;
@@ -320,7 +332,7 @@ namespace hype::font {
         const hcpp::u32 white = fb.encode_rgb(255, 255, 255);
         fb.decode_rgb(white, plot.red, plot.green, plot.blue);
         const hcpp::i32 line_height =
-            static_cast<hcpp::i32>(text_line_height(size_px));
+            static_cast<hcpp::i32>(text_line_height(logical_px));
         const hcpp::i32 space_w =
             q8_to_px(rast::advance_q8(' ', size_px)) != 0
                 ? q8_to_px(rast::advance_q8(' ', size_px))
@@ -397,12 +409,16 @@ namespace hype::font {
     void text_shadow(hcpp::graphics::Framebuffer& fb, hcpp::i32 x, hcpp::i32 y,
                      hcpp::StringView text, hcpp::u32 size_px, hcpp::u32 color,
                      hcpp::i32 shadow_offset, hcpp::i32 blur) noexcept {
+        // Same pattern as text_draw_wrapped: measure helpers re-apply
+        // the DPI scale, so pass the caller's logical size (issue #174).
+        const hcpp::u32 logical_px = size_px;
+        size_px = hype::ui::ui_text_px(size_px);
         if (!hypefont_ready() || text_scale_q8(size_px) == 0 || text.empty()) {
             return;
         }
-        const hcpp::i32 text_w = text_measure(text, size_px);
+        const hcpp::i32 text_w = text_measure(text, logical_px);
         const hcpp::i32 line_height =
-            static_cast<hcpp::i32>(text_line_height(size_px));
+            static_cast<hcpp::i32>(text_line_height(logical_px));
         hcpp::i32 pad = blur + (shadow_offset < 0 ? -shadow_offset
                                                   : shadow_offset) + 2;
         const hcpp::i32 mask_w =

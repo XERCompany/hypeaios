@@ -1,6 +1,7 @@
 #include "kernel/win/deskicons.h"
 
 #include "kernel/cfg/settings.h"
+#include "kernel/font/hypetext.h"
 #include "kernel/gfx/hypegfx.h"
 #include "kernel/hxrt/apps/dxbg.h"
 #include "kernel/hxrt/hxrt.h"
@@ -10,11 +11,17 @@
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
+#include "kernel/ui/uiscale.h"
 #include "kernel/vfs/hypefs.h"
 #include "kernel/win/deskman.h"
 #include "kernel/win/winman.h"
 
 namespace hype::win {
+
+    // Base 96/88/12 px; ui_scale_init rewrites them with the DPI scale.
+    hcpp::i32 desk_icon_cell_w = 96;
+    hcpp::i32 desk_icon_cell_h = 88;
+    hcpp::i32 desk_icon_margin = 12;
 
     namespace {
 
@@ -324,8 +331,9 @@ namespace hype::win {
                     sel_box, static_cast<hcpp::i32>(theme.radius_sm),
                     canvas.color(theme.accent));
             }
-            const Rect glyph{cell.x + (cell.w - glyph_size) / 2, cell.y + 2,
-                             glyph_size, glyph_size};
+            const hcpp::i32 glyph_px = hype::ui::ui_px(glyph_size);
+            const Rect glyph{cell.x + (cell.w - glyph_px) / 2, cell.y + 2,
+                             glyph_px, glyph_px};
             if (icon.kind == IconApp) {
                 paint_glyph_app(canvas, theme, glyph, icon);
             } else {
@@ -338,7 +346,14 @@ namespace hype::win {
                 ++len;
             }
             label[len] = '\0';
-            const hcpp::i32 text_w = static_cast<hcpp::i32>(len) * 8;
+            // Scaled-font-aware width (issue #174): the 8 px/em estimate
+            // drifts once hypetext applies the DPI scale, so measure
+            // through the same scaled path canvas.draw_text renders with.
+            hcpp::i32 text_w = hype::font::text_measure(
+                hcpp::StringView{label, len}, 13);
+            if (text_w <= 0) {
+                text_w = static_cast<hcpp::i32>(len) * 8;
+            }
             hcpp::i32 tx = cell.x + (cell.w - text_w) / 2;
             if (tx < cell.x) {
                 tx = cell.x;
