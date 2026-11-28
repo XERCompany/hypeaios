@@ -87,6 +87,10 @@ namespace hype::win {
                      hcpp::u32 count, WmCtxPick pick, void* user) noexcept;
     void wm_ctx_close() noexcept;
     bool wm_ctx_visible() noexcept;
+    // True while any L-layer modal owns the top surface (window menu,
+    // context menu, command palette, dialogs) — deskman uses it to
+    // present the full screen under XDP instead of just the damage clip.
+    bool wm_overlay_open() noexcept;
     hcpp::u32 wm_count() noexcept;
     const Win* wm_window(hcpp::u32 id) noexcept;
     const Win* wm_window_at(hcpp::u32 index) noexcept;
