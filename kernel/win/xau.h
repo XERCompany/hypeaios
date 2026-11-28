@@ -54,6 +54,13 @@ namespace hype::win {
         XAU_MSG_MAXIMIZE = 16,   // wparam = 1 maximized, 0 restored
         XAU_MSG_FOCUS = 17,      // wparam = 1 gained, 0 lost
         XAU_MSG_TIMER = 18,      // wparam = timer id
+        // Clipboard messages (kernel/ui/clipboard.cc): delivered to the
+        // focused window by the Ctrl+C/X/V chord dispatch. Apps pull or
+        // push text via hype::ui::clip_set/clip_get — nothing rides in
+        // wparam/lparam.
+        XAU_MSG_COPY = 19,       // app should clip_set() its selection
+        XAU_MSG_CUT = 20,        // copy + remove the selection
+        XAU_MSG_PASTE = 21,      // app should insert clip_get() text
     };
 
     // xau_create style flags (XAU_WS_*).

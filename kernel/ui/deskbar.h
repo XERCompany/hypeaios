@@ -56,4 +56,17 @@ namespace hype::ui {
     // press was consumed by the panel.
     bool deskbar_handle_mouse_r(hcpp::i32 x, hcpp::i32 y) noexcept;
 
+    // Clipboard-history flyout (Win+V): a deskbar panel over the
+    // hype::ui clip store in kernel/ui/clipboard.cc. Rows are numbered
+    // previews; click or a number-row key pastes that entry into the
+    // focused window, Esc or an outside click closes.
+    bool deskbar_clip_open() noexcept;
+    void deskbar_open_clip() noexcept;
+    void deskbar_close_clip() noexcept;
+    void deskbar_toggle_clip() noexcept;
+    // Scancode handler from winman's key hook: Esc closes, number-row
+    // codes 2..10 ("1".."9") paste history rows 0..8. Returns true only
+    // when the flyout is open and consumed the key.
+    bool deskbar_clip_key(hcpp::u16 code) noexcept;
+
 }

@@ -14,6 +14,7 @@
 #include "kernel/time/rtc.h"
 #include "kernel/time/timer.h"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/clipboard.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/toast.h"
 #include "kernel/ui/text_render.h"
@@ -63,6 +64,16 @@ namespace hype::ui {
         constexpr hcpp::i32 nc_anim_ticks = 6;
         constexpr hcpp::i32 nc_anim_px = 6;
         constexpr hcpp::u32 hist_max = 24;
+        // Clipboard-history flyout (Win+V): bottom-right anchored above
+        // the bar, same slide-in machinery as quick settings.
+        constexpr hcpp::i32 cv_w = 320;
+        constexpr hcpp::i32 cv_pad = 12;
+        constexpr hcpp::i32 cv_head_h = 26;
+        constexpr hcpp::i32 cv_row_h = 30;
+        constexpr hcpp::u32 cv_max_rows = 10;
+        constexpr hcpp::i32 cv_anim_ticks = 6;
+        constexpr hcpp::i32 cv_anim_px = 6;
+        constexpr hcpp::u32 cv_preview_max = 40;
         constexpr hcpp::i32 toast_col_w = 352;
         constexpr hcpp::i32 menu_w = 180;
         constexpr hcpp::i32 menu_pad = 4;
@@ -153,6 +164,11 @@ namespace hype::ui {
         hcpp::u32 hist_count = 0;  // live entries (<= hist_max)
         bool nc_open = false;
         hcpp::u32 nc_age = nc_anim_ticks;
+
+        // Clipboard-history flyout state; the entries themselves live in
+        // kernel/ui/clipboard.cc (clip_count/clip_history/clip_paste_at).
+        bool cv_open = false;
+        hcpp::u32 cv_age = cv_anim_ticks;
 
         void invalidate(const Rect& region) noexcept {
             if (!region.empty()) {
@@ -360,6 +376,81 @@ namespace hype::ui {
                 default:
                     return theme.primary;
             }
+        }
+
+        // ---- clipboard-history flyout (Win+V) ---------------------------
+
+        hcpp::u32 cv_rows() noexcept {
+            const hcpp::u32 n = clip_count();
+            return n < cv_max_rows ? n : cv_max_rows;
+        }
+
+        // Clipboard panel at its final anchor (bottom-right above bar).
+        Rect compute_cv() noexcept {
+            if (bar.empty()) {
+                return {};
+            }
+            const hcpp::u32 rows = cv_rows();
+            const hcpp::i32 h =
+                cv_pad * 2 + cv_head_h + 6 +
+                static_cast<hcpp::i32>(rows == 0 ? 1 : rows) * cv_row_h;
+            Rect r{bar.right() - bar_pad - cv_w, bar.y - 6 - h, cv_w, h};
+            if (r.y < 2) {
+                r.y = 2;
+            }
+            return r;
+        }
+
+        Rect cv_rect_now() noexcept {
+            if (!cv_open) {
+                return {};
+            }
+            Rect r = compute_cv();
+            const hcpp::u32 left =
+                cv_age < cv_anim_ticks ? cv_anim_ticks - cv_age : 0;
+            r.y += static_cast<hcpp::i32>(left) * cv_anim_px;
+            return r;
+        }
+
+        Rect cv_anim_region() noexcept {
+            Rect r = compute_cv();
+            r.h += cv_anim_ticks * cv_anim_px;
+            return rui_paint_bounds(r);
+        }
+
+        Rect cv_row_rect(const Rect& panel, hcpp::u32 index) noexcept {
+            const hcpp::i32 top = panel.y + cv_pad + cv_head_h + 6;
+            return {panel.x + 6,
+                    top + static_cast<hcpp::i32>(index) * cv_row_h,
+                    panel.w - 12, cv_row_h - 4};
+        }
+
+        void open_cv() noexcept {
+            if (cv_open) {
+                return;
+            }
+            // One flyout at a time, like the real shells.
+            if (start_open) {
+                deskbar_close_start();
+            }
+            if (qs_open) {
+                deskbar_close_qs();
+            }
+            if (nc_open) {
+                deskbar_close_nc();
+            }
+            if (hype::win::wm_menu_visible()) {
+                hype::win::wm_menu_close();
+            }
+            if (hype::win::wm_ctx_visible()) {
+                hype::win::wm_ctx_close();
+            }
+            cv_open = true;
+            cv_age = 0;
+            serial::write("clip hist=");
+            serial::write_dec32(clip_count());
+            serial::write("\r\n");
+            invalidate(cv_anim_region());
         }
 
         void copy_text(char* dst, hcpp::size_t cap,
@@ -725,6 +816,9 @@ namespace hype::ui {
             search_query[0] = '\0';
             file_hits_count = 0;
             search_sel = 0;
+            if (cv_open) {
+                deskbar_close_clip();
+            }
             build_menu_order();
             start_open = true;
             serial::write_line("start menu=open");
@@ -747,6 +841,9 @@ namespace hype::ui {
             }
             if (nc_open) {
                 deskbar_close_nc();
+            }
+            if (cv_open) {
+                deskbar_close_clip();
             }
             if (qs_vol < 0) {
                 // First open: adopt the mixer master gain (Q8, 256 = 100%).
@@ -778,6 +875,9 @@ namespace hype::ui {
             }
             if (hype::win::wm_ctx_visible()) {
                 hype::win::wm_ctx_close();
+            }
+            if (cv_open) {
+                deskbar_close_clip();
             }
             nc_open = true;
             nc_age = 0;
@@ -1312,6 +1412,76 @@ namespace hype::ui {
             }
         }
 
+        // One clipboard row: number-key badge + flattened text preview.
+        void paint_cv_row(Canvas& canvas, const Theme& theme,
+                          const Rect& row, hcpp::u32 index) noexcept {
+            canvas.fill_rect(
+                row, canvas.color(rui_lift(theme.card, rui_elev_panel)));
+            hcpp::i32 text_x = row.x + 10;
+            if (index < 9) {
+                const Rect badge{row.x + 4,
+                                 row.y + (row.h - 16) / 2, 16, 16};
+                rui_control_bg(canvas, badge, theme.secondary,
+                               theme.border);
+                char digit[2] = {static_cast<char>('1' + index), '\0'};
+                paint_label(canvas, badge.x + 5, badge.y + 2,
+                            hcpp::StringView{digit, 1}, theme.muted_fg,
+                            11);
+                text_x = row.x + 26;
+            }
+            // Preview = first ~40 chars, control bytes flattened to
+            // spaces so newlines never smear a second visual line.
+            char preview[cv_preview_max + 1];
+            hcpp::u32 len = 0;
+            const char* text = clip_history(index, len);
+            hcpp::u32 n = 0;
+            if (text != nullptr) {
+                while (n < cv_preview_max && n < len) {
+                    const char c = text[n];
+                    preview[n] = (c >= 32 && c < 127) ? c : ' ';
+                    ++n;
+                }
+            }
+            preview[n] = '\0';
+            const Rect saved_clip = canvas.clip();
+            canvas.set_clip(saved_clip.intersection(
+                Rect{text_x, row.y, row.right() - 6 - text_x, row.h}));
+            paint_label(canvas, text_x, label_top(row),
+                        hcpp::StringView{preview, n}, theme.card_fg, 13);
+            canvas.set_clip(saved_clip);
+        }
+
+        void paint_cv(Canvas& canvas, const Theme& theme,
+                      const Rect& panel) noexcept {
+            rui_panel(canvas, panel, rui_elev_panel);
+            const Rect head{panel.x + cv_pad, panel.y + cv_pad,
+                            panel.w - 2 * cv_pad, cv_head_h};
+            canvas.fill_circle(head.x + 4, head.y + head.h / 2, 4,
+                               canvas.color(theme.accent));
+            paint_label(canvas, head.x + 16, label_top(head), "Clipboard",
+                        theme.card_fg, 13);
+            paint_label(canvas, head.right() - 40, label_top(head),
+                        "Win+V", theme.muted_fg, 11);
+            canvas.fill_rect(
+                Rect{panel.x + cv_pad, head.bottom() + 2,
+                     panel.w - 2 * cv_pad, 1},
+                canvas.color(theme.border));
+            const hcpp::u32 rows = cv_rows();
+            if (rows == 0) {
+                const Rect row = cv_row_rect(panel, 0);
+                paint_label(canvas, row.x + 10, label_top(row),
+                            "Clipboard is empty", theme.muted_fg, 13);
+            }
+            for (hcpp::u32 i = 0; i < rows; ++i) {
+                paint_cv_row(canvas, theme, cv_row_rect(panel, i), i);
+            }
+            if (rui_dark_surface()) {
+                hype::gfx::gfx_inner_glow_edge(
+                    canvas, panel.inset(Insets::uniform(1)),
+                    static_cast<hcpp::i32>(theme.radius_lg), theme.accent);
+            }
+        }
+
         void print_clock() noexcept {
             serial::write("tray clock=");
             serial::write_char(static_cast<char>('0' + clock_hour / 10));
@@ -1355,6 +1525,10 @@ namespace hype::ui {
         if (nc_open && nc_age < nc_anim_ticks) {
             ++nc_age;
             invalidate(nc_anim_region());
+        }
+        if (cv_open && cv_age < cv_anim_ticks) {
+            ++cv_age;
+            invalidate(cv_anim_region());
         }
         // Toast TTL counts down inside ToastHost::paint — keep the stack
         // column damaged while any card is alive so expiry and the
@@ -1434,15 +1608,17 @@ namespace hype::ui {
         const Rect menu = compute_menu();
         const Rect qs = qs_rect_now();
         const Rect nc = nc_rect_now();
+        const Rect cv = cv_rect_now();
         const Rect area = bar.intersection(clip);
         const Rect menu_area = menu.intersection(clip);
         const Rect qs_area = qs.intersection(clip);
         const Rect nc_area = nc.intersection(clip);
+        const Rect cv_area = cv.intersection(clip);
         const Rect toast_area = toasts.count() > 0
                                     ? toast_region().intersection(clip)
                                     : Rect{};
         if (area.empty() && menu_area.empty() && qs_area.empty() &&
-            nc_area.empty() && toast_area.empty()) {
+            nc_area.empty() && cv_area.empty() && toast_area.empty()) {
             return;
         }
         Canvas canvas(fb);
@@ -1476,6 +1652,9 @@ namespace hype::ui {
         }
         if (!nc_area.empty()) {
             paint_nc(canvas, theme, nc);
+        }
+        if (!cv_area.empty()) {
+            paint_cv(canvas, theme, cv);
         }
         // Toasts sit in the band above the bar, topmost of the shell UI.
         if (toasts.count() > 0 && !toast_region().empty()) {
@@ -1569,6 +1748,25 @@ namespace hype::ui {
             }
             // Click outside dismisses, then the click may hit the bar.
             deskbar_close_nc();
+        }
+        if (cv_open) {
+            const Rect panel = cv_rect_now();
+            if (panel.contains(p)) {
+                // Row click promotes that history entry and pastes it
+                // into the still-focused window.
+                const hcpp::u32 rows = cv_rows();
+                for (hcpp::u32 i = 0; i < rows; ++i) {
+                    if (!cv_row_rect(panel, i).contains(p)) {
+                        continue;
+                    }
+                    clip_paste_at(i);
+                    deskbar_close_clip();
+                    return true;
+                }
+                return true;
+            }
+            // Click outside dismisses, then the click may hit the bar.
+            deskbar_close_clip();
         }
         if (bar.empty() || !bar.contains(p)) {
             return false;
@@ -1698,6 +1896,16 @@ namespace hype::ui {
     // Right-click inside the open notification center dismisses the row
     // under the cursor (same result as its "x" hitbox).
     bool deskbar_handle_mouse_r(hcpp::i32 x, hcpp::i32 y) noexcept {
+        if (cv_open) {
+            // No right-click affordance in the clipboard flyout: inside
+            // is consumed, outside closes and falls through to routing.
+            const Point p{x, y};
+            if (cv_rect_now().contains(p)) {
+                return true;
+            }
+            deskbar_close_clip();
+            return false;
+        }
         if (!nc_open) {
             return false;
         }
@@ -1720,6 +1928,50 @@ namespace hype::ui {
             return true;
         }
         return true;
+    }
+
+    bool deskbar_clip_open() noexcept { return cv_open; }
+
+    void deskbar_open_clip() noexcept {
+        if (!cv_open) {
+            open_cv();
+        }
+    }
+
+    void deskbar_close_clip() noexcept {
+        if (!cv_open) {
+            return;
+        }
+        // Include the panel shadow spill so dismiss leaves no ring.
+        const Rect gone = rui_paint_bounds(cv_rect_now());
+        cv_open = false;
+        serial::write_line("clip flyout=close");
+        invalidate(gone);
+    }
+
+    void deskbar_toggle_clip() noexcept {
+        if (cv_open) {
+            deskbar_close_clip();
+        } else {
+            open_cv();
+        }
+    }
+
+    bool deskbar_clip_key(hcpp::u16 code) noexcept {
+        if (!cv_open) {
+            return false;
+        }
+        if (code == 1) {  // escape
+            deskbar_close_clip();
+            return true;
+        }
+        // Number row: PS/2 codes 2..10 are '1'..'9' -> rows 0..8.
+        if (code >= 2 && code <= 10) {
+            clip_paste_at(code - 2);
+            deskbar_close_clip();
+            return true;
+        }
+        return false;
     }
 
     bool deskbar_start_open() noexcept { return start_open; }
