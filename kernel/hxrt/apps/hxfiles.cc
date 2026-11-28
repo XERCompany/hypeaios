@@ -31,6 +31,7 @@
 #include "kernel/session/session.h"
 #include "kernel/time/timer.h"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/clipboard.h"
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/theme.h"
@@ -91,8 +92,8 @@ namespace hype::hxrt {
         constexpr hcpp::u16 key_enter = 28;
         constexpr hcpp::u16 key_ctrl = 29;
         constexpr hcpp::u16 key_a = 30;
-        constexpr hcpp::u16 key_c = 46;
-        constexpr hcpp::u16 key_v = 47;
+        // Ctrl+C/X/V (46/45/47) are not handled here: they arrive as
+        // XAU_MSG_COPY/CUT/PASTE from the winman chord dispatch.
         constexpr hcpp::u16 key_f2 = 60;
         constexpr hcpp::u16 key_f5 = 63;
         constexpr hcpp::u16 key_home = 71;
@@ -555,6 +556,33 @@ namespace hype::hxrt {
             fx_clip_valid = true;
             op_marker("copy", FsStatus::Ok);
             return FsStatus::Ok;
+        }
+
+        // Pushes every selected entry's full path into the system
+        // clipboard as newline-separated text — the text half of a
+        // file-manager copy (the file-copy intent above stays app-local,
+        // matching real shells that keep both flavours on the clipboard).
+        void clip_push_selection() noexcept {
+            static char clip_text[hype::ui::clip_entry_max + 1];
+            hcpp::u32 at = 0;
+            for (hcpp::u32 i = 0; i < fx_shown; ++i) {
+                if (fx_sel[i] == 0) {
+                    continue;
+                }
+                char path[fx_path_cap];
+                entry_path(i, path, sizeof(path));
+                if (at != 0 && at + 1 < sizeof(clip_text)) {
+                    clip_text[at++] = '\n';
+                }
+                for (hcpp::u32 k = 0;
+                     path[k] != '\0' && at + 1 < sizeof(clip_text); ++k) {
+                    clip_text[at++] = path[k];
+                }
+            }
+            if (at != 0) {
+                clip_text[at] = '\0';
+                hype::ui::clip_set(clip_text, at);
+            }
         }
 
         FsStatus op_paste() noexcept {
@@ -1431,12 +1459,9 @@ namespace hype::hxrt {
                     fx_scroll = fx_main_rows - fx_main_visible;
                     scroll_clamp();
                     break;
-                case key_c:
-                    if (ctrl) op_copy();
-                    break;
-                case key_v:
-                    if (ctrl) op_paste();
-                    break;
+                // Ctrl+C/X/V are handled through XAU_MSG_COPY/CUT/PASTE
+                // from the winman chord dispatch — handling them here
+                // too would double-run the file ops.
                 case key_a:
                     if (ctrl) {
                         for (hcpp::u32 i = 0; i < fx_shown; ++i) {
@@ -1549,6 +1574,44 @@ namespace hype::hxrt {
                     return 0;
                 case hype::win::XAU_MSG_CHAR:
                     chard(static_cast<hcpp::u32>(wparam));
+                    return 0;
+                case hype::win::XAU_MSG_COPY:
+                case hype::win::XAU_MSG_CUT:
+                    if (fx_rename_view >= 0) {
+                        // Rename inline edit: the edit buffer is the
+                        // copy source; CUT also clears it.
+                        if (fx_rename_len != 0) {
+                            hype::ui::clip_set(fx_rename_buf,
+                                               fx_rename_len);
+                            if (msg == hype::win::XAU_MSG_CUT) {
+                                fx_rename_len = 0;
+                                fx_rename_buf[0] = '\0';
+                            }
+                            invalidate();
+                        }
+                    } else if (fx_sel_count != 0) {
+                        // Selection -> file-copy intent + path text on
+                        // the system clipboard. No destructive cut for
+                        // files: Ctrl+X behaves like copy.
+                        op_copy();
+                        clip_push_selection();
+                    }
+                    return 0;
+                case hype::win::XAU_MSG_PASTE:
+                    if (fx_rename_view >= 0) {
+                        // Rename inline edit: insert clipboard text
+                        // through the same filter as typed chars.
+                        hcpp::u32 len = 0;
+                        const char* text = hype::ui::clip_get(len);
+                        if (text != nullptr) {
+                            for (hcpp::u32 i = 0; i < len; ++i) {
+                                chard(static_cast<hcpp::u8>(text[i]));
+                            }
+                        }
+                    } else if (fx_clip_valid) {
+                        // File clipboard: real fs-level copy into cwd.
+                        op_paste();
+                    }
                     return 0;
                 default:
                     return hype::win::xau_defproc(xau_win, msg, wparam,

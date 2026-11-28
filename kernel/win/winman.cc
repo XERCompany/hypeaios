@@ -9,6 +9,7 @@
 #include "kernel/serial.hpp"
 #include "kernel/session/session.h"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/clipboard.h"
 #include "kernel/ui/deskbar.h"
 #include "kernel/ui/hyperui.h"
 #include "kernel/ui/overlays/overlay.h"
@@ -55,6 +56,14 @@ namespace hype::win {
         constexpr hcpp::u16 key_escape = 1;
         constexpr hcpp::u16 key_tab = 15;
         constexpr hcpp::u16 key_alt = 56;
+        // Set-1 scancodes used by the clipboard chords (Ctrl/Win both
+        // decode to these codes, incl. the E0-prefixed right variants).
+        constexpr hcpp::u16 key_ctrl = 29;
+        constexpr hcpp::u16 key_x = 45;
+        constexpr hcpp::u16 key_c = 46;
+        constexpr hcpp::u16 key_v = 47;
+        constexpr hcpp::u16 key_lgui = 91;
+        constexpr hcpp::u16 key_rgui = 92;
         // Titlebar hot-tracking part ids.
         constexpr hcpp::u8 hot_none = 0;
         constexpr hcpp::u8 hot_menu = 1;
@@ -837,8 +846,36 @@ namespace hype::win {
                 } else {
                     alttab_step(input::scancode_shift_active() ? -1 : 1);
                 }
-            } else if (e.code == key_escape && switcher_open) {
+                return;
+            }
+            if (e.code == key_escape && switcher_open) {
                 alttab_close(false);
+                return;
+            }
+            const bool ctrl = input::scancode_key_pressed(key_ctrl);
+            const bool gui = input::scancode_key_pressed(key_lgui) ||
+                             input::scancode_key_pressed(key_rgui);
+            // Win+V toggles the clipboard-history flyout (deskbar).
+            if (gui && e.code == key_v) {
+                hype::ui::deskbar_toggle_clip();
+                return;
+            }
+            // While the flyout is up it takes Esc and the number-row
+            // picks; every other key keeps flowing to the focused app.
+            if (hype::ui::deskbar_clip_key(e.code)) {
+                return;
+            }
+            // Ctrl+C/X/V dispatch: the focused XAU window's WndProc
+            // answers via XAU_MSG_COPY/CUT/PASTE (apps own what the
+            // selection is; the wm only routes the chord).
+            if (ctrl && !gui) {
+                if (e.code == key_c) {
+                    hype::ui::clip_copy();
+                } else if (e.code == key_x) {
+                    hype::ui::clip_cut();
+                } else if (e.code == key_v) {
+                    hype::ui::clip_paste();
+                }
             }
         }
 

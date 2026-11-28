@@ -349,7 +349,14 @@ namespace hype::win {
                      pressed ? XAU_MSG_KEYDOWN : XAU_MSG_KEYUP,
                      static_cast<hcpp::u64>(e.code),
                      static_cast<hcpp::u64>(static_cast<hcpp::u8>(ascii)));
-            if (pressed && ascii >= 32 && ascii < 127) {
+            // Ctrl/Alt/Win chords are commands, not text: suppress the
+            // CHAR so Ctrl+C reaches the app as COPY without also
+            // inserting a literal 'c'. (ctrl=29, alt=56, gui=91/92.)
+            const bool chord = input::scancode_key_pressed(29) ||
+                               input::scancode_key_pressed(56) ||
+                               input::scancode_key_pressed(91) ||
+                               input::scancode_key_pressed(92);
+            if (pressed && !chord && ascii >= 32 && ascii < 127) {
                 dispatch(xau_win, XAU_MSG_CHAR,
                          static_cast<hcpp::u64>(
                              static_cast<hcpp::u8>(ascii)),

@@ -30,6 +30,7 @@
 #include "kernel/time/rtc.h"
 #include "kernel/time/timer.h"
 #include "kernel/ui/canvas.h"
+#include "kernel/ui/clipboard.h"
 #include "kernel/ui/theme.h"
 #include "kernel/vfs/fat32.h"
 #include "kernel/vfs/hypefs.h"
@@ -1285,6 +1286,14 @@ namespace hype::hxrt {
                 return;
             }
             if (ctrl && code == 46) {
+                // Terminal semantics: the live input line is the copy
+                // source (pushed to the system clipboard), then ^C
+                // aborts it — like copying a selection then breaking.
+                // If winman's XAU_MSG_COPY dispatch ran first it pushed
+                // the same text; clip_set() collapses the duplicate.
+                if (input_len != 0) {
+                    hype::ui::clip_set(input_buf, input_len);
+                }
                 abort_line();
                 return;
             }
@@ -1372,6 +1381,35 @@ namespace hype::hxrt {
                 case hype::win::XAU_MSG_CHAR:
                     input_insert(static_cast<char>(wparam & 0x7F));
                     return 0;
+                case hype::win::XAU_MSG_COPY:
+                    // Clipboard source: the live input line.
+                    if (input_len != 0) {
+                        hype::ui::clip_set(input_buf, input_len);
+                    }
+                    return 0;
+                case hype::win::XAU_MSG_CUT:
+                    if (input_len != 0) {
+                        hype::ui::clip_set(input_buf, input_len);
+                        input_len = 0;
+                        input_cursor = 0;
+                        input_view = 0;
+                        history_nav = -1;
+                        invalidate_all();
+                    }
+                    return 0;
+                case hype::win::XAU_MSG_PASTE: {
+                    hcpp::u32 len = 0;
+                    const char* text = hype::ui::clip_get(len);
+                    if (text != nullptr) {
+                        for (hcpp::u32 i = 0; i < len; ++i) {
+                            const char c = text[i];
+                            if (c >= 32 && c < 127) {
+                                input_insert(c);
+                            }
+                        }
+                    }
+                    return 0;
+                }
                 case hype::win::XAU_MSG_FOCUS:
                     focused = wparam != 0;
                     invalidate_cursor();
