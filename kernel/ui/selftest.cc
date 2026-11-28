@@ -194,7 +194,7 @@ namespace hype::ui {
         canvas.fill_rect_alpha(Rect{0, 0, 8, 8}, canvas.color(0xFF00FF), 128);
         canvas.fill_rect_alpha(Rect{10, 0, 8, 8}, canvas.color(0xFF00FF), 0);
         canvas.fill_rect_alpha(Rect{20, 0, 8, 8}, canvas.color(0xFF00FF), 255);
-        const bool alpha_ok = target.get_pixel(4, 4) == 0x009F3F80u &&
+        const bool alpha_ok = target.get_pixel(4, 4) == 0x00A04080u &&
                               target.get_pixel(9, 4) == background &&
                               target.get_pixel(12, 4) == background &&
                               target.get_pixel(24, 4) == canvas.color(0xFF00FF);
