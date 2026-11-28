@@ -7,6 +7,7 @@
 #include "kernel/arch/x86/smp.h"
 #include "kernel/core_services.h"
 #include "kernel/firewire/firewirebus.h"
+#include "kernel/guard/guardapi.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/klog.h"
 #include "kernel/kvm/kvm.h"
@@ -149,6 +150,17 @@ namespace hype::runtime {
             klog::set_timestamps(true);
             return true;
         }
+        bool guard_enter(void*) noexcept {
+            // Runs after sched.context (60): HypeGuard needs nothing
+            // but serial — no memory, irq or fs dependency — and the
+            // policy must be live before the later boot stages start
+            // touching the VFS so their fs ops pass the gate. Its own
+            // landlock selftest works with the fs still uninitialized:
+            // a denied path returns AccessDenied straight from the
+            // hypefs.cc choke point, an allowed path just falls
+            // through to the empty table.
+            return guard::guard_runtime_init();
+        }
 
         RuntimeStage core_stage{"core.services", 10, core_enter, nullptr, StageState::Pending};
         RuntimeStage pci_stage{"pci.scan", 20, pci_enter, nullptr, StageState::Pending};
@@ -162,6 +174,7 @@ namespace hype::runtime {
         RuntimeStage kvm_stage{"kvm.vmx", 58, kvm_enter, nullptr, StageState::Pending};
         RuntimeStage firewire_stage{"firewire.ohci", 59, firewire_enter, nullptr, StageState::Pending};
         RuntimeStage context_stage{"sched.context", 60, context_enter, nullptr, StageState::Pending};
+        RuntimeStage guard_stage{"guard.hypeguard", 62, guard_enter, nullptr, StageState::Pending};
     }  // namespace
 
     void initialize() noexcept {
@@ -181,6 +194,7 @@ namespace hype::runtime {
         register_stage(kvm_stage);
         register_stage(firewire_stage);
         register_stage(context_stage);
+        register_stage(guard_stage);
         current.stages_registered = stage_count;
     }
 

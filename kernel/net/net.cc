@@ -1,6 +1,7 @@
 #include "kernel/net/net.h"
 
 #include "hcpp/memory.hpp"
+#include "kernel/guard/nfuip.h"
 #include "kernel/interrupts/idt.h"
 #include "kernel/net/virtio_net.h"
 #include "kernel/serial.hpp"
@@ -642,6 +643,12 @@ namespace hype::net {
 
     bool net_udp_bind(hcpp::u16 port, NetUdpHandler handler) noexcept {
         if (handler == nullptr) return false;
+        // HypeGuard net gate (issue #114): the nfuip policy can deny a
+        // bind for a non-system subject; Deny fails the call outright.
+        if (hype::guard::nfuip_check(hype::guard::nfuip_op_udp_bind, port) ==
+            hype::guard::GuardResult::Deny) {
+            return false;
+        }
         for (hcpp::size_t i = 0; i < udp_bind_max; ++i) {
             if (udp_binds[i].handler == nullptr) {
                 udp_binds[i].port = port;
@@ -659,6 +666,12 @@ namespace hype::net {
     bool net_udp_send(hcpp::u32 dst_ip, hcpp::u16 dst_port, hcpp::u16 src_port,
                       const void* data, hcpp::size_t length) noexcept {
         if (!ready || data == nullptr || length == 0) return false;
+        // HypeGuard net gate (issue #114): sends are mediated on the
+        // destination port ("net:udp:send:<port>" objects).
+        if (hype::guard::nfuip_check(hype::guard::nfuip_op_udp_send, dst_port) ==
+            hype::guard::GuardResult::Deny) {
+            return false;
+        }
         return ipv4_send(dst_ip, ip_proto_udp, nullptr, data, length, src_port,
                          dst_port);
     }

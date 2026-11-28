@@ -2,6 +2,7 @@
 
 #include "hcpp/memory.hpp"
 #include "kernel/codecapps/arena.h"
+#include "kernel/guard/landlock.h"
 #include "kernel/memory/pmm.h"
 #include "kernel/time/timer.h"
 #include "kernel/vfs/fat32.h"
@@ -137,6 +138,16 @@ namespace {
 
     void mark_dirty(hcpp::u32 di) noexcept {
         if (di < disk_count_max) dirty_mask |= (1u << di);
+    }
+
+    // HypeGuard choke point (issue #114): every fs op consults the
+    // landlock layer for the current subject right after the path
+    // parses, before any entry/table work. Log also counts as allowed
+    // — only Deny blocks. Runs before fs_init() too: a denied op
+    // returns AccessDenied without touching fs state.
+    bool fs_guard_allows(const char* path_text, hcpp::u32 fs_op) noexcept {
+        return hype::guard::landlock_check(path_text, fs_op) !=
+               hype::guard::GuardResult::Deny;
     }
 
     // Debounced write-through: at most one hypeblob_sync() per
@@ -349,6 +360,9 @@ namespace hype::vfs {
         if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
             return FsStatus::BadPath;
         }
+        if (!fs_guard_allows(path_text, hype::guard::landlock_fs_write)) {
+            return FsStatus::AccessDenied;
+        }
         if (path.disk == 'F') return fat32_write(path, data, size);
         const hcpp::u32 di = disk_index(path.disk);
         if (di >= disk_count_max) return FsStatus::BadDisk;
@@ -425,6 +439,9 @@ namespace hype::vfs {
         if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
             return FsStatus::BadPath;
         }
+        if (!fs_guard_allows(path_text, hype::guard::landlock_fs_read)) {
+            return FsStatus::AccessDenied;
+        }
         if (path.disk == 'F') {
             return fat32_read(path, out, capacity, out_size);
         }
@@ -465,6 +482,9 @@ namespace hype::vfs {
         HypePath path;
         if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
             return FsStatus::BadPath;
+        }
+        if (!fs_guard_allows(path_text, hype::guard::landlock_fs_delete)) {
+            return FsStatus::AccessDenied;
         }
         if (path.disk == 'F') return fat32_delete(path);
         if (disk_index(path.disk) >= disk_count_max) return FsStatus::BadDisk;
