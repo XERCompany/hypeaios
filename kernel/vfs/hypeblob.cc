@@ -4,6 +4,7 @@
 #include "kernel/ata.h"
 #include "kernel/block/blockdev.h"
 #include "kernel/vfs/hypefs.h"
+#include "kernel/vfs/hypefs_internal.h"
 
 namespace {
 
@@ -43,6 +44,7 @@ namespace {
     hype::vfs::FsStat dir_listing[walk_max_depth * dir_list_cap];
     hcpp::u32 pending_count = 0;
     bool blob_mounted = false;
+    bool io_active = false;
 
     hcpp::u32 le32(const hcpp::u8* p) noexcept {
         return static_cast<hcpp::u32>(p[0]) |
@@ -276,6 +278,10 @@ namespace hype::vfs {
         }
 
         fs_mkdir("HYPEOS://S/data");
+        // mount_file() routes through fs_mkdir/fs_write which mark the
+        // memfs dirty; io_active keeps the write-through auto-sync from
+        // re-entering the blob region while we are still reading it.
+        io_active = true;
         for (hcpp::u32 i = 0; i < count; ++i) {
             hcpp::u8* entry = header_buf + 16 + i * entry_size;
             const char* name = reinterpret_cast<const char*>(entry);
@@ -293,6 +299,7 @@ namespace hype::vfs {
                 out.bytes += size;
             }
         }
+        io_active = false;
         return out;
     }
 
@@ -300,7 +307,10 @@ namespace hype::vfs {
         // Guard: never write before a valid on-disk blob has been seen, so
         // boot-time fs_write()s (hxer installs, seeds) cannot clobber the
         // region before mount.
-        if (!blob_mounted || !hype::block::block_present()) return false;
+        if (!blob_mounted || !hype::block::block_present() || io_active) {
+            return false;
+        }
+        io_active = true;
 
         // Collect persistable files. U:* -> "u/<path>", T:* -> "t/<path>",
         // S:/data subtree -> "<path>" (the mount routing's inverse). Other
@@ -377,7 +387,15 @@ namespace hype::vfs {
                                 header_sectors * sector_size);
         }
         if (!hype::block::block_flush()) ok = false;
+        io_active = false;
+        if (ok) {
+            // Verified write-back landed: drop the memfs dirty bits so
+            // the write-through layer does not re-sync the same state.
+            hype::vfs::detail::fs_mark_clean();
+        }
         return ok;
     }
+
+    bool hypeblob_io_active() noexcept { return io_active; }
 
 }

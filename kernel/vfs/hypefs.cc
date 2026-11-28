@@ -3,10 +3,19 @@
 #include "hcpp/memory.hpp"
 #include "kernel/codecapps/arena.h"
 #include "kernel/memory/pmm.h"
+#include "kernel/time/timer.h"
+#include "kernel/vfs/fdtable.h"
+#include "kernel/vfs/hypeblob.h"
+#include "kernel/vfs/hypefs_internal.h"
 
 namespace {
 
     constexpr hcpp::u32 disk_count_max = 3;
+    constexpr hcpp::size_t disk_bytes[disk_count_max] = {
+        hype::vfs::fs_disk_s_bytes,
+        hype::vfs::fs_disk_u_bytes,
+        hype::vfs::fs_disk_t_bytes,
+    };
     constexpr hcpp::size_t disk_pages[disk_count_max] = {
         hype::vfs::fs_disk_s_bytes / hype::memory::page_size,
         hype::vfs::fs_disk_u_bytes / hype::memory::page_size,
@@ -14,21 +23,44 @@ namespace {
     };
     constexpr char disk_letters[disk_count_max] = {'S', 'U', 'T'};
     constexpr hcpp::u16 no_entry = 0xFFFF;
+    constexpr hcpp::u32 alloc_fail = 0xFFFFFFFFu;
+
+    // File bodies live in the per-disk arena, carved into fixed 4 KiB
+    // blocks tracked by a bitmap. Files occupy contiguous runs so reads
+    // stay a single memcpy, and fs_delete()/fs_write() return freed runs
+    // to the map so space is reclaimed instead of bumped forever.
+    constexpr hcpp::u32 fs_block_shift = 12;
+    constexpr hcpp::u32 fs_block_size = 1u << fs_block_shift;
+    constexpr hcpp::u32 fs_max_blocks =
+        hype::vfs::fs_disk_s_bytes >> fs_block_shift;  // largest disk
+    constexpr hcpp::u32 fs_map_words = fs_max_blocks / 32;
+
+    // Write-through policy: successful mutations set a dirty bit and a
+    // debounced auto-sync pushes the memfs back into the HYPEDATA blob at
+    // most once per window. fs_sync()/fs_flush() force it immediately.
+    constexpr hcpp::u64 fs_sync_debounce_ms = 250;
 
     struct FsEntry {
         char name[hype::vfs::fs_name_size];
         hcpp::u32 flags;
         hcpp::u32 size;
         hcpp::u32 offset;
+        hcpp::u32 alloc;
         hcpp::u16 parent;
         char disk;
         hcpp::u8 in_use;
     };
 
     FsEntry entries[hype::vfs::fs_max_entries];
+    hcpp::u16 entry_generations[hype::vfs::fs_max_entries];
     hype::codec::Arena arenas[disk_count_max];
     hcpp::u16 disk_roots[disk_count_max];
+    hcpp::u32 block_maps[disk_count_max][fs_map_words];
+    hcpp::u32 block_totals[disk_count_max];
+    hcpp::u32 block_used[disk_count_max];
     hcpp::u32 disks_ready = 0;
+    hcpp::u32 dirty_mask = 0;
+    hcpp::u64 last_sync_ms = 0;
 
     hcpp::u32 disk_index(char disk) noexcept {
         switch (disk) {
@@ -57,12 +89,82 @@ namespace {
         dest[i] = '\0';
     }
 
+    hcpp::u32 blocks_for(hcpp::u32 bytes) noexcept {
+        return (bytes + fs_block_size - 1) >> fs_block_shift;
+    }
+
+    // First-fit contiguous run of `bytes` worth of blocks on disk `di`.
+    // Returns the arena offset, or alloc_fail when no run fits. The
+    // capacity check compares bytes first so blocks_for() cannot wrap.
+    hcpp::u32 memfs_alloc(hcpp::u32 di, hcpp::u32 bytes) noexcept {
+        if (di >= disk_count_max || bytes == 0 ||
+            bytes > (block_totals[di] << fs_block_shift)) {
+            return alloc_fail;
+        }
+        const hcpp::u32 need = blocks_for(bytes);
+        hcpp::u32 run = 0;
+        hcpp::u32 start = 0;
+        for (hcpp::u32 b = 0; b < block_totals[di]; ++b) {
+            const bool taken =
+                (block_maps[di][b >> 5] & (1u << (b & 31))) != 0;
+            if (taken) {
+                run = 0;
+                continue;
+            }
+            if (run == 0) start = b;
+            if (++run < need) continue;
+            for (hcpp::u32 k = start; k < start + need; ++k) {
+                block_maps[di][k >> 5] |= (1u << (k & 31));
+            }
+            block_used[di] += need;
+            return start << fs_block_shift;
+        }
+        return alloc_fail;
+    }
+
+    void memfs_free(hcpp::u32 di, hcpp::u32 offset,
+                    hcpp::u32 alloc_bytes) noexcept {
+        if (di >= disk_count_max || alloc_bytes == 0) return;
+        const hcpp::u32 first = offset >> fs_block_shift;
+        const hcpp::u32 count = alloc_bytes >> fs_block_shift;
+        for (hcpp::u32 b = first; b < first + count && b < block_totals[di];
+             ++b) {
+            block_maps[di][b >> 5] &= ~(1u << (b & 31));
+        }
+        block_used[di] = block_used[di] >= count ? block_used[di] - count : 0;
+    }
+
+    void mark_dirty(hcpp::u32 di) noexcept {
+        if (di < disk_count_max) dirty_mask |= (1u << di);
+    }
+
+    // Debounced write-through: at most one hypeblob_sync() per
+    // fs_sync_debounce_ms of uptime, and never from inside blob I/O
+    // itself (mount_file() routes through fs_write()).
+    void fs_autosync() noexcept {
+        if (dirty_mask == 0 || hype::vfs::hypeblob_io_active()) return;
+        const hcpp::u64 now = hype::time::uptime_ms();
+        if (now - last_sync_ms < fs_sync_debounce_ms) return;
+        last_sync_ms = now;  // throttle retries even when sync fails
+        if (hype::vfs::hypeblob_sync()) dirty_mask = 0;
+    }
+
+    void release_entry_body(hcpp::u32 di, FsEntry& entry) noexcept {
+        if (entry.alloc != 0) {
+            memfs_free(di, entry.offset, entry.alloc);
+            entry.alloc = 0;
+        }
+        entry.offset = 0;
+        entry.size = 0;
+    }
+
     hcpp::u16 alloc_entry() noexcept {
         for (hcpp::u32 i = 0; i < hype::vfs::fs_max_entries; ++i) {
             if (entries[i].in_use) continue;
             entries[i] = {};
             entries[i].in_use = 1;
             entries[i].parent = no_entry;
+            ++entry_generations[i];
             return static_cast<hcpp::u16>(i);
         }
         return no_entry;
@@ -114,11 +216,19 @@ namespace hype::vfs {
 
     void fs_init() noexcept {
         hcpp::set(entries, 0, sizeof(entries));
+        hcpp::set(entry_generations, 0, sizeof(entry_generations));
+        hcpp::set(block_maps, 0, sizeof(block_maps));
+        hcpp::set(block_totals, 0, sizeof(block_totals));
+        hcpp::set(block_used, 0, sizeof(block_used));
         disks_ready = 0;
+        dirty_mask = 0;
+        last_sync_ms = 0;
         for (hcpp::u32 d = 0; d < disk_count_max; ++d) {
             arenas[d] = {};
             disk_roots[d] = no_entry;
             if (!hype::codec::arena_from_pmm(arenas[d], disk_pages[d])) continue;
+            block_totals[d] =
+                static_cast<hcpp::u32>(disk_bytes[d] >> fs_block_shift);
             const hcpp::u16 root = alloc_entry();
             if (root == no_entry) {
                 hype::codec::arena_release_pmm(arenas[d], disk_pages[d]);
@@ -132,6 +242,29 @@ namespace hype::vfs {
     }
 
     hcpp::u32 fs_disk_count() noexcept { return disks_ready; }
+
+    hcpp::u32 fs_disk_used(char disk) noexcept {
+        const hcpp::u32 di = disk_index(disk);
+        if (di >= disk_count_max) return 0;
+        return block_used[di] << fs_block_shift;
+    }
+
+    hcpp::u32 fs_disk_free(char disk) noexcept {
+        const hcpp::u32 di = disk_index(disk);
+        if (di >= disk_count_max) return 0;
+        return (block_totals[di] - block_used[di]) << fs_block_shift;
+    }
+
+    bool fs_dirty() noexcept { return dirty_mask != 0; }
+
+    bool fs_sync() noexcept {
+        if (dirty_mask == 0) return true;
+        if (hype::vfs::hypeblob_io_active()) return false;
+        last_sync_ms = hype::time::uptime_ms();
+        if (!hype::vfs::hypeblob_sync()) return false;
+        dirty_mask = 0;
+        return true;
+    }
 
     hcpp::u32 fs_disk_file_count(char disk) noexcept {
         hcpp::u32 count = 0;
@@ -168,6 +301,43 @@ namespace hype::vfs {
         entries[index].flags = FS_DIR;
         entries[index].disk = path.disk;
         entries[index].parent = dir;
+        mark_dirty(disk_index(path.disk));
+        fs_autosync();
+        return FsStatus::Ok;
+    }
+
+    // Shared body for fs_write() and detail::fs_entry_write_at(): sizes
+    // the block run to `size` and copies `data` at `off`, growing the run
+    // (and preserving old contents) when the write crosses the current
+    // allocation. The old run is released only after the new one is
+    // secured, so a NoSpace failure leaves the file intact.
+    static FsStatus store_into(hcpp::u32 di, FsEntry& entry, const void* data,
+                        hcpp::u32 off, hcpp::u32 len,
+                        hcpp::u32* out_done) noexcept {
+        if (off > 0xFFFFFFFFu - len) return FsStatus::BadPath;
+        if (out_done != nullptr) *out_done = 0;
+        if (len == 0) return FsStatus::Ok;
+        const hcpp::u32 end = off + len;
+        if (end > entry.alloc) {
+            const hcpp::u32 new_offset = memfs_alloc(di, end);
+            if (new_offset == alloc_fail) return FsStatus::NoSpace;
+            if (entry.size != 0) {
+                hcpp::copy(arenas[di].base + new_offset,
+                           arenas[di].base + entry.offset, entry.size);
+            }
+            memfs_free(di, entry.offset, entry.alloc);
+            entry.offset = new_offset;
+            entry.alloc = blocks_for(end) << fs_block_shift;
+        }
+        if (off > entry.size) {
+            hcpp::set(arenas[di].base + entry.offset + entry.size, 0,
+                      off - entry.size);  // deterministic sparse gap
+        }
+        if (data != nullptr) {
+            hcpp::copy(arenas[di].base + entry.offset + off, data, len);
+        }
+        if (end > entry.size) entry.size = end;
+        if (out_done != nullptr) *out_done = len;
         return FsStatus::Ok;
     }
 
@@ -179,6 +349,9 @@ namespace hype::vfs {
         const hcpp::u32 di = disk_index(path.disk);
         if (di >= disk_count_max) return FsStatus::BadDisk;
         if (path.depth == 0) return FsStatus::IsDir;
+        if (size > (block_totals[di] << fs_block_shift)) {
+            return FsStatus::NoSpace;
+        }
         const hcpp::u16 dir = resolve_dir(path, path.depth - 1);
         if (dir == no_entry) return FsStatus::NotFound;
         const char* leaf = path.components[path.depth - 1];
@@ -187,29 +360,45 @@ namespace hype::vfs {
             FsEntry& entry = entries[existing];
             if ((entry.flags & FS_DIR) != 0) return FsStatus::IsDir;
             if ((entry.flags & FS_SYS) != 0) return FsStatus::AccessDenied;
-            if (size > entry.size) {
-                void* memory = hype::codec::arena_alloc(arenas[di], size, 8);
-                if (memory == nullptr) return FsStatus::NoSpace;
-                entry.offset = static_cast<hcpp::u32>(
-                    static_cast<hcpp::u8*>(memory) - arenas[di].base);
+            // Whole-file replace: keep the run when the block count is
+            // unchanged, free only the tail blocks when shrinking, and
+            // grow via a fresh run so failure leaves the file intact.
+            const hcpp::u32 need = blocks_for(size);
+            const hcpp::u32 have = entry.alloc >> fs_block_shift;
+            if (need < have) {
+                const hcpp::u32 first = entry.offset >> fs_block_shift;
+                for (hcpp::u32 b = first + need; b < first + have; ++b) {
+                    block_maps[di][b >> 5] &= ~(1u << (b & 31));
+                }
+                block_used[di] -= have - need;
+                entry.alloc = need << fs_block_shift;
+                if (need == 0) entry.offset = 0;
+            } else if (need > have) {
+                const hcpp::u32 new_offset = memfs_alloc(di, size);
+                if (new_offset == alloc_fail) return FsStatus::NoSpace;
+                memfs_free(di, entry.offset, entry.alloc);
+                entry.offset = new_offset;
+                entry.alloc = need << fs_block_shift;
             }
             if (size > 0 && data != nullptr) {
                 hcpp::copy(arenas[di].base + entry.offset, data, size);
             }
             entry.size = size;
+            mark_dirty(di);
+            fs_autosync();
             return FsStatus::Ok;
         }
         const hcpp::u16 index = alloc_entry();
         if (index == no_entry) return FsStatus::NoSpace;
         hcpp::u32 offset = 0;
+        hcpp::u32 alloc = 0;
         if (size > 0) {
-            void* memory = hype::codec::arena_alloc(arenas[di], size, 8);
-            if (memory == nullptr) {
+            offset = memfs_alloc(di, size);
+            if (offset == alloc_fail) {
                 entries[index].in_use = 0;
                 return FsStatus::NoSpace;
             }
-            offset = static_cast<hcpp::u32>(
-                static_cast<hcpp::u8*>(memory) - arenas[di].base);
+            alloc = blocks_for(size) << fs_block_shift;
             if (data != nullptr) {
                 hcpp::copy(arenas[di].base + offset, data, size);
             }
@@ -218,8 +407,11 @@ namespace hype::vfs {
         entries[index].flags = hypepath_is_system_file(path) ? FS_SYS : FS_NONE;
         entries[index].size = size;
         entries[index].offset = offset;
+        entries[index].alloc = alloc;
         entries[index].disk = path.disk;
         entries[index].parent = dir;
+        mark_dirty(di);
+        fs_autosync();
         return FsStatus::Ok;
     }
 
@@ -276,8 +468,14 @@ namespace hype::vfs {
             dir_has_children(index, path.disk)) {
             return FsStatus::AccessDenied;
         }
+        // Reclaim the block run so the space is reusable; the entry slot
+        // itself is recycled while its generation keeps advancing so
+        // stale fds can tell a new file from the old one.
+        release_entry_body(disk_index(path.disk), entry);
         entry.in_use = 0;
         entry.name[0] = '\0';
+        mark_dirty(disk_index(path.disk));
+        fs_autosync();
         return FsStatus::Ok;
     }
 
@@ -304,6 +502,197 @@ namespace hype::vfs {
         }
         return count;
     }
+
+    // ---- fd-table backend (kernel/vfs/hypefs_internal.h) ----
+
+    namespace detail {
+
+        hcpp::u16 fs_entry_resolve(const char* path_text) noexcept {
+            HypePath path;
+            if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
+                return fs_entry_none;
+            }
+            if (disk_index(path.disk) >= disk_count_max) {
+                return fs_entry_none;
+            }
+            return resolve_entry(path);
+        }
+
+        FsStatus fs_entry_open_create(const char* path_text,
+                                      hcpp::u16& out_index) noexcept {
+            out_index = fs_entry_none;
+            HypePath path;
+            if (hypepath_parse(path_text, path) != HypePathStatus::Ok) {
+                return FsStatus::BadPath;
+            }
+            const hcpp::u32 di = disk_index(path.disk);
+            if (di >= disk_count_max) return FsStatus::BadDisk;
+            if (path.depth == 0) return FsStatus::IsDir;
+            const hcpp::u16 dir = resolve_dir(path, path.depth - 1);
+            if (dir == no_entry) return FsStatus::NotFound;
+            const char* leaf = path.components[path.depth - 1];
+            const hcpp::u16 existing = find_child(dir, path.disk, leaf);
+            if (existing != no_entry) {
+                if ((entries[existing].flags & FS_DIR) != 0) {
+                    return FsStatus::IsDir;
+                }
+                out_index = existing;
+                return FsStatus::Ok;
+            }
+            const hcpp::u16 index = alloc_entry();
+            if (index == no_entry) return FsStatus::NoSpace;
+            name_copy(entries[index].name, leaf);
+            entries[index].flags =
+                hypepath_is_system_file(path) ? FS_SYS : FS_NONE;
+            entries[index].disk = path.disk;
+            entries[index].parent = dir;
+            mark_dirty(di);
+            fs_autosync();
+            out_index = index;
+            return FsStatus::Ok;
+        }
+
+        bool fs_entry_matches(hcpp::u16 index, hcpp::u16 parent,
+                              hcpp::u16 generation,
+                              const char* name) noexcept {
+            return index < fs_max_entries && entries[index].in_use &&
+                   entries[index].parent == parent &&
+                   entry_generations[index] == generation &&
+                   name_equal(entries[index].name, name);
+        }
+
+        FsStatus fs_entry_read_at(hcpp::u16 index, hcpp::u32 off, void* out,
+                                  hcpp::u32 len,
+                                  hcpp::u32* out_done) noexcept {
+            if (out_done != nullptr) *out_done = 0;
+            if (index >= fs_max_entries || !entries[index].in_use) {
+                return FsStatus::NotFound;
+            }
+            const FsEntry& entry = entries[index];
+            if ((entry.flags & FS_DIR) != 0) return FsStatus::IsDir;
+            if (off >= entry.size || len == 0) return FsStatus::Ok;
+            const hcpp::u32 bytes =
+                len < entry.size - off ? len : entry.size - off;
+            if (out == nullptr) return FsStatus::BadPath;
+            const hcpp::u32 di = disk_index(entry.disk);
+            if (di >= disk_count_max) return FsStatus::BadDisk;
+            hcpp::copy(out, arenas[di].base + entry.offset + off, bytes);
+            if (out_done != nullptr) *out_done = bytes;
+            return FsStatus::Ok;
+        }
+
+        FsStatus fs_entry_write_at(hcpp::u16 index, hcpp::u32 off,
+                                   const void* data, hcpp::u32 len,
+                                   hcpp::u32* out_done) noexcept {
+            if (out_done != nullptr) *out_done = 0;
+            if (index >= fs_max_entries || !entries[index].in_use) {
+                return FsStatus::NotFound;
+            }
+            FsEntry& entry = entries[index];
+            if ((entry.flags & FS_DIR) != 0) return FsStatus::IsDir;
+            if ((entry.flags & FS_SYS) != 0) return FsStatus::AccessDenied;
+            const hcpp::u32 di = disk_index(entry.disk);
+            if (di >= disk_count_max) return FsStatus::BadDisk;
+            const FsStatus stored =
+                store_into(di, entry, data, off, len, out_done);
+            if (stored != FsStatus::Ok) return stored;
+            mark_dirty(di);
+            fs_autosync();
+            return FsStatus::Ok;
+        }
+
+        FsStatus fs_entry_truncate(hcpp::u16 index) noexcept {
+            if (index >= fs_max_entries || !entries[index].in_use) {
+                return FsStatus::NotFound;
+            }
+            FsEntry& entry = entries[index];
+            if ((entry.flags & FS_DIR) != 0) return FsStatus::IsDir;
+            if ((entry.flags & FS_SYS) != 0) return FsStatus::AccessDenied;
+            const hcpp::u32 di = disk_index(entry.disk);
+            if (di >= disk_count_max) return FsStatus::BadDisk;
+            release_entry_body(di, entry);
+            mark_dirty(di);
+            fs_autosync();
+            return FsStatus::Ok;
+        }
+
+        hcpp::u32 fs_entry_size(hcpp::u16 index) noexcept {
+            return index < fs_max_entries && entries[index].in_use
+                       ? entries[index].size
+                       : 0;
+        }
+
+        hcpp::u32 fs_entry_flags(hcpp::u16 index) noexcept {
+            return index < fs_max_entries && entries[index].in_use
+                       ? entries[index].flags
+                       : 0;
+        }
+
+        hcpp::u16 fs_entry_parent(hcpp::u16 index) noexcept {
+            return index < fs_max_entries && entries[index].in_use
+                       ? entries[index].parent
+                       : no_entry;
+        }
+
+        hcpp::u16 fs_entry_generation(hcpp::u16 index) noexcept {
+            return index < fs_max_entries ? entry_generations[index] : 0;
+        }
+
+        char fs_entry_disk(hcpp::u16 index) noexcept {
+            return index < fs_max_entries && entries[index].in_use
+                       ? entries[index].disk
+                       : '\0';
+        }
+
+        void fs_mark_clean() noexcept {
+            dirty_mask = 0;
+            last_sync_ms = hype::time::uptime_ms();
+        }
+
+        // Rebuilds "HYPEOS://D/a/b/leaf" by walking the parent chain.
+        hcpp::u32 fs_entry_path(hcpp::u16 index, char* out,
+                                hcpp::u32 capacity) noexcept {
+            if (out == nullptr || capacity == 0 || index >= fs_max_entries ||
+                !entries[index].in_use) {
+                return 0;
+            }
+            hcpp::u16 chain[hypepath_max_components + 1];
+            hcpp::u32 depth = 0;
+            hcpp::u16 cur = index;
+            while (cur != no_entry && cur < fs_max_entries &&
+                   entries[cur].in_use && entries[cur].name[0] != '\0' &&
+                   depth <= hypepath_max_components) {
+                chain[depth++] = cur;
+                cur = entries[cur].parent;
+            }
+            const char disk =
+                cur != no_entry && cur < fs_max_entries &&
+                        entries[cur].in_use
+                    ? entries[cur].disk
+                    : entries[index].disk;
+            hcpp::u32 used = 0;
+            const auto emit = [&out, capacity, &used](char v) noexcept -> bool {
+                if (used + 1 >= capacity) return false;
+                out[used++] = v;
+                return true;
+            };
+            const char scheme[] = "HYPEOS://";
+            for (hcpp::u32 i = 0; scheme[i] != '\0'; ++i) {
+                if (!emit(scheme[i])) return 0;
+            }
+            if (!emit(disk)) return 0;
+            while (depth != 0) {
+                if (!emit('/')) return 0;
+                const FsEntry& part = entries[chain[--depth]];
+                for (hcpp::u32 i = 0; part.name[i] != '\0'; ++i) {
+                    if (!emit(part.name[i])) return 0;
+                }
+            }
+            out[used] = '\0';
+            return used;
+        }
+
+    }  // namespace detail
 
     bool fs_selftest(FsSelftest& out) noexcept {
         out = {};
@@ -363,7 +752,74 @@ namespace hype::vfs {
                     FsStatus::AccessDenied;
         }
         out.sys_locked = sys_locked;
-        return out.path_ok && out.io_ok && out.sys_locked;
+
+        // fd table: open a fresh file, pwrite at offset 0, seek END then
+        // SET, fread the bytes back, close. fs_flush is exercised but not
+        // gated on (no ATA -> honest IoError, not an fd bug).
+        const hcpp::i32 probe_fd =
+            fs_open("HYPEOS://U/home/fdprobe.bin",
+                    FS_OPEN_READ | FS_OPEN_WRITE | FS_OPEN_CREATE);
+        bool fd_ok = probe_fd > 2;
+        if (fd_ok) {
+            out.fd_value = static_cast<hcpp::u32>(probe_fd);
+            static const char fd_payload[] = "hypeos fd io";
+            hcpp::u32 moved = 0;
+            hcpp::u32 pos = 0;
+            char back[16] = {};
+            hcpp::u32 got = 0;
+            fd_ok =
+                fs_pwrite(probe_fd, fd_payload, sizeof(fd_payload), 0,
+                          &moved) == FsStatus::Ok &&
+                moved == sizeof(fd_payload) &&
+                fs_seek(probe_fd, 0, FS_SEEK_END, &pos) == FsStatus::Ok &&
+                pos == sizeof(fd_payload) &&
+                fs_seek(probe_fd, 0, FS_SEEK_SET, &pos) == FsStatus::Ok &&
+                pos == 0 &&
+                fs_fread(probe_fd, back, sizeof(fd_payload), &got) ==
+                    FsStatus::Ok &&
+                got == sizeof(fd_payload) &&
+                hcpp::compare(back, fd_payload, sizeof(fd_payload)) == 0 &&
+                fs_close(probe_fd) == FsStatus::Ok;
+            fs_delete("HYPEOS://U/home/fdprobe.bin");
+        }
+        out.fd_ok = fd_ok;
+
+        // Directory enumeration: U:/ (trailing slash) must list the
+        // seeded + blob-mounted dirs, and U:/home the probe files.
+        FsStat kids[16];
+        out.dir_items = fs_list("HYPEOS://U/", kids, 16);
+        out.dir_ok = out.dir_items != 0 &&
+                     fs_list("HYPEOS://U/home", kids, 16) >= 1;
+
+        // Space reclaim: a same-size write+delete+rewrite must return the
+        // block run to the map exactly, leaving U: usage at baseline.
+        static hcpp::u8 reclaim_buf[2048];
+        hcpp::set(reclaim_buf, 0x5A, sizeof(reclaim_buf));
+        const hcpp::u32 u_before = fs_disk_used('U');
+        const hcpp::u32 expect =
+            blocks_for(sizeof(reclaim_buf)) << fs_block_shift;
+        const char* const reclaim_path = "HYPEOS://U/home/reclaim.bin";
+        bool reclaim_ok =
+            fs_write(reclaim_path, reclaim_buf, sizeof(reclaim_buf)) ==
+                FsStatus::Ok &&
+            fs_disk_used('U') == u_before + expect &&
+            fs_delete(reclaim_path) == FsStatus::Ok &&
+            fs_disk_used('U') == u_before &&
+            fs_write(reclaim_path, reclaim_buf, sizeof(reclaim_buf)) ==
+                FsStatus::Ok &&
+            fs_disk_used('U') == u_before + expect &&
+            fs_delete(reclaim_path) == FsStatus::Ok &&
+            fs_disk_used('U') == u_before;
+        out.reclaim_ok = reclaim_ok;
+
+        // Write-through: mutations above marked the mount dirty; the
+        // debounced auto-sync may already have flushed it. Otherwise a
+        // manual fs_sync() must (a no-blob environment reports fail).
+        out.sync_auto = !fs_dirty();
+        out.sync_ok = out.sync_auto || fs_sync();
+
+        return out.path_ok && out.io_ok && out.sys_locked && out.fd_ok &&
+               out.dir_ok && out.reclaim_ok;
     }
 
 }
