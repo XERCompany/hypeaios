@@ -838,8 +838,9 @@ namespace {
     }
 
     void stage_net() noexcept {
-        // Probe is graceful: prints "virtio-net dev=absent" and returns
-        // without touching PMM queues or DHCP when no NIC is present.
+        // Probe is graceful: prints "<nic> dev=absent" for each missing
+        // NIC (e1000 first, then virtio-net) and returns without
+        // touching PMM queues or DHCP when no NIC is present.
         hype::net::net_initialize();
         // Issue #120 selftests, each fully bounded: ICMP echo to the
         // gateway ("ping gw=ok"), a real DNS A-record lookup
