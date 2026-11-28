@@ -15,7 +15,17 @@ namespace hype::audio {
         EnsoniqEs1371,
         VirtioSound,
         SoundBlaster16,
-        AdLib
+        AdLib,
+        CreativeCa0106,
+        CirrusCs46xx,
+        GeodeCs5535Audio,
+        CreativeCtxfi,
+        EchoAudio,
+        CreativeEmu10k1,
+        Ice1712,
+        Korg1212,
+        DigigramLola,
+        DigigramLx6464es
     };
 
     struct AudioCard {
